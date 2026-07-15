@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" role="img" aria-label="NHL Edge">
+  <rect width="64" height="64" rx="14" fill="#070a0d"/>
+  <path d="M14 45 27 16h8L22 45h-8Z" fill="#23d3b6"/>
+  <path d="M29 45 42 16h8L37 45h-8Z" fill="#ffb547"/>
+  <path d="M19 45h28v6H16l3-6Z" fill="#f5f8fb"/>
+</svg>
