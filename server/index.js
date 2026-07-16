@@ -6,7 +6,9 @@ const betsRoutes = require('./routes/betsRoutes')
 const connectDB = require('./config/db')
 const injuriesRoutes = require('./routes/injuriesRoutes')
 const nhlApiService = require('./services/nhlApiService')
+const playersRoutes = require('./routes/playersRoutes')
 const powerRatingsRoutes = require('./routes/powerRatingsRoutes')
+const teamsRoutes = require('./routes/teamsRoutes')
 
 const app = express()
 const PORT = process.env.PORT || 5000
@@ -35,7 +37,9 @@ app.get('/api/health', (_request, response) => {
 
 app.use('/api/bets', betsRoutes)
 app.use('/api/injuries', injuriesRoutes)
+app.use('/api/players', playersRoutes)
 app.use('/api/power-ratings', powerRatingsRoutes)
+app.use('/api/teams', teamsRoutes)
 
 app.get('/api/schedule/today', async (_request, response, next) => {
   try {
@@ -74,7 +78,7 @@ app.use((error, _request, response, _next) => {
 
   const fallbackMessage =
     error.name === 'NhlApiError'
-      ? "Unable to load today's NHL schedule right now."
+      ? 'Unable to load NHL data right now.'
       : 'Unable to complete the API request right now.'
   const responseBody = {
     error:

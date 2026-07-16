@@ -3,6 +3,7 @@ import {
   Activity,
   ClipboardList,
   LayoutDashboard,
+  Shield,
   Target,
   TrendingUp,
 } from 'lucide-react'
@@ -12,6 +13,7 @@ import GameAnalyzer from './components/GameAnalyzer.jsx'
 import InjuryManager from './components/InjuryManager.jsx'
 import AppLayout from './components/layout/AppLayout.jsx'
 import PowerRatings from './components/PowerRatings.jsx'
+import Teams from './components/Teams.jsx'
 import { NHL_TEAMS } from './data/teams.js'
 import { fetchTeamInjurySummary } from './services/injuriesApi.js'
 import {
@@ -42,6 +44,12 @@ const pages = [
     Icon: Target,
     label: 'Game Analyzer',
     title: 'Game Analyzer',
+  },
+  {
+    id: 'teams',
+    Icon: Shield,
+    label: 'Teams',
+    title: 'Teams',
   },
   {
     id: 'ratings',
@@ -411,6 +419,13 @@ function App() {
           powerRatingsError={powerRatingsError}
           powerRatingsStatus={powerRatingsStatus}
           prefillMatchup={analyzerPrefill}
+        />
+      ) : activePage === 'teams' ? (
+        <Teams
+          injurySummaries={injurySummaries}
+          injurySummaryStatus={injurySummaryStatus}
+          powerRatings={powerRatings}
+          powerRatingsStatus={powerRatingsStatus}
         />
       ) : activePage === 'ratings' ? (
         <PowerRatings
