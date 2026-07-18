@@ -54,14 +54,24 @@ const selectedSideSchema = new mongoose.Schema(
 const adjustmentsSchema = new mongoose.Schema(
   {
     homeAdvantage: { type: Number, default: 0 },
+    homeStoredInjuryImpact: { type: Number, default: 0 },
+    awayStoredInjuryImpact: { type: Number, default: 0 },
     homeInjuries: { type: Number, default: 0 },
     awayInjuries: { type: Number, default: 0 },
     homeGoalie: { type: Number, default: 0 },
     awayGoalie: { type: Number, default: 0 },
+    homeGoalieId: { type: String, trim: true, default: '' },
+    homeGoalieName: { type: String, trim: true, default: '' },
+    awayGoalieId: { type: String, trim: true, default: '' },
+    awayGoalieName: { type: String, trim: true, default: '' },
     homeRecentForm: { type: Number, default: 0 },
     awayRecentForm: { type: Number, default: 0 },
+    homeRestFatigue: { type: Number, default: 0 },
+    awayRestFatigue: { type: Number, default: 0 },
     homeMotivation: { type: Number, default: 0 },
     awayMotivation: { type: Number, default: 0 },
+    homeManualAdjustment: { type: Number, default: 0 },
+    awayManualAdjustment: { type: Number, default: 0 },
   },
   { _id: false },
 )
@@ -89,9 +99,18 @@ const betSchema = new mongoose.Schema(
       type: teamSchema,
       default: () => ({}),
     },
+    selectedTeam: {
+      type: teamSchema,
+      default: () => ({}),
+    },
     selectedSide: {
       type: selectedSideSchema,
       default: () => ({}),
+    },
+    modelStatus: {
+      type: String,
+      trim: true,
+      default: '',
     },
     modelProbability: {
       type: Number,
@@ -110,6 +129,14 @@ const betSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
+    impliedMarketProbability: {
+      type: Number,
+      default: null,
+    },
+    expectedValue: {
+      type: Number,
+      default: null,
+    },
     oddsValuePercentage: {
       type: Number,
       default: 0,
@@ -118,6 +145,71 @@ const betSchema = new mongoose.Schema(
       type: String,
       trim: true,
       default: '',
+    },
+    awayBaseRating: {
+      type: Number,
+      default: null,
+    },
+    homeBaseRating: {
+      type: Number,
+      default: null,
+    },
+    awayEffectiveRating: {
+      type: Number,
+      default: null,
+    },
+    homeEffectiveRating: {
+      type: Number,
+      default: null,
+    },
+    ratingDifference: {
+      type: Number,
+      default: null,
+    },
+    goalieAdjustment: {
+      type: Number,
+      default: null,
+    },
+    storedInjuryImpact: {
+      type: Number,
+      default: null,
+    },
+    gameInjuryAdjustment: {
+      type: Number,
+      default: null,
+    },
+    totalInjuryAdjustment: {
+      type: Number,
+      default: null,
+    },
+    restFatigueAdjustment: {
+      type: Number,
+      default: null,
+    },
+    motivationAdjustment: {
+      type: Number,
+      default: null,
+    },
+    manualAdjustment: {
+      type: Number,
+      default: null,
+    },
+    selectedGoalieName: {
+      type: String,
+      trim: true,
+      default: '',
+    },
+    selectedGoalieSavePercentage: {
+      type: Number,
+      default: null,
+    },
+    selectedGoalieGamesPlayed: {
+      type: Number,
+      default: null,
+    },
+    selectedGoalieGamesStarted: {
+      type: Number,
+      default: null,
     },
     stake: {
       type: Number,

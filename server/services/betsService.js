@@ -10,6 +10,12 @@ const EDITABLE_FIELDS = [
   'closingOdds',
   'notes',
 ]
+const MINIMUM_POSITIVE_EV = 3
+const MODEL_STATUSES = {
+  POSITIVE_VALUE: 'Positive Value',
+  BELOW_THRESHOLD: 'Below Threshold',
+  NO_VALUE: 'No Value',
+}
 
 class BetsError extends Error {
   constructor(message, statusCode = 500, details = undefined) {
@@ -22,8 +28,26 @@ class BetsError extends Error {
 }
 
 const toNumber = (value, fallback = 0) => {
+  if (value === null || value === '' || value === undefined) {
+    return fallback
+  }
+
   const parsedValue = Number(value)
   return Number.isFinite(parsedValue) ? parsedValue : fallback
+}
+
+const toOptionalNumber = (value, field) => {
+  if (value === null || value === '' || value === undefined) {
+    return null
+  }
+
+  const parsedValue = Number(value)
+
+  if (!Number.isFinite(parsedValue)) {
+    throw new BetsError(`${field} must be a finite number.`, 400, { field })
+  }
+
+  return parsedValue
 }
 
 const toFiniteNumber = (value, field, { allowNull = false } = {}) => {
@@ -112,32 +136,99 @@ const validateMarketOdds = (marketOdds) => {
 const validateStake = (stake = 1) => {
   const value = toFiniteNumber(stake, 'stake')
 
-  if (value < 0) {
-    throw new BetsError('stake cannot be negative.', 400, { field: 'stake' })
+  if (value <= 0) {
+    throw new BetsError('stake must be greater than 0.', 400, {
+      field: 'stake',
+    })
   }
 
   return value
 }
 
+const validateProbability = (probability, field) => {
+  const value = toFiniteNumber(probability, field)
+
+  if (value <= 0 || value > 1) {
+    throw new BetsError(`${field} must be between 0 and 1.`, 400, { field })
+  }
+
+  return value
+}
+
+const getModelStatus = (expectedValue) => {
+  if (expectedValue >= MINIMUM_POSITIVE_EV) {
+    return MODEL_STATUSES.POSITIVE_VALUE
+  }
+
+  if (expectedValue >= 0) {
+    return MODEL_STATUSES.BELOW_THRESHOLD
+  }
+
+  return MODEL_STATUSES.NO_VALUE
+}
+
+const normalizeModelStatus = (modelStatus) => {
+  const normalizedStatus = toText(modelStatus).toLowerCase()
+
+  if (normalizedStatus === 'positive value') {
+    return MODEL_STATUSES.POSITIVE_VALUE
+  }
+
+  if (normalizedStatus === 'below threshold') {
+    return MODEL_STATUSES.BELOW_THRESHOLD
+  }
+
+  if (normalizedStatus === 'no value') {
+    return MODEL_STATUSES.NO_VALUE
+  }
+
+  return ''
+}
+
 const normalizeAdjustments = (adjustments = {}) => ({
   homeAdvantage: toNumber(adjustments.homeAdvantage),
+  homeStoredInjuryImpact: toNumber(adjustments.homeStoredInjuryImpact),
+  awayStoredInjuryImpact: toNumber(adjustments.awayStoredInjuryImpact),
   homeInjuries: toNumber(adjustments.homeInjuries),
   awayInjuries: toNumber(adjustments.awayInjuries),
   homeGoalie: toNumber(adjustments.homeGoalie),
   awayGoalie: toNumber(adjustments.awayGoalie),
-  homeRecentForm: toNumber(adjustments.homeRecentForm),
-  awayRecentForm: toNumber(adjustments.awayRecentForm),
+  homeGoalieId: toText(adjustments.homeGoalieId),
+  homeGoalieName: toText(adjustments.homeGoalieName),
+  awayGoalieId: toText(adjustments.awayGoalieId),
+  awayGoalieName: toText(adjustments.awayGoalieName),
+  homeRecentForm: toNumber(
+    adjustments.homeRecentForm ?? adjustments.homeRestFatigue,
+  ),
+  awayRecentForm: toNumber(
+    adjustments.awayRecentForm ?? adjustments.awayRestFatigue,
+  ),
+  homeRestFatigue: toNumber(
+    adjustments.homeRestFatigue ?? adjustments.homeRecentForm,
+  ),
+  awayRestFatigue: toNumber(
+    adjustments.awayRestFatigue ?? adjustments.awayRecentForm,
+  ),
   homeMotivation: toNumber(adjustments.homeMotivation),
   awayMotivation: toNumber(adjustments.awayMotivation),
+  homeManualAdjustment: toNumber(adjustments.homeManualAdjustment),
+  awayManualAdjustment: toNumber(adjustments.awayManualAdjustment),
 })
 
 const calculateProfit = ({ marketOdds, result, stake }) => {
+  const odds = Number(marketOdds)
+  const wager = Number(stake)
+
+  if (!Number.isFinite(odds) || odds <= 1 || !Number.isFinite(wager)) {
+    return 0
+  }
+
   if (result === 'win') {
-    return (marketOdds - 1) * stake
+    return (odds - 1) * wager
   }
 
   if (result === 'loss') {
-    return -stake
+    return -wager
   }
 
   return 0
@@ -166,6 +257,24 @@ const normalizeCreatePayload = (payload = {}) => {
   const marketOdds = validateMarketOdds(payload.marketOdds)
   const stake = validateStake(payload.stake ?? 1)
   const result = validateResult(payload.result ?? 'pending')
+  const modelProbability = validateProbability(
+    payload.modelProbability,
+    'modelProbability',
+  )
+  const fairOdds = toOptionalNumber(payload.fairOdds, 'fairOdds') ?? 1 / modelProbability
+  const impliedMarketProbability =
+    toOptionalNumber(
+      payload.impliedMarketProbability,
+      'impliedMarketProbability',
+    ) ?? 1 / marketOdds
+  const probabilityEdge =
+    toOptionalNumber(payload.probabilityEdge, 'probabilityEdge') ??
+    modelProbability - impliedMarketProbability
+  const expectedValue =
+    toOptionalNumber(payload.expectedValue, 'expectedValue') ??
+    (modelProbability * marketOdds - 1) * 100
+  const modelStatus =
+    normalizeModelStatus(payload.modelStatus) || getModelStatus(expectedValue)
 
   return {
     gameId: toText(payload.gameId),
@@ -175,13 +284,77 @@ const normalizeCreatePayload = (payload = {}) => {
     }),
     homeTeam: normalizeTeam(payload.homeTeam, 'homeTeam'),
     awayTeam: normalizeTeam(payload.awayTeam, 'awayTeam'),
+    selectedTeam: normalizeTeam(
+      payload.selectedTeam ?? payload.selectedSide,
+      'selectedTeam',
+    ),
     selectedSide: normalizeSelectedSide(payload.selectedSide),
-    modelProbability: toNumber(payload.modelProbability),
-    fairOdds: toNumber(payload.fairOdds),
+    modelStatus,
+    modelProbability,
+    fairOdds,
     marketOdds,
-    probabilityEdge: toNumber(payload.probabilityEdge),
-    oddsValuePercentage: toNumber(payload.oddsValuePercentage),
-    recommendation: toText(payload.recommendation),
+    impliedMarketProbability,
+    probabilityEdge,
+    expectedValue,
+    oddsValuePercentage:
+      toOptionalNumber(payload.oddsValuePercentage, 'oddsValuePercentage') ??
+      expectedValue / 100,
+    recommendation: toText(payload.recommendation, modelStatus),
+    awayBaseRating: toOptionalNumber(payload.awayBaseRating, 'awayBaseRating'),
+    homeBaseRating: toOptionalNumber(payload.homeBaseRating, 'homeBaseRating'),
+    awayEffectiveRating: toOptionalNumber(
+      payload.awayEffectiveRating,
+      'awayEffectiveRating',
+    ),
+    homeEffectiveRating: toOptionalNumber(
+      payload.homeEffectiveRating,
+      'homeEffectiveRating',
+    ),
+    ratingDifference: toOptionalNumber(
+      payload.ratingDifference,
+      'ratingDifference',
+    ),
+    goalieAdjustment: toOptionalNumber(
+      payload.goalieAdjustment,
+      'goalieAdjustment',
+    ),
+    storedInjuryImpact: toOptionalNumber(
+      payload.storedInjuryImpact,
+      'storedInjuryImpact',
+    ),
+    gameInjuryAdjustment: toOptionalNumber(
+      payload.gameInjuryAdjustment,
+      'gameInjuryAdjustment',
+    ),
+    totalInjuryAdjustment: toOptionalNumber(
+      payload.totalInjuryAdjustment,
+      'totalInjuryAdjustment',
+    ),
+    restFatigueAdjustment: toOptionalNumber(
+      payload.restFatigueAdjustment,
+      'restFatigueAdjustment',
+    ),
+    motivationAdjustment: toOptionalNumber(
+      payload.motivationAdjustment,
+      'motivationAdjustment',
+    ),
+    manualAdjustment: toOptionalNumber(
+      payload.manualAdjustment,
+      'manualAdjustment',
+    ),
+    selectedGoalieName: toText(payload.selectedGoalieName),
+    selectedGoalieSavePercentage: toOptionalNumber(
+      payload.selectedGoalieSavePercentage,
+      'selectedGoalieSavePercentage',
+    ),
+    selectedGoalieGamesPlayed: toOptionalNumber(
+      payload.selectedGoalieGamesPlayed,
+      'selectedGoalieGamesPlayed',
+    ),
+    selectedGoalieGamesStarted: toOptionalNumber(
+      payload.selectedGoalieGamesStarted,
+      'selectedGoalieGamesStarted',
+    ),
     stake,
     stakeType: toText(payload.stakeType, 'units') || 'units',
     sportsbook: toText(payload.sportsbook),

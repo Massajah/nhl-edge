@@ -15,6 +15,10 @@ import {
   normalizeBets,
   removeSavedAnalyses,
 } from '../utils/savedAnalyses.js'
+import {
+  MODEL_STATUSES,
+  PROBABILITY_EDGE_HELP_TEXT,
+} from '../utils/calculateGame.js'
 
 const filterOptions = [
   {
@@ -39,6 +43,29 @@ const filterOptions = [
   },
 ]
 
+const modelStatusFilterOptions = [
+  {
+    value: 'all',
+    label: 'All statuses',
+  },
+  {
+    value: MODEL_STATUSES.POSITIVE_VALUE,
+    label: MODEL_STATUSES.POSITIVE_VALUE,
+  },
+  {
+    value: MODEL_STATUSES.BELOW_THRESHOLD,
+    label: MODEL_STATUSES.BELOW_THRESHOLD,
+  },
+  {
+    value: MODEL_STATUSES.NO_VALUE,
+    label: MODEL_STATUSES.NO_VALUE,
+  },
+  {
+    value: MODEL_STATUSES.LEGACY,
+    label: MODEL_STATUSES.LEGACY,
+  },
+]
+
 const formatDate = (dateTime) => {
   const date = new Date(dateTime)
 
@@ -59,21 +86,63 @@ const toNumber = (value) => {
   return Number.isFinite(parsedValue) ? parsedValue : 0
 }
 
-const formatOdds = (value) => toNumber(value).toFixed(2)
-const formatPercent = (value) => `${(toNumber(value) * 100).toFixed(1)}%`
-const formatSignedPercent = (value) =>
-  `${toNumber(value) >= 0 ? '+' : ''}${formatPercent(value)}`
+const toNullableNumber = (value) => {
+  if (value === null || value === '' || value === undefined) {
+    return null
+  }
+
+  const parsedValue = Number(value)
+  return Number.isFinite(parsedValue) ? parsedValue : null
+}
+
+const formatOdds = (value) => {
+  const number = toNullableNumber(value)
+  return number === null ? '--' : number.toFixed(2)
+}
+const formatPercent = (value) => {
+  const number = toNullableNumber(value)
+  return number === null ? '--' : `${(number * 100).toFixed(1)}%`
+}
+const formatProbabilityEdge = (value) =>
+  toNullableNumber(value) === null
+    ? '--'
+    : `${toNumber(value) >= 0 ? '+' : ''}${(toNumber(value) * 100).toFixed(
+        1,
+      )} pp`
+const formatExpectedValue = (value) => {
+  const number = toNullableNumber(value)
+  return number === null ? '--' : `${number >= 0 ? '+' : ''}${number.toFixed(1)}%`
+}
 const formatUnits = (value) => `${toNumber(value).toFixed(2)}u`
 const formatSignedUnits = (value) =>
   `${toNumber(value) >= 0 ? '+' : ''}${formatUnits(value)}`
-const recommendationClass = (recommendation = '') =>
-  recommendation.toLowerCase().replace(' ', '-')
+const formatSignedNumber = (value) => {
+  const number = toNullableNumber(value)
+  return number === null ? '--' : `${number >= 0 ? '+' : ''}${number.toFixed(1)}`
+}
+const formatNumber = (value) => {
+  const number = toNullableNumber(value)
+  return number === null ? '--' : number.toFixed(1)
+}
+const formatInteger = (value) => {
+  const number = toNullableNumber(value)
+  return number === null ? '--' : String(Math.round(number))
+}
+const formatSavePercentage = (value) => {
+  const number = toNullableNumber(value)
+  return number === null ? '--' : number.toFixed(3).replace(/^0/, '')
+}
+const modelStatusClass = (modelStatus = '') =>
+  String(modelStatus ?? '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '')
 const profitClass = (profit) =>
   profit > 0 ? 'positive' : profit < 0 ? 'negative' : ''
 
 const isSettledResult = (result) => result !== 'pending'
 
-const filterBets = (bets, filter) => {
+const filterBetsByResult = (bets, filter) => {
   if (filter === 'all') {
     return bets
   }
@@ -85,11 +154,24 @@ const filterBets = (bets, filter) => {
   return bets.filter((bet) => bet.result === filter)
 }
 
+const filterBets = (bets, resultFilter, modelStatusFilter) => {
+  const resultFilteredBets = filterBetsByResult(bets, resultFilter)
+
+  if (modelStatusFilter === 'all') {
+    return resultFilteredBets
+  }
+
+  return resultFilteredBets.filter(
+    (bet) => bet.modelStatus === modelStatusFilter,
+  )
+}
+
 function BetTracker() {
   const [bets, setBets] = useState([])
   const [status, setStatus] = useState('loading')
   const [errorMessage, setErrorMessage] = useState('')
   const [filter, setFilter] = useState('pending')
+  const [modelStatusFilter, setModelStatusFilter] = useState('all')
   const [actionMessage, setActionMessage] = useState('')
   const [actionStatus, setActionStatus] = useState('idle')
   const [migrationAvailable, setMigrationAvailable] = useState(() =>
@@ -173,6 +255,9 @@ function BetTracker() {
             totals.pending += 1
           }
 
+          totals.statusCounts[bet.modelStatus] =
+            (totals.statusCounts[bet.modelStatus] ?? 0) + 1
+
           if (isSettled) {
             totals.settledStake += bet.stake
           }
@@ -188,6 +273,12 @@ function BetTracker() {
           totalProfit: 0,
           totalStake: 0,
           settledStake: 0,
+          statusCounts: {
+            [MODEL_STATUSES.POSITIVE_VALUE]: 0,
+            [MODEL_STATUSES.BELOW_THRESHOLD]: 0,
+            [MODEL_STATUSES.NO_VALUE]: 0,
+            [MODEL_STATUSES.LEGACY]: 0,
+          },
         },
       ),
     [bets],
@@ -195,7 +286,10 @@ function BetTracker() {
   const roi = summary.settledStake
     ? summary.totalProfit / summary.settledStake
     : 0
-  const visibleBets = useMemo(() => filterBets(bets, filter), [bets, filter])
+  const visibleBets = useMemo(
+    () => filterBets(bets, filter, modelStatusFilter),
+    [bets, filter, modelStatusFilter],
+  )
 
   const replaceBet = (updatedBet) => {
     setBets((currentBets) =>
@@ -384,15 +478,43 @@ function BetTracker() {
           />
         </div>
 
+        <div className="status-count-summary" aria-label="Model status counts">
+          {modelStatusFilterOptions
+            .filter((option) => option.value !== 'all')
+            .map((option) => (
+              <span
+                className={`status-count-pill ${modelStatusClass(option.value)}`}
+                key={option.value}
+              >
+                {option.label}: {summary.statusCounts[option.value] ?? 0}
+              </span>
+            ))}
+        </div>
+
         <div className="tracker-toolbar">
           <label className="field tracker-field" htmlFor="bet-filter">
-            <span>Filter</span>
+            <span>Result</span>
             <select
               id="bet-filter"
               value={filter}
               onChange={(event) => setFilter(event.target.value)}
             >
               {filterOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="field tracker-field" htmlFor="model-status-filter">
+            <span>Model status</span>
+            <select
+              id="model-status-filter"
+              value={modelStatusFilter}
+              onChange={(event) => setModelStatusFilter(event.target.value)}
+            >
+              {modelStatusFilterOptions.map((option) => (
                 <option key={option.value} value={option.value}>
                   {option.label}
                 </option>
@@ -507,7 +629,7 @@ function BetCard({ bet, onDelete, onUpdate }) {
 
   const handleDraftBlur = (field) => {
     if (field === 'stake') {
-      const nextStake = Math.max(toNumber(draft.stake), 0)
+      const nextStake = Math.max(toNumber(draft.stake), 0.01)
 
       if (nextStake !== bet.stake) {
         updateField({ stake: nextStake })
@@ -549,7 +671,7 @@ function BetCard({ bet, onDelete, onUpdate }) {
   }
 
   return (
-    <article className={`bet-card ${recommendationClass(bet.recommendation)}`}>
+    <article className={`bet-card ${modelStatusClass(bet.modelStatus)}`}>
       <div className="bet-card-main">
         <div className="bet-date">
           <span>Date</span>
@@ -574,17 +696,35 @@ function BetCard({ bet, onDelete, onUpdate }) {
       </div>
 
       <div className="bet-odds-grid">
+        <BetStat
+          label="Model status"
+          value={bet.modelStatus}
+          tone={modelStatusClass(bet.modelStatus)}
+        />
         <BetStat label="Fair odds" value={formatOdds(bet.fairOdds)} />
         <BetStat label="Market odds" value={formatOdds(bet.marketOdds)} />
         <BetStat
-          label="Edge"
-          value={formatSignedPercent(bet.probabilityEdge)}
-          tone={bet.probabilityEdge >= 0 ? 'positive' : 'negative'}
+          label="Probability edge"
+          title={PROBABILITY_EDGE_HELP_TEXT}
+          value={formatProbabilityEdge(bet.probabilityEdge)}
+          tone={
+            toNullableNumber(bet.probabilityEdge) === null
+              ? ''
+              : bet.probabilityEdge >= 0
+                ? 'positive'
+                : 'negative'
+          }
         />
         <BetStat
-          label="Recommendation"
-          value={bet.recommendation}
-          tone={recommendationClass(bet.recommendation)}
+          label="Expected value"
+          value={formatExpectedValue(bet.expectedValue)}
+          tone={
+            toNullableNumber(bet.expectedValue) === null
+              ? ''
+              : bet.expectedValue >= 0
+                ? 'positive'
+                : 'negative'
+          }
         />
       </div>
 
@@ -607,7 +747,7 @@ function BetCard({ bet, onDelete, onUpdate }) {
           <span>Stake</span>
           <input
             type="number"
-            min="0"
+            min="0.01"
             step="0.25"
             value={draft.stake}
             inputMode="decimal"
@@ -649,6 +789,8 @@ function BetCard({ bet, onDelete, onUpdate }) {
         </div>
       </div>
 
+      <BetAnalysisDetails bet={bet} />
+
       <div className="bet-notes-row">
         <label className="field tracker-field">
           <span>Notes</span>
@@ -677,9 +819,104 @@ function BetCard({ bet, onDelete, onUpdate }) {
   )
 }
 
-function BetStat({ label, value, tone = '' }) {
+const hasDisplayValue = (value) => value !== null && value !== '' && value !== '--'
+
+const createDetailRow = (label, value, title) =>
+  hasDisplayValue(value) ? { label, title, value } : null
+
+const getGoalieDetail = (bet) => {
+  if (!bet.selectedGoalieName) {
+    return null
+  }
+
+  const goalieStats = [
+    createDetailRow('SV%', formatSavePercentage(bet.selectedGoalieSavePercentage)),
+    createDetailRow('GP', formatInteger(bet.selectedGoalieGamesPlayed)),
+    createDetailRow('GS', formatInteger(bet.selectedGoalieGamesStarted)),
+  ]
+    .filter(Boolean)
+    .map(({ label, value }) => `${label} ${value}`)
+
+  return goalieStats.length
+    ? `${bet.selectedGoalieName} (${goalieStats.join(', ')})`
+    : bet.selectedGoalieName
+}
+
+const getEffectiveRatingsDetail = (bet) => {
+  const awayRating = formatNumber(bet.awayEffectiveRating)
+  const homeRating = formatNumber(bet.homeEffectiveRating)
+
+  if (!hasDisplayValue(awayRating) && !hasDisplayValue(homeRating)) {
+    return null
+  }
+
+  return `${bet.awayTeam.abbreviation} ${awayRating} / ${bet.homeTeam.abbreviation} ${homeRating}`
+}
+
+const getInjuryDetail = (bet) => {
+  const total = formatSignedNumber(bet.totalInjuryAdjustment)
+
+  if (!hasDisplayValue(total)) {
+    return null
+  }
+
+  const stored = formatSignedNumber(bet.storedInjuryImpact)
+  const game = formatSignedNumber(bet.gameInjuryAdjustment)
+
+  if (hasDisplayValue(stored) || hasDisplayValue(game)) {
+    return `${total} total (stored ${stored}, game ${game})`
+  }
+
+  return total
+}
+
+function BetAnalysisDetails({ bet }) {
+  const rows = [
+    createDetailRow('Model probability', formatPercent(bet.modelProbability)),
+    createDetailRow(
+      'Implied market probability',
+      formatPercent(bet.impliedMarketProbability),
+    ),
+    createDetailRow(
+      'Probability edge',
+      formatProbabilityEdge(bet.probabilityEdge),
+      PROBABILITY_EDGE_HELP_TEXT,
+    ),
+    createDetailRow('Effective ratings', getEffectiveRatingsDetail(bet)),
+    createDetailRow('Rating difference', formatSignedNumber(bet.ratingDifference)),
+    createDetailRow('Selected goalie', getGoalieDetail(bet)),
+    createDetailRow('Goalie adjustment', formatSignedNumber(bet.goalieAdjustment)),
+    createDetailRow('Injury adjustment', getInjuryDetail(bet)),
+    createDetailRow(
+      'Rest and fatigue',
+      formatSignedNumber(bet.restFatigueAdjustment),
+    ),
+    createDetailRow('Motivation', formatSignedNumber(bet.motivationAdjustment)),
+    createDetailRow('Manual / X-factor', formatSignedNumber(bet.manualAdjustment)),
+  ].filter(Boolean)
+
+  if (rows.length === 0) {
+    return null
+  }
+
   return (
-    <div className={`bet-stat ${tone}`}>
+    <details className="bet-analysis-details">
+      <summary>Analysis details</summary>
+      <div className="bet-analysis-detail-grid">
+        {rows.map((row) => (
+          <div key={row.label} title={row.title}>
+            <span>{row.label}</span>
+            <strong>{row.value}</strong>
+          </div>
+        ))}
+      </div>
+    </details>
+  )
+}
+
+function BetStat({ label, title, value, tone = '' }) {
+  return (
+    <div className={`bet-stat ${tone}`} title={title}>
       <span>{label}</span>
       <strong>{value}</strong>
     </div>

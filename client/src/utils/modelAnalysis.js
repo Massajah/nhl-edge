@@ -1,35 +1,37 @@
-import { calculateGame, calculateImpliedProbability } from './calculateGame.js'
+import {
+  ADD_MARKET_ODDS_STATUS,
+  MODEL_STATUSES,
+  calculateGame,
+  calculateMarketComparison,
+  parseMarketOdds,
+} from './calculateGame.js'
 import { getTeamInjurySummary } from './injuries.js'
 import { getTeamPowerRating } from './powerRatings.js'
 
 export const defaultGameInputs = {
   home: {
     baseRating: 50,
-    marketOdds: 1.85,
+    marketOdds: '',
+    selectedGoalieId: '',
     storedInjuryImpact: 0,
     homeAdvantage: 0,
     injuries: 0,
     goalieAdjustment: 0,
-    recentForm: 0,
+    restFatigue: 0,
     motivation: 0,
+    manualAdjustment: 0,
   },
   away: {
     baseRating: 50,
-    marketOdds: 2.05,
+    marketOdds: '',
+    selectedGoalieId: '',
     storedInjuryImpact: 0,
     injuries: 0,
     goalieAdjustment: 0,
-    recentForm: 0,
+    restFatigue: 0,
     motivation: 0,
+    manualAdjustment: 0,
   },
-}
-
-const parseMarketOdds = (value) => {
-  const parsedValue = Number(value)
-
-  return Number.isFinite(parsedValue) && parsedValue >= 1.01
-    ? parsedValue
-    : null
 }
 
 export const createInputsForTeams = (
@@ -89,29 +91,23 @@ export const applyTeamRatingsToInputs = (
 }
 
 const createMarketSide = ({ fairOdds, marketOdds, modelProbability }) => {
-  const parsedMarketOdds = parseMarketOdds(marketOdds)
-
-  if (!parsedMarketOdds) {
-    return {
-      edge: null,
-      fairOdds,
-      impliedProbability: null,
-      marketOdds: null,
-      modelProbability,
-      oddsValuePercentage: null,
-    }
-  }
-
-  const impliedProbability = calculateImpliedProbability(parsedMarketOdds)
-  const edge = modelProbability - impliedProbability
+  const comparison = calculateMarketComparison({
+    marketOdds,
+    modelProbability,
+  })
 
   return {
-    edge,
-    fairOdds,
-    impliedProbability,
-    marketOdds: parsedMarketOdds,
-    modelProbability,
-    oddsValuePercentage: parsedMarketOdds / fairOdds - 1,
+    edge: comparison.probabilityEdge,
+    expectedValue: comparison.expectedValue,
+    fairOdds: comparison.fairOdds ?? fairOdds,
+    impliedProbability: comparison.impliedProbability,
+    marketOdds: comparison.marketOdds,
+    modelProbability: comparison.modelProbability,
+    modelStatus: comparison.modelStatus,
+    oddsDifference: comparison.oddsDifference,
+    oddsValuePercentage:
+      comparison.expectedValue === null ? null : comparison.expectedValue / 100,
+    recommendation: comparison.modelStatus ?? comparison.recommendation,
   }
 }
 
@@ -144,13 +140,12 @@ export const calculatePreliminaryAnalysis = ({
     modelProbability: result.awayWinProbability,
   })
   const hasAnyMarketOdds = Boolean(homeMarket.marketOdds || awayMarket.marketOdds)
-  const bestEdge = Math.max(homeMarket.edge ?? -Infinity, awayMarket.edge ?? -Infinity)
-  const bestOddsValue = Math.max(
-    homeMarket.oddsValuePercentage ?? -Infinity,
-    awayMarket.oddsValuePercentage ?? -Infinity,
-  )
   const hasPositiveValue =
-    hasAnyMarketOdds && (bestEdge > 0 || bestOddsValue > 0)
+    homeMarket.modelStatus === MODEL_STATUSES.POSITIVE_VALUE ||
+    awayMarket.modelStatus === MODEL_STATUSES.POSITIVE_VALUE
+  const hasBelowThreshold =
+    homeMarket.modelStatus === MODEL_STATUSES.BELOW_THRESHOLD ||
+    awayMarket.modelStatus === MODEL_STATUSES.BELOW_THRESHOLD
 
   return {
     awayFinalRating: result.awayFinalRating,
@@ -161,9 +156,11 @@ export const calculatePreliminaryAnalysis = ({
     homeMarket,
     inputs,
     status: !hasAnyMarketOdds
-      ? 'Add market odds'
+      ? ADD_MARKET_ODDS_STATUS
       : hasPositiveValue
-        ? 'Potential value'
-        : 'No preliminary value',
+        ? MODEL_STATUSES.POSITIVE_VALUE
+        : hasBelowThreshold
+          ? MODEL_STATUSES.BELOW_THRESHOLD
+          : MODEL_STATUSES.NO_VALUE,
   }
 }

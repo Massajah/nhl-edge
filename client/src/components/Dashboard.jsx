@@ -13,6 +13,10 @@ import {
   loadDashboardMarketOdds,
   saveDashboardMarketOdds,
 } from '../utils/marketOdds.js'
+import {
+  MODEL_STATUSES,
+  PROBABILITY_EDGE_HELP_TEXT,
+} from '../utils/calculateGame.js'
 
 const toDateValue = (date) => {
   const year = date.getFullYear()
@@ -105,17 +109,28 @@ const formatRating = (value) =>
 const formatPercent = (value) =>
   Number.isFinite(value) ? `${(value * 100).toFixed(1)}%` : '--'
 
-const formatSignedPercent = (value) =>
+const formatProbabilityEdge = (value) =>
   Number.isFinite(value)
-    ? `${value >= 0 ? '+' : ''}${(value * 100).toFixed(1)}%`
+    ? `${value >= 0 ? '+' : ''}${(value * 100).toFixed(1)} pp`
     : '--'
+
+const formatExpectedValue = (value) =>
+  Number.isFinite(value) ? `${value >= 0 ? '+' : ''}${value.toFixed(1)}%` : '--'
 
 const getValueStatusTone = (analysis) => {
   if (!analysis.hasAnyMarketOdds) {
     return 'empty'
   }
 
-  return analysis.hasPositiveValue ? 'value' : 'none'
+  if (analysis.status === MODEL_STATUSES.POSITIVE_VALUE) {
+    return 'positive-value'
+  }
+
+  if (analysis.status === MODEL_STATUSES.BELOW_THRESHOLD) {
+    return 'below-threshold'
+  }
+
+  return 'no-value'
 }
 
 function Dashboard({
@@ -640,8 +655,10 @@ function PreliminaryDetailSide({ finalRating, label, market, team }) {
       <span>Rating {formatRating(finalRating)}</span>
       <span>Model {formatPercent(market.modelProbability)}</span>
       <span>Implied {formatPercent(market.impliedProbability)}</span>
-      <span>Edge {formatSignedPercent(market.edge)}</span>
-      <span>Odds value {formatSignedPercent(market.oddsValuePercentage)}</span>
+      <span title={PROBABILITY_EDGE_HELP_TEXT}>
+        Probability edge {formatProbabilityEdge(market.edge)}
+      </span>
+      <span>Expected value {formatExpectedValue(market.expectedValue)}</span>
     </div>
   )
 }
