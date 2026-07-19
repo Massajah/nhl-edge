@@ -14,9 +14,11 @@ function getStoredSidebarState() {
 
 function AppLayout({
   activePage,
+  authUser,
   children,
   currentPage,
   onNavigate,
+  onLogout,
   primaryItems,
   utilityItems,
 }) {
@@ -88,8 +90,10 @@ function AppLayout({
     >
       <Sidebar
         activePage={activePage}
+        authUser={authUser}
         isCollapsed={isSidebarCollapsed}
         onCloseMobile={() => setIsMobileSidebarOpen(false)}
+        onLogout={onLogout}
         onNavigate={handleNavigate}
         onToggleCollapse={() =>
           setIsSidebarCollapsed((currentCollapsed) => !currentCollapsed)

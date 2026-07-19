@@ -3,17 +3,21 @@ import {
   Activity,
   ClipboardList,
   LayoutDashboard,
+  Settings as SettingsIcon,
   Shield,
   Target,
   TrendingUp,
 } from 'lucide-react'
+import AuthPage from './components/auth/AuthPage.jsx'
 import BetTracker from './components/BetTracker.jsx'
 import Dashboard from './components/Dashboard.jsx'
 import GameAnalyzer from './components/GameAnalyzer.jsx'
 import InjuryManager from './components/InjuryManager.jsx'
 import AppLayout from './components/layout/AppLayout.jsx'
 import PowerRatings from './components/PowerRatings.jsx'
+import SettingsPage from './components/Settings.jsx'
 import Teams from './components/Teams.jsx'
+import { useAuth } from './context/AuthContext.jsx'
 import { NHL_TEAMS } from './data/teams.js'
 import { fetchTeamInjurySummary } from './services/injuriesApi.js'
 import {
@@ -71,9 +75,16 @@ const pages = [
   },
 ]
 
-const utilityPages = []
+const utilityPages = [
+  {
+    id: 'settings',
+    Icon: SettingsIcon,
+    label: 'Settings',
+    title: 'Settings',
+  },
+]
 
-function App() {
+function AuthenticatedApp({ authUser, onLogout }) {
   const [activePage, setActivePage] = useState('dashboard')
   const [analyzerPrefill, setAnalyzerPrefill] = useState(null)
   const [powerRatings, setPowerRatings] = useState(() =>
@@ -93,7 +104,8 @@ function App() {
   const [injurySummaryError, setInjurySummaryError] = useState('')
   const [injurySummaryVersion, setInjurySummaryVersion] = useState(0)
 
-  const currentPage = pages.find((page) => page.id === activePage) ?? pages[0]
+  const allPages = [...pages, ...utilityPages]
+  const currentPage = allPages.find((page) => page.id === activePage) ?? pages[0]
 
   const updateMigrationAvailability = useCallback((ratings) => {
     const localRatings = loadLocalPowerRatings()
@@ -391,7 +403,9 @@ function App() {
     <AppLayout
       activePage={activePage}
       currentPage={currentPage}
+      authUser={authUser}
       onNavigate={setActivePage}
+      onLogout={onLogout}
       primaryItems={pages}
       utilityItems={utilityPages}
     >
@@ -449,11 +463,47 @@ function App() {
           summaryStatus={injurySummaryStatus}
           onInjuriesChanged={loadInjurySummaries}
         />
+      ) : activePage === 'settings' ? (
+        <SettingsPage />
       ) : (
         <BetTracker />
       )}
     </AppLayout>
   )
+}
+
+function AuthLoadingScreen() {
+  return (
+    <main className="auth-loading-screen" aria-label="Loading NHL Edge">
+      <span className="sidebar-brand-mark">NE</span>
+      <div>
+        <p className="eyebrow">NHL Edge</p>
+        <strong>Restoring your session</strong>
+      </div>
+    </main>
+  )
+}
+
+function App() {
+  const { isAuthenticated, loading, logout, user } = useAuth()
+  const [authMode, setAuthMode] = useState('login')
+
+  if (loading) {
+    return <AuthLoadingScreen />
+  }
+
+  if (!isAuthenticated) {
+    return (
+      <AuthPage
+        key={authMode}
+        mode={authMode}
+        onModeChange={setAuthMode}
+        onSuccess={() => setAuthMode('login')}
+      />
+    )
+  }
+
+  return <AuthenticatedApp authUser={user} onLogout={logout} />
 }
 
 export default App

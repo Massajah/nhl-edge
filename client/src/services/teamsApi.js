@@ -1,22 +1,9 @@
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, '') ?? ''
+import { apiRequest } from './apiClient.js'
 
 const requestTeams = async (path) => {
-  const response = await fetch(`${API_BASE_URL}${path}`)
-
-  if (!response.ok) {
-    let message = 'Unable to load team data.'
-
-    try {
-      const data = await response.json()
-      message = data.error ?? message
-    } catch {
-      // Keep the default message when the server cannot return JSON.
-    }
-
-    throw new Error(message)
-  }
-
-  return response.json()
+  return apiRequest(path, undefined, {
+    fallbackMessage: 'Unable to load team data.',
+  })
 }
 
 export const fetchTeams = async () => {
