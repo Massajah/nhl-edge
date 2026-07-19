@@ -44,6 +44,8 @@ class InjuriesError extends Error {
 const normalizeIdentifier = (value) =>
   typeof value === 'string' ? value.trim().toUpperCase() : ''
 
+const toObjectId = (userId) => new mongoose.Types.ObjectId(userId)
+
 const toText = (value, fallback = '') =>
   typeof value === 'string' ? value.trim() : fallback
 
@@ -240,8 +242,8 @@ const serializeInjury = (injury) => {
   return plainInjury
 }
 
-const getInjuries = async () => {
-  const injuries = await Injury.find({}).sort({
+const getInjuries = async (userId) => {
+  const injuries = await Injury.find({ userId }).sort({
     active: -1,
     teamName: 1,
     playerName: 1,
@@ -250,14 +252,17 @@ const getInjuries = async () => {
   return injuries.map(serializeInjury)
 }
 
-const getTeamInjuries = async (teamId) => {
+const getTeamInjuries = async (userId, teamId) => {
   const normalizedTeamId = normalizeIdentifier(teamId)
 
   if (!normalizedTeamId) {
     throw new InjuriesError('teamId is required.', 400)
   }
 
-  const injuries = await Injury.find({ teamId: normalizedTeamId }).sort({
+  const injuries = await Injury.find({
+    teamId: normalizedTeamId,
+    userId,
+  }).sort({
     active: -1,
     playerName: 1,
   })
@@ -265,21 +270,27 @@ const getTeamInjuries = async (teamId) => {
   return injuries.map(serializeInjury)
 }
 
-const createInjury = async (payload) => {
-  const injury = new Injury(await normalizeCreatePayload(payload))
+const createInjury = async (userId, payload) => {
+  const injury = new Injury({
+    ...(await normalizeCreatePayload(payload)),
+    userId,
+  })
 
   await injury.save()
 
   return serializeInjury(injury)
 }
 
-const updateInjury = async (id, payload) => {
+const updateInjury = async (userId, id, payload) => {
   if (!mongoose.Types.ObjectId.isValid(id)) {
     throw new InjuriesError('Injury was not found.', 404)
   }
 
   const updates = normalizeUpdatePayload(payload)
-  const injury = await Injury.findById(id)
+  const injury = await Injury.findOne({
+    _id: id,
+    userId,
+  })
 
   if (!injury) {
     throw new InjuriesError('Injury was not found.', 404)
@@ -291,12 +302,15 @@ const updateInjury = async (id, payload) => {
   return serializeInjury(injury)
 }
 
-const deleteInjury = async (id) => {
+const deleteInjury = async (userId, id) => {
   if (!mongoose.Types.ObjectId.isValid(id)) {
     throw new InjuriesError('Injury was not found.', 404)
   }
 
-  const deletedInjury = await Injury.findByIdAndDelete(id)
+  const deletedInjury = await Injury.findOneAndDelete({
+    _id: id,
+    userId,
+  })
 
   if (!deletedInjury) {
     throw new InjuriesError('Injury was not found.', 404)
@@ -305,13 +319,14 @@ const deleteInjury = async (id) => {
   return serializeInjury(deletedInjury)
 }
 
-const getTeamInjurySummary = async () => {
+const getTeamInjurySummary = async (userId) => {
   const teams = await getTeams()
   const summaryRows = await Injury.aggregate([
     {
       $match: {
         active: true,
         status: { $ne: 'healthy' },
+        userId: toObjectId(userId),
       },
     },
     {

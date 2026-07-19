@@ -4,8 +4,11 @@ const getGoalieStats = async (request, response, next) => {
   const { playerId } = request.params
 
   if (!nhlApiService.isValidPlayerId(playerId)) {
+    const message = 'Player ID must be numeric.'
+
     response.status(400).json({
-      error: 'Player ID must be numeric.',
+      error: message,
+      message,
     })
     return
   }

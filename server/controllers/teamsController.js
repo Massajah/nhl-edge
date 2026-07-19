@@ -14,8 +14,11 @@ const getTeamRoster = async (request, response, next) => {
   const { teamAbbreviation } = request.params
 
   if (!nhlApiService.isValidTeamAbbreviation(teamAbbreviation)) {
+    const message = 'Team abbreviation must use 2 to 4 letters.'
+
     response.status(400).json({
-      error: 'Team abbreviation must use 2 to 4 letters.',
+      error: message,
+      message,
     })
     return
   }
@@ -33,8 +36,11 @@ const getTeamStats = async (request, response, next) => {
   const { teamAbbreviation } = request.params
 
   if (!nhlApiService.isValidTeamAbbreviation(teamAbbreviation)) {
+    const message = 'Team abbreviation must use 2 to 4 letters.'
+
     response.status(400).json({
-      error: 'Team abbreviation must use 2 to 4 letters.',
+      error: message,
+      message,
     })
     return
   }
@@ -52,8 +58,11 @@ const getTeamGoalieSummaries = async (request, response, next) => {
   const { teamAbbreviation } = request.params
 
   if (!nhlApiService.isValidTeamAbbreviation(teamAbbreviation)) {
+    const message = 'Team abbreviation must use 2 to 4 letters.'
+
     response.status(400).json({
-      error: 'Team abbreviation must use 2 to 4 letters.',
+      error: message,
+      message,
     })
     return
   }

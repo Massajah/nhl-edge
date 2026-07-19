@@ -1,7 +1,10 @@
 const express = require('express')
 const powerRatingsController = require('../controllers/powerRatingsController')
+const authenticate = require('../middleware/authenticate')
 
 const router = express.Router()
+
+router.use(authenticate)
 
 router.get('/', powerRatingsController.getPowerRatings)
 router.put('/:teamId', powerRatingsController.updatePowerRating)

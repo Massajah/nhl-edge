@@ -9,6 +9,8 @@ const NUMERIC_FIELDS = [
   'lastRatingChange',
 ]
 const IMMUTABLE_FIELDS = ['teamId', 'teamName', 'abbreviation']
+const DEFAULT_BASE_RATING = 50
+const DEFAULT_HOME_ADVANTAGE = 2.5
 
 let seedTeamsPromise = null
 
@@ -39,6 +41,9 @@ const serializeRating = (rating) => {
 
   return plainRating
 }
+
+const getRatingsForUser = async (userId) =>
+  PowerRating.find({ userId }).sort({ teamName: 1 })
 
 const findDuplicates = (values) => {
   const seenValues = new Set()
@@ -167,13 +172,59 @@ const validateUpdatePayload = (payload = {}) => {
   }, {})
 }
 
-const getPowerRatings = async () => {
-  const ratings = await PowerRating.find({}).sort({ teamName: 1 })
+const initializeDefaultPowerRatings = async (userId) => {
+  const seedTeams = await getSeedTeams()
+  const operations = seedTeams.map((team) => ({
+    updateOne: {
+      filter: {
+        teamId: team.teamId,
+        userId,
+      },
+      update: {
+        $setOnInsert: {
+          abbreviation: team.abbreviation,
+          baseRating: DEFAULT_BASE_RATING,
+          homeAdvantage: DEFAULT_HOME_ADVANTAGE,
+          lastRatingChange: 0,
+          manualAdjustment: 0,
+          teamId: team.teamId,
+          teamName: team.teamName,
+          userId,
+        },
+      },
+      upsert: true,
+    },
+  }))
+
+  try {
+    const result = await PowerRating.bulkWrite(operations, { ordered: false })
+
+    return {
+      insertedCount: result.upsertedCount ?? 0,
+      matchedCount: result.matchedCount ?? 0,
+      modifiedCount: result.modifiedCount ?? 0,
+      totalTeams: seedTeams.length,
+    }
+  } catch (error) {
+    const duplicateError = createDuplicateError(error)
+
+    if (duplicateError) {
+      throw duplicateError
+    }
+
+    throw error
+  }
+}
+
+const getPowerRatings = async (userId) => {
+  await initializeDefaultPowerRatings(userId)
+
+  const ratings = await getRatingsForUser(userId)
 
   return ratings.map(serializeRating)
 }
 
-const updatePowerRating = async (teamId, payload) => {
+const updatePowerRating = async (userId, teamId, payload) => {
   const normalizedTeamId = normalizeIdentifier(teamId)
 
   if (!normalizedTeamId) {
@@ -181,7 +232,10 @@ const updatePowerRating = async (teamId, payload) => {
   }
 
   const updates = validateUpdatePayload(payload)
-  const rating = await PowerRating.findOne({ teamId: normalizedTeamId })
+  const rating = await PowerRating.findOne({
+    teamId: normalizedTeamId,
+    userId,
+  })
 
   if (!rating) {
     throw new PowerRatingsError(
@@ -214,98 +268,24 @@ const updatePowerRating = async (teamId, payload) => {
   return serializeRating(rating)
 }
 
-const findSeedConflicts = (existingRatings, seedTeams) => {
-  const seedTeamById = new Map(seedTeams.map((team) => [team.teamId, team]))
-  const seedTeamByAbbreviation = new Map(
-    seedTeams.map((team) => [team.abbreviation, team]),
-  )
-
-  return existingRatings.reduce((conflicts, rating) => {
-    const teamId = normalizeIdentifier(rating.teamId)
-    const abbreviation = normalizeIdentifier(rating.abbreviation)
-    const seedTeamForId = seedTeamById.get(teamId)
-    const seedTeamForAbbreviation = seedTeamByAbbreviation.get(abbreviation)
-
-    if (seedTeamForId && abbreviation !== seedTeamForId.abbreviation) {
-      conflicts.push({
-        teamId,
-        existingAbbreviation: abbreviation,
-        expectedAbbreviation: seedTeamForId.abbreviation,
-      })
-    }
-
-    if (seedTeamForAbbreviation && teamId !== seedTeamForAbbreviation.teamId) {
-      conflicts.push({
-        abbreviation,
-        existingTeamId: teamId,
-        expectedTeamId: seedTeamForAbbreviation.teamId,
-      })
-    }
-
-    return conflicts
-  }, [])
-}
-
-const seedPowerRatings = async () => {
-  const seedTeams = await getSeedTeams()
-  const seedTeamIds = seedTeams.map((team) => team.teamId)
-  const seedAbbreviations = seedTeams.map((team) => team.abbreviation)
-  const existingRatings = await PowerRating.find({
-    $or: [
-      { teamId: { $in: seedTeamIds } },
-      { abbreviation: { $in: seedAbbreviations } },
-    ],
-  })
-
-  const conflicts = findSeedConflicts(existingRatings, seedTeams)
-
-  if (conflicts.length > 0) {
-    throw new PowerRatingsError(
-      'Cannot seed power ratings because existing team identifiers conflict with NHL team data.',
-      400,
-      { conflicts },
-    )
-  }
-
-  const existingTeamIds = new Set(
-    existingRatings.map((rating) => normalizeIdentifier(rating.teamId)),
-  )
-  const missingTeams = seedTeams.filter(
-    (team) => !existingTeamIds.has(team.teamId),
-  )
-
-  if (missingTeams.length > 0) {
-    try {
-      await PowerRating.insertMany(
-        missingTeams.map((team) => ({
-          teamId: team.teamId,
-          teamName: team.teamName,
-          abbreviation: team.abbreviation,
-        })),
-        { ordered: false },
-      )
-    } catch (error) {
-      const duplicateError = createDuplicateError(error)
-
-      if (duplicateError) {
-        throw duplicateError
-      }
-
-      throw error
-    }
-  }
+const seedPowerRatings = async (userId) => {
+  const result = await initializeDefaultPowerRatings(userId)
+  const ratings = await getRatingsForUser(userId)
 
   return {
-    insertedCount: missingTeams.length,
-    skippedCount: seedTeams.length - missingTeams.length,
-    totalTeams: seedTeams.length,
-    ratings: await getPowerRatings(),
+    insertedCount: result.insertedCount,
+    skippedCount: result.totalTeams - result.insertedCount,
+    totalTeams: result.totalTeams,
+    ratings: ratings.map(serializeRating),
   }
 }
 
 module.exports = {
+  DEFAULT_BASE_RATING,
+  DEFAULT_HOME_ADVANTAGE,
   PowerRatingsError,
   getPowerRatings,
+  initializeDefaultPowerRatings,
   seedPowerRatings,
   updatePowerRating,
 }

@@ -1,7 +1,10 @@
 const express = require('express')
 const injuriesController = require('../controllers/injuriesController')
+const authenticate = require('../middleware/authenticate')
 
 const router = express.Router()
+
+router.use(authenticate)
 
 router.get('/', injuriesController.getInjuries)
 router.get('/summary', injuriesController.getTeamInjurySummary)

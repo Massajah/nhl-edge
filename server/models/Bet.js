@@ -78,6 +78,12 @@ const adjustmentsSchema = new mongoose.Schema(
 
 const betSchema = new mongoose.Schema(
   {
+    userId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      required: true,
+      index: true,
+    },
     gameId: {
       type: String,
       trim: true,
@@ -254,12 +260,16 @@ const betSchema = new mongoose.Schema(
     toJSON: {
       transform(_document, returnedObject) {
         returnedObject.id = returnedObject._id.toString()
+        returnedObject.userId = returnedObject.userId?.toString()
         delete returnedObject._id
         delete returnedObject.__v
       },
     },
   },
 )
+
+betSchema.index({ userId: 1, analyzedAt: -1, createdAt: -1 })
+betSchema.index({ userId: 1, gameId: 1 })
 
 module.exports = mongoose.model('Bet', betSchema)
 module.exports.RESULT_VALUES = RESULT_VALUES

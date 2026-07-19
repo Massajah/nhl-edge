@@ -427,14 +427,17 @@ const applyProfit = (bet) => {
   })
 }
 
-const getBets = async () => {
-  const bets = await Bet.find({}).sort({ analyzedAt: -1, createdAt: -1 })
+const getBets = async (userId) => {
+  const bets = await Bet.find({ userId }).sort({ analyzedAt: -1, createdAt: -1 })
 
   return bets.map(serializeBet)
 }
 
-const createBet = async (payload) => {
-  const bet = new Bet(normalizeCreatePayload(payload))
+const createBet = async (userId, payload) => {
+  const bet = new Bet({
+    ...normalizeCreatePayload(payload),
+    userId,
+  })
 
   applyProfit(bet)
   await bet.save()
@@ -442,13 +445,16 @@ const createBet = async (payload) => {
   return serializeBet(bet)
 }
 
-const updateBet = async (id, payload) => {
+const updateBet = async (userId, id, payload) => {
   if (!mongoose.Types.ObjectId.isValid(id)) {
     throw new BetsError('Bet was not found.', 404)
   }
 
   const updates = normalizeUpdatePayload(payload)
-  const bet = await Bet.findById(id)
+  const bet = await Bet.findOne({
+    _id: id,
+    userId,
+  })
 
   if (!bet) {
     throw new BetsError('Bet was not found.', 404)
@@ -461,12 +467,15 @@ const updateBet = async (id, payload) => {
   return serializeBet(bet)
 }
 
-const deleteBet = async (id) => {
+const deleteBet = async (userId, id) => {
   if (!mongoose.Types.ObjectId.isValid(id)) {
     throw new BetsError('Bet was not found.', 404)
   }
 
-  const deletedBet = await Bet.findByIdAndDelete(id)
+  const deletedBet = await Bet.findOneAndDelete({
+    _id: id,
+    userId,
+  })
 
   if (!deletedBet) {
     throw new BetsError('Bet was not found.', 404)

@@ -5,10 +5,15 @@ const uppercaseTrim = (value) =>
 
 const powerRatingSchema = new mongoose.Schema(
   {
+    userId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      required: true,
+      index: true,
+    },
     teamId: {
       type: String,
       required: true,
-      unique: true,
       trim: true,
       set: uppercaseTrim,
     },
@@ -20,7 +25,6 @@ const powerRatingSchema = new mongoose.Schema(
     abbreviation: {
       type: String,
       required: true,
-      unique: true,
       trim: true,
       set: uppercaseTrim,
     },
@@ -48,11 +52,16 @@ const powerRatingSchema = new mongoose.Schema(
     toJSON: {
       transform(_document, returnedObject) {
         returnedObject.id = returnedObject._id.toString()
+        returnedObject.userId = returnedObject.userId?.toString()
         delete returnedObject._id
         delete returnedObject.__v
       },
     },
   },
 )
+
+powerRatingSchema.index({ userId: 1, teamId: 1 }, { unique: true })
+powerRatingSchema.index({ userId: 1, abbreviation: 1 }, { unique: true })
+powerRatingSchema.index({ userId: 1, teamName: 1 })
 
 module.exports = mongoose.model('PowerRating', powerRatingSchema)

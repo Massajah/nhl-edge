@@ -1,8 +1,8 @@
 const betsService = require('../services/betsService')
 
-const getBets = async (_request, response, next) => {
+const getBets = async (request, response, next) => {
   try {
-    const bets = await betsService.getBets()
+    const bets = await betsService.getBets(request.user.id)
 
     response.json({ bets })
   } catch (error) {
@@ -12,7 +12,7 @@ const getBets = async (_request, response, next) => {
 
 const createBet = async (request, response, next) => {
   try {
-    const bet = await betsService.createBet(request.body)
+    const bet = await betsService.createBet(request.user.id, request.body)
 
     response.status(201).json({ bet })
   } catch (error) {
@@ -22,7 +22,11 @@ const createBet = async (request, response, next) => {
 
 const updateBet = async (request, response, next) => {
   try {
-    const bet = await betsService.updateBet(request.params.id, request.body)
+    const bet = await betsService.updateBet(
+      request.user.id,
+      request.params.id,
+      request.body,
+    )
 
     response.json({ bet })
   } catch (error) {
@@ -32,7 +36,7 @@ const updateBet = async (request, response, next) => {
 
 const deleteBet = async (request, response, next) => {
   try {
-    const bet = await betsService.deleteBet(request.params.id)
+    const bet = await betsService.deleteBet(request.user.id, request.params.id)
 
     response.json({ bet })
   } catch (error) {

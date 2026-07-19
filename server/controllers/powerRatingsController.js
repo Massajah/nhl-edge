@@ -1,8 +1,8 @@
 const powerRatingsService = require('../services/powerRatingsService')
 
-const getPowerRatings = async (_request, response, next) => {
+const getPowerRatings = async (request, response, next) => {
   try {
-    const ratings = await powerRatingsService.getPowerRatings()
+    const ratings = await powerRatingsService.getPowerRatings(request.user.id)
 
     response.json({ ratings })
   } catch (error) {
@@ -13,6 +13,7 @@ const getPowerRatings = async (_request, response, next) => {
 const updatePowerRating = async (request, response, next) => {
   try {
     const rating = await powerRatingsService.updatePowerRating(
+      request.user.id,
       request.params.teamId,
       request.body,
     )
@@ -23,9 +24,9 @@ const updatePowerRating = async (request, response, next) => {
   }
 }
 
-const seedPowerRatings = async (_request, response, next) => {
+const seedPowerRatings = async (request, response, next) => {
   try {
-    const result = await powerRatingsService.seedPowerRatings()
+    const result = await powerRatingsService.seedPowerRatings(request.user.id)
 
     response.status(201).json(result)
   } catch (error) {

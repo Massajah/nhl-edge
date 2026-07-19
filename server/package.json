@@ -4,16 +4,22 @@
   "description": "NHL Edge API server",
   "main": "index.js",
   "scripts": {
+    "cleanup:pre-auth-data": "node scripts/cleanupPreAuthData.js",
     "dev": "nodemon index.js",
+    "lint": "node scripts/lintServer.js",
+    "test": "node --test tests/auth.test.js",
     "start": "node index.js"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "bcryptjs": "^3.0.3",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
+    "google-auth-library": "^10.9.0",
+    "jsonwebtoken": "^9.0.3",
     "mongoose": "^9.7.3"
   },
   "devDependencies": {

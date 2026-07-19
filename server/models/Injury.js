@@ -11,6 +11,12 @@ const DURATION_TYPES = ['short-term', 'long-term', 'unknown']
 
 const injurySchema = new mongoose.Schema(
   {
+    userId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      required: true,
+      index: true,
+    },
     teamId: {
       type: String,
       required: true,
@@ -74,12 +80,16 @@ const injurySchema = new mongoose.Schema(
     toJSON: {
       transform(_document, returnedObject) {
         returnedObject.id = returnedObject._id.toString()
+        returnedObject.userId = returnedObject.userId?.toString()
         delete returnedObject._id
         delete returnedObject.__v
       },
     },
   },
 )
+
+injurySchema.index({ userId: 1, active: -1, teamName: 1, playerName: 1 })
+injurySchema.index({ userId: 1, teamId: 1, active: -1, playerName: 1 })
 
 module.exports = mongoose.model('Injury', injurySchema)
 module.exports.INJURY_STATUSES = INJURY_STATUSES
