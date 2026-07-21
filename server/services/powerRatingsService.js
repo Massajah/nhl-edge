@@ -285,6 +285,7 @@ module.exports = {
   DEFAULT_HOME_ADVANTAGE,
   PowerRatingsError,
   getPowerRatings,
+  getSeedTeams,
   initializeDefaultPowerRatings,
   seedPowerRatings,
   updatePowerRating,
