@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from "react";
 import {
   Activity,
   ClipboardList,
@@ -7,24 +7,24 @@ import {
   Shield,
   Target,
   TrendingUp,
-} from 'lucide-react'
-import AuthPage from './components/auth/AuthPage.jsx'
-import BetTracker from './components/BetTracker.jsx'
-import Dashboard from './components/Dashboard.jsx'
-import GameAnalyzer from './components/GameAnalyzer.jsx'
-import InjuryManager from './components/InjuryManager.jsx'
-import AppLayout from './components/layout/AppLayout.jsx'
-import PowerRatings from './components/PowerRatings.jsx'
-import SettingsPage from './components/Settings.jsx'
-import Teams from './components/Teams.jsx'
-import { useAuth } from './context/AuthContext.jsx'
-import { NHL_TEAMS } from './data/teams.js'
-import { fetchTeamInjurySummary } from './services/injuriesApi.js'
+} from "lucide-react";
+import AuthPage from "./components/auth/AuthPage.jsx";
+import BetTracker from "./components/BetTracker.jsx";
+import Dashboard from "./components/Dashboard.jsx";
+import GameAnalyzer from "./components/GameAnalyzer.jsx";
+import InjuryManager from "./components/InjuryManager.jsx";
+import AppLayout from "./components/layout/AppLayout.jsx";
+import PowerRatings from "./components/PowerRatings.jsx";
+import SettingsPage from "./components/Settings.jsx";
+import Teams from "./components/Teams.jsx";
+import { useAuth } from "./context/AuthContext.jsx";
+import { NHL_TEAMS } from "./data/teams.js";
+import { fetchTeamInjurySummary } from "./services/injuriesApi.js";
 import {
   fetchPowerRatings,
   seedPowerRatings,
   updatePowerRating,
-} from './services/powerRatingsApi.js'
+} from "./services/powerRatingsApi.js";
 import {
   arePowerRatingsDefault,
   createDefaultPowerRatings,
@@ -32,331 +32,328 @@ import {
   hasCustomizedPowerRatings,
   loadLocalPowerRatings,
   normalizePowerRatings,
-} from './utils/powerRatings.js'
-import { normalizeInjurySummary } from './utils/injuries.js'
-import './App.css'
+} from "./utils/powerRatings.js";
+import { normalizeInjurySummary } from "./utils/injuries.js";
+import "./App.css";
 
 const pages = [
   {
-    id: 'dashboard',
+    id: "dashboard",
     Icon: LayoutDashboard,
-    label: 'Dashboard',
-    title: 'Dashboard',
+    label: "Dashboard",
+    title: "Dashboard",
   },
   {
-    id: 'analyzer',
+    id: "analyzer",
     Icon: Target,
-    label: 'Game Analyzer',
-    title: 'Game Analyzer',
+    label: "Game Analyzer",
+    title: "Game Analyzer",
   },
   {
-    id: 'teams',
+    id: "teams",
     Icon: Shield,
-    label: 'Teams',
-    title: 'Teams',
+    label: "Teams",
+    title: "Teams",
   },
   {
-    id: 'ratings',
+    id: "ratings",
     Icon: TrendingUp,
-    label: 'Power Ratings',
-    title: 'Power Ratings',
+    label: "Power Ratings",
+    title: "Power Ratings",
   },
   {
-    id: 'injuries',
+    id: "injuries",
     Icon: Activity,
-    label: 'Injury Manager',
-    title: 'Injury Manager',
+    label: "Injury Manager",
+    title: "Injury Manager",
   },
   {
-    id: 'tracker',
+    id: "tracker",
     Icon: ClipboardList,
-    label: 'Bet Tracker',
-    title: 'Bet Tracker',
+    label: "Bet Tracker",
+    title: "Bet Tracker",
   },
-]
+];
 
 const utilityPages = [
   {
-    id: 'settings',
+    id: "settings",
     Icon: SettingsIcon,
-    label: 'Settings',
-    title: 'Settings',
+    label: "Settings",
+    title: "Settings",
   },
-]
+];
 
 function AuthenticatedApp({ authUser, onLogout }) {
-  const [activePage, setActivePage] = useState('dashboard')
-  const [analyzerPrefill, setAnalyzerPrefill] = useState(null)
+  const [activePage, setActivePage] = useState("dashboard");
+  const [analyzerPrefill, setAnalyzerPrefill] = useState(null);
   const [powerRatings, setPowerRatings] = useState(() =>
     createDefaultPowerRatings(),
-  )
-  const [powerRatingsStatus, setPowerRatingsStatus] = useState('loading')
-  const [powerRatingsError, setPowerRatingsError] = useState('')
-  const [powerRatingsCount, setPowerRatingsCount] = useState(0)
-  const [powerRatingsVersion, setPowerRatingsVersion] = useState(0)
-  const [migrationAvailable, setMigrationAvailable] = useState(false)
-  const [migrationStatus, setMigrationStatus] = useState('idle')
-  const [migrationMessage, setMigrationMessage] = useState('')
+  );
+  const [powerRatingsStatus, setPowerRatingsStatus] = useState("loading");
+  const [powerRatingsError, setPowerRatingsError] = useState("");
+  const [powerRatingsCount, setPowerRatingsCount] = useState(0);
+  const [powerRatingsVersion, setPowerRatingsVersion] = useState(0);
+  const [migrationAvailable, setMigrationAvailable] = useState(false);
+  const [migrationStatus, setMigrationStatus] = useState("idle");
+  const [migrationMessage, setMigrationMessage] = useState("");
   const [injurySummaries, setInjurySummaries] = useState(() =>
     normalizeInjurySummary([]),
-  )
-  const [injurySummaryStatus, setInjurySummaryStatus] = useState('loading')
-  const [injurySummaryError, setInjurySummaryError] = useState('')
-  const [injurySummaryVersion, setInjurySummaryVersion] = useState(0)
+  );
+  const [injurySummaryStatus, setInjurySummaryStatus] = useState("loading");
+  const [injurySummaryError, setInjurySummaryError] = useState("");
+  const [injurySummaryVersion, setInjurySummaryVersion] = useState(0);
 
-  const allPages = [...pages, ...utilityPages]
-  const currentPage = allPages.find((page) => page.id === activePage) ?? pages[0]
+  const allPages = [...pages, ...utilityPages];
+  const currentPage =
+    allPages.find((page) => page.id === activePage) ?? pages[0];
 
   const updateMigrationAvailability = useCallback((ratings) => {
-    const localRatings = loadLocalPowerRatings()
+    const localRatings = loadLocalPowerRatings();
 
     setMigrationAvailable(
       hasCustomizedPowerRatings(localRatings) &&
         arePowerRatingsDefault(ratings),
-    )
-  }, [])
+    );
+  }, []);
 
   const applyPowerRatingDocuments = useCallback(
     (ratingDocuments) => {
-      const normalizedRatings = normalizePowerRatings(ratingDocuments)
+      const normalizedRatings = normalizePowerRatings(ratingDocuments);
 
-      setPowerRatings(normalizedRatings)
-      setPowerRatingsCount(ratingDocuments.length)
-      setPowerRatingsVersion((currentVersion) => currentVersion + 1)
-      updateMigrationAvailability(normalizedRatings)
+      setPowerRatings(normalizedRatings);
+      setPowerRatingsCount(ratingDocuments.length);
+      setPowerRatingsVersion((currentVersion) => currentVersion + 1);
+      updateMigrationAvailability(normalizedRatings);
 
-      return normalizedRatings
+      return normalizedRatings;
     },
     [updateMigrationAvailability],
-  )
+  );
 
   const loadMongoPowerRatings = useCallback(
     async ({ seedIfMissing = false } = {}) => {
-      setPowerRatingsStatus('loading')
-      setPowerRatingsError('')
+      setPowerRatingsStatus("loading");
+      setPowerRatingsError("");
 
       try {
-        let ratingDocuments = await fetchPowerRatings()
+        let ratingDocuments = await fetchPowerRatings();
 
         if (seedIfMissing && ratingDocuments.length < NHL_TEAMS.length) {
-          const seedResult = await seedPowerRatings()
-          ratingDocuments = seedResult.ratings ?? (await fetchPowerRatings())
+          const seedResult = await seedPowerRatings();
+          ratingDocuments = seedResult.ratings ?? (await fetchPowerRatings());
         }
 
-        applyPowerRatingDocuments(ratingDocuments)
-        setPowerRatingsStatus(
-          ratingDocuments.length > 0 ? 'success' : 'empty',
-        )
+        applyPowerRatingDocuments(ratingDocuments);
+        setPowerRatingsStatus(ratingDocuments.length > 0 ? "success" : "empty");
       } catch (error) {
-        setPowerRatingsStatus('error')
-        setPowerRatingsError(error.message)
-        setMigrationAvailable(false)
+        setPowerRatingsStatus("error");
+        setPowerRatingsError(error.message);
+        setMigrationAvailable(false);
       }
     },
     [applyPowerRatingDocuments],
-  )
+  );
 
   const retryPowerRatings = useCallback(() => {
-    loadMongoPowerRatings({ seedIfMissing: true })
-  }, [loadMongoPowerRatings])
+    loadMongoPowerRatings({ seedIfMissing: true });
+  }, [loadMongoPowerRatings]);
 
   useEffect(() => {
-    let isCurrent = true
+    let isCurrent = true;
 
     const loadInitialPowerRatings = async () => {
       try {
-        let ratingDocuments = await fetchPowerRatings()
+        let ratingDocuments = await fetchPowerRatings();
 
         if (ratingDocuments.length < NHL_TEAMS.length) {
-          const seedResult = await seedPowerRatings()
-          ratingDocuments = seedResult.ratings ?? (await fetchPowerRatings())
+          const seedResult = await seedPowerRatings();
+          ratingDocuments = seedResult.ratings ?? (await fetchPowerRatings());
         }
 
         if (!isCurrent) {
-          return
+          return;
         }
 
-        applyPowerRatingDocuments(ratingDocuments)
-        setPowerRatingsStatus(
-          ratingDocuments.length > 0 ? 'success' : 'empty',
-        )
+        applyPowerRatingDocuments(ratingDocuments);
+        setPowerRatingsStatus(ratingDocuments.length > 0 ? "success" : "empty");
       } catch (error) {
         if (!isCurrent) {
-          return
+          return;
         }
 
-        setPowerRatingsStatus('error')
-        setPowerRatingsError(error.message)
-        setMigrationAvailable(false)
+        setPowerRatingsStatus("error");
+        setPowerRatingsError(error.message);
+        setMigrationAvailable(false);
       }
-    }
+    };
 
-    loadInitialPowerRatings()
+    loadInitialPowerRatings();
 
     return () => {
-      isCurrent = false
-    }
-  }, [applyPowerRatingDocuments])
+      isCurrent = false;
+    };
+  }, [applyPowerRatingDocuments]);
 
   const loadInjurySummaries = useCallback(async () => {
-    setInjurySummaryStatus('loading')
-    setInjurySummaryError('')
+    setInjurySummaryStatus("loading");
+    setInjurySummaryError("");
 
     try {
-      const summary = await fetchTeamInjurySummary()
-      const normalizedSummary = normalizeInjurySummary(summary)
+      const summary = await fetchTeamInjurySummary();
+      const normalizedSummary = normalizeInjurySummary(summary);
 
-      setInjurySummaries(normalizedSummary)
-      setInjurySummaryStatus('success')
-      setInjurySummaryVersion((currentVersion) => currentVersion + 1)
+      setInjurySummaries(normalizedSummary);
+      setInjurySummaryStatus("success");
+      setInjurySummaryVersion((currentVersion) => currentVersion + 1);
 
-      return normalizedSummary
+      return normalizedSummary;
     } catch (error) {
-      setInjurySummaryStatus('error')
-      setInjurySummaryError(error.message)
-      throw error
+      setInjurySummaryStatus("error");
+      setInjurySummaryError(error.message);
+      throw error;
     }
-  }, [])
+  }, []);
 
   const retryInjurySummaries = useCallback(() => {
     loadInjurySummaries().catch(() => {
       // Error state is already captured for the UI.
-    })
-  }, [loadInjurySummaries])
+    });
+  }, [loadInjurySummaries]);
 
   useEffect(() => {
-    let isCurrent = true
+    let isCurrent = true;
 
     const loadInitialInjurySummaries = async () => {
       try {
-        const summary = await fetchTeamInjurySummary()
+        const summary = await fetchTeamInjurySummary();
 
         if (!isCurrent) {
-          return
+          return;
         }
 
-        setInjurySummaries(normalizeInjurySummary(summary))
-        setInjurySummaryStatus('success')
-        setInjurySummaryVersion((currentVersion) => currentVersion + 1)
+        setInjurySummaries(normalizeInjurySummary(summary));
+        setInjurySummaryStatus("success");
+        setInjurySummaryVersion((currentVersion) => currentVersion + 1);
       } catch (error) {
         if (!isCurrent) {
-          return
+          return;
         }
 
-        setInjurySummaryStatus('error')
-        setInjurySummaryError(error.message)
+        setInjurySummaryStatus("error");
+        setInjurySummaryError(error.message);
       }
-    }
+    };
 
-    loadInitialInjurySummaries()
+    loadInitialInjurySummaries();
 
     return () => {
-      isCurrent = false
-    }
-  }, [])
+      isCurrent = false;
+    };
+  }, []);
 
   const handleSavePowerRatings = useCallback(
     async (updatesByTeamId) => {
-      const updates = Object.entries(updatesByTeamId)
+      const updates = Object.entries(updatesByTeamId);
 
       if (updates.length === 0) {
-        return powerRatings
+        return powerRatings;
       }
 
       const updatedRatings = await Promise.all(
         updates.map(([teamId, values]) => updatePowerRating(teamId, values)),
-      )
+      );
       const indexedUpdates = updatedRatings.reduce((ratings, rating) => {
-        ratings[rating.teamId] = rating
-        return ratings
-      }, {})
+        ratings[rating.teamId] = rating;
+        return ratings;
+      }, {});
       const nextRatings = normalizePowerRatings({
         ...powerRatings,
         ...indexedUpdates,
-      })
+      });
 
-      setPowerRatings(nextRatings)
-      setPowerRatingsStatus('success')
+      setPowerRatings(nextRatings);
+      setPowerRatingsStatus("success");
       setPowerRatingsCount((currentCount) =>
         Math.max(currentCount, updatedRatings.length),
-      )
-      setPowerRatingsVersion((currentVersion) => currentVersion + 1)
-      updateMigrationAvailability(nextRatings)
+      );
+      setPowerRatingsVersion((currentVersion) => currentVersion + 1);
+      updateMigrationAvailability(nextRatings);
 
-      return nextRatings
+      return nextRatings;
     },
     [powerRatings, updateMigrationAvailability],
-  )
+  );
 
   const handleResetPowerRatings = useCallback(async () => {
-    await seedPowerRatings()
+    await seedPowerRatings();
 
-    const defaultRatings = createDefaultPowerRatings()
+    const defaultRatings = createDefaultPowerRatings();
     const updates = NHL_TEAMS.reduce((teamUpdates, team) => {
       teamUpdates[team.id] = {
         baseRating: defaultRatings[team.id].baseRating,
         homeAdvantage: defaultRatings[team.id].homeAdvantage,
         lastRatingChange: defaultRatings[team.id].lastRatingChange,
         manualAdjustment: defaultRatings[team.id].manualAdjustment,
-      }
+      };
 
-      return teamUpdates
-    }, {})
+      return teamUpdates;
+    }, {});
 
     const updatedRatings = await Promise.all(
       Object.entries(updates).map(([teamId, values]) =>
         updatePowerRating(teamId, values),
       ),
-    )
-    const nextRatings = normalizePowerRatings(updatedRatings)
+    );
+    const nextRatings = normalizePowerRatings(updatedRatings);
 
-    setPowerRatings(nextRatings)
-    setPowerRatingsStatus('success')
-    setPowerRatingsCount(NHL_TEAMS.length)
-    setPowerRatingsVersion((currentVersion) => currentVersion + 1)
-    updateMigrationAvailability(nextRatings)
+    setPowerRatings(nextRatings);
+    setPowerRatingsStatus("success");
+    setPowerRatingsCount(NHL_TEAMS.length);
+    setPowerRatingsVersion((currentVersion) => currentVersion + 1);
+    updateMigrationAvailability(nextRatings);
 
-    return nextRatings
-  }, [updateMigrationAvailability])
+    return nextRatings;
+  }, [updateMigrationAvailability]);
 
   const handleImportLocalRatings = useCallback(async () => {
     const confirmed =
-      typeof window === 'undefined' ||
+      typeof window === "undefined" ||
       window.confirm(
-        'Import customized local ratings into MongoDB? This only runs while MongoDB still contains default ratings.',
-      )
+        "Import customized local ratings into MongoDB? This only runs while MongoDB still contains default ratings.",
+      );
 
     if (!confirmed) {
-      return
+      return;
     }
 
-    setMigrationStatus('saving')
-    setMigrationMessage('')
+    setMigrationStatus("saving");
+    setMigrationMessage("");
 
     try {
-      let latestRatings = await fetchPowerRatings()
+      let latestRatings = await fetchPowerRatings();
 
       if (latestRatings.length < NHL_TEAMS.length) {
-        const seedResult = await seedPowerRatings()
-        latestRatings = seedResult.ratings ?? (await fetchPowerRatings())
+        const seedResult = await seedPowerRatings();
+        latestRatings = seedResult.ratings ?? (await fetchPowerRatings());
       }
 
-      const normalizedLatestRatings = normalizePowerRatings(latestRatings)
+      const normalizedLatestRatings = normalizePowerRatings(latestRatings);
 
       if (!arePowerRatingsDefault(normalizedLatestRatings)) {
         throw new Error(
-          'MongoDB ratings are no longer all defaults. Import stopped so existing database values are not overwritten.',
-        )
+          "MongoDB ratings are no longer all defaults. Import stopped so existing database values are not overwritten.",
+        );
       }
 
-      const localRatings = loadLocalPowerRatings()
-      const customizedTeamIds = getCustomizedPowerRatingTeamIds(localRatings)
+      const localRatings = loadLocalPowerRatings();
+      const customizedTeamIds = getCustomizedPowerRatingTeamIds(localRatings);
 
       if (customizedTeamIds.length === 0) {
-        setMigrationAvailable(false)
-        setMigrationStatus('success')
-        setMigrationMessage('No customized local ratings were found.')
-        return
+        setMigrationAvailable(false);
+        setMigrationStatus("success");
+        setMigrationMessage("No customized local ratings were found.");
+        return;
       }
 
       await Promise.all(
@@ -367,37 +364,37 @@ function AuthenticatedApp({ authUser, onLogout }) {
             manualAdjustment: localRatings[teamId].manualAdjustment,
           }),
         ),
-      )
+      );
 
-      const importedRatings = await fetchPowerRatings()
-      const nextRatings = applyPowerRatingDocuments(importedRatings)
+      const importedRatings = await fetchPowerRatings();
+      const nextRatings = applyPowerRatingDocuments(importedRatings);
 
-      setPowerRatingsStatus('success')
-      setMigrationAvailable(false)
-      setMigrationStatus('success')
+      setPowerRatingsStatus("success");
+      setMigrationAvailable(false);
+      setMigrationStatus("success");
       setMigrationMessage(
         `Imported ${customizedTeamIds.length} customized local ${
-          customizedTeamIds.length === 1 ? 'rating' : 'ratings'
+          customizedTeamIds.length === 1 ? "rating" : "ratings"
         } into MongoDB.`,
-      )
-      return nextRatings
+      );
+      return nextRatings;
     } catch (error) {
-      setMigrationStatus('error')
-      setMigrationMessage(error.message)
+      setMigrationStatus("error");
+      setMigrationMessage(error.message);
     }
-  }, [applyPowerRatingDocuments])
+  }, [applyPowerRatingDocuments]);
 
   const handleAnalyzeGame = (game, marketOdds = {}) => {
     setAnalyzerPrefill({
       away: game.awayTeam.abbreviation,
-      gameId: String(game.gameId ?? ''),
+      gameId: String(game.gameId ?? ""),
       home: game.homeTeam.abbreviation,
       id: `${game.gameId}-${Date.now()}`,
       marketOdds,
       scheduledStart: game.startTimeUTC ?? null,
-    })
-    setActivePage('analyzer')
-  }
+    });
+    setActivePage("analyzer");
+  };
 
   return (
     <AppLayout
@@ -409,7 +406,7 @@ function AuthenticatedApp({ authUser, onLogout }) {
       primaryItems={pages}
       utilityItems={utilityPages}
     >
-      {activePage === 'dashboard' ? (
+      {activePage === "dashboard" ? (
         <Dashboard
           injurySummaries={injurySummaries}
           injurySummaryError={injurySummaryError}
@@ -421,9 +418,9 @@ function AuthenticatedApp({ authUser, onLogout }) {
           powerRatingsError={powerRatingsError}
           powerRatingsStatus={powerRatingsStatus}
         />
-      ) : activePage === 'analyzer' ? (
+      ) : activePage === "analyzer" ? (
         <GameAnalyzer
-          key={`${analyzerPrefill?.id ?? 'manual-analyzer'}-${powerRatingsStatus}-${powerRatingsVersion}-${injurySummaryStatus}-${injurySummaryVersion}`}
+          key={`${analyzerPrefill?.id ?? "manual-analyzer"}-${powerRatingsStatus}-${powerRatingsVersion}-${injurySummaryStatus}-${injurySummaryVersion}`}
           injurySummaries={injurySummaries}
           injurySummaryError={injurySummaryError}
           injurySummaryStatus={injurySummaryStatus}
@@ -434,14 +431,14 @@ function AuthenticatedApp({ authUser, onLogout }) {
           powerRatingsStatus={powerRatingsStatus}
           prefillMatchup={analyzerPrefill}
         />
-      ) : activePage === 'teams' ? (
+      ) : activePage === "teams" ? (
         <Teams
           injurySummaries={injurySummaries}
           injurySummaryStatus={injurySummaryStatus}
           powerRatings={powerRatings}
           powerRatingsStatus={powerRatingsStatus}
         />
-      ) : activePage === 'ratings' ? (
+      ) : activePage === "ratings" ? (
         <PowerRatings
           key={`ratings-${powerRatingsStatus}-${powerRatingsVersion}`}
           errorMessage={powerRatingsError}
@@ -456,20 +453,20 @@ function AuthenticatedApp({ authUser, onLogout }) {
           onReset={handleResetPowerRatings}
           onSave={handleSavePowerRatings}
         />
-      ) : activePage === 'injuries' ? (
+      ) : activePage === "injuries" ? (
         <InjuryManager
           injurySummaries={injurySummaries}
           summaryError={injurySummaryError}
           summaryStatus={injurySummaryStatus}
           onInjuriesChanged={loadInjurySummaries}
         />
-      ) : activePage === 'settings' ? (
+      ) : activePage === "settings" ? (
         <SettingsPage />
       ) : (
         <BetTracker />
       )}
     </AppLayout>
-  )
+  );
 }
 
 function AuthLoadingScreen() {
@@ -481,15 +478,15 @@ function AuthLoadingScreen() {
         <strong>Restoring your session</strong>
       </div>
     </main>
-  )
+  );
 }
 
 function App() {
-  const { isAuthenticated, loading, logout, user } = useAuth()
-  const [authMode, setAuthMode] = useState('login')
+  const { isAuthenticated, loading, logout, user } = useAuth();
+  const [authMode, setAuthMode] = useState("login");
 
   if (loading) {
-    return <AuthLoadingScreen />
+    return <AuthLoadingScreen />;
   }
 
   if (!isAuthenticated) {
@@ -498,12 +495,12 @@ function App() {
         key={authMode}
         mode={authMode}
         onModeChange={setAuthMode}
-        onSuccess={() => setAuthMode('login')}
+        onSuccess={() => setAuthMode("login")}
       />
-    )
+    );
   }
 
-  return <AuthenticatedApp authUser={user} onLogout={logout} />
+  return <AuthenticatedApp authUser={user} onLogout={logout} />;
 }
 
-export default App
+export default App;
