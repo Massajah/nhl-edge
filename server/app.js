@@ -7,6 +7,7 @@ const nhlApiService = require('./services/nhlApiService')
 const playersRoutes = require('./routes/playersRoutes')
 const powerRatingSimulationsRoutes = require('./routes/powerRatingSimulationsRoutes')
 const powerRatingsRoutes = require('./routes/powerRatingsRoutes')
+const settingsRoutes = require('./routes/settingsRoutes')
 const teamsRoutes = require('./routes/teamsRoutes')
 const { getCorsOptions } = require('./config/cors')
 
@@ -36,6 +37,7 @@ app.use('/api/injuries', injuriesRoutes)
 app.use('/api/players', playersRoutes)
 app.use('/api/power-rating-simulations', powerRatingSimulationsRoutes)
 app.use('/api/power-ratings', powerRatingsRoutes)
+app.use('/api/settings', settingsRoutes)
 app.use('/api/teams', teamsRoutes)
 
 app.get('/api/schedule/today', async (_request, response, next) => {

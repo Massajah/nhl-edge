@@ -1,9 +1,6 @@
 const PowerRating = require('../models/PowerRating')
 const nhlApiService = require('./nhlApiService')
-const {
-  DEFAULT_HOME_ADVANTAGE,
-  getSeedTeams,
-} = require('./powerRatingsService')
+const { getSeedTeams } = require('./powerRatingsService')
 const {
   DEFAULT_BASE_RATING,
   DEFAULT_RATING_ENGINE_CONFIGURATION,
@@ -29,6 +26,7 @@ const STARTING_MODES = Object.freeze({
   CURRENT: 'current',
   EQUAL: 'equal',
 })
+const DEFAULT_REPLAY_HOME_ADVANTAGE = 2.5
 const RESPONSE_CONTROL_DEFAULTS = Object.freeze({
   includeGameResults: false,
   includeSkippedGames: false,
@@ -266,7 +264,12 @@ const getScheduleGamesForDate = async (date) => {
   const scheduleDay = schedule.gameWeek?.find((day) => day.date === date)
   const games = scheduleDay?.games ?? schedule.games ?? []
 
-  return Array.isArray(games) ? games : []
+  return Array.isArray(games)
+    ? games.map((game) => ({
+        ...game,
+        __replayScheduleDate: date,
+      }))
+    : []
 }
 
 const fetchNhlScheduleGames = async ({ dateFromTimestamp, dateToTimestamp }) => {
@@ -373,8 +376,8 @@ const buildCurrentRatingState = async ({
       ? (currentBaseRating ?? DEFAULT_BASE_RATING)
       : DEFAULT_BASE_RATING
     const homeAdvantage = hasRating
-      ? (currentHomeAdvantage ?? DEFAULT_HOME_ADVANTAGE)
-      : DEFAULT_HOME_ADVANTAGE
+      ? (currentHomeAdvantage ?? DEFAULT_REPLAY_HOME_ADVANTAGE)
+      : DEFAULT_REPLAY_HOME_ADVANTAGE
 
     if (!hasRating) {
       missingTeamIds.push(teamId)
@@ -425,7 +428,7 @@ const buildEqualRatingState = ({ seedTeams }) =>
       abbreviation: normalizeIdentifier(team.abbreviation),
       finalRating: DEFAULT_BASE_RATING,
       gamesProcessed: 0,
-      homeAdvantage: DEFAULT_HOME_ADVANTAGE,
+      homeAdvantage: DEFAULT_REPLAY_HOME_ADVANTAGE,
       startingRating: DEFAULT_BASE_RATING,
       teamId,
       teamName: team.teamName,

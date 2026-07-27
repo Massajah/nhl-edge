@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
   Activity,
   ClipboardList,
+  FlaskConical,
   LayoutDashboard,
   Settings as SettingsIcon,
   Shield,
@@ -15,6 +16,7 @@ import GameAnalyzer from "./components/GameAnalyzer.jsx";
 import InjuryManager from "./components/InjuryManager.jsx";
 import AppLayout from "./components/layout/AppLayout.jsx";
 import PowerRatings from "./components/PowerRatings.jsx";
+import RatingLab from "./components/RatingLab.jsx";
 import SettingsPage from "./components/Settings.jsx";
 import Teams from "./components/Teams.jsx";
 import { useAuth } from "./context/AuthContext.jsx";
@@ -25,6 +27,11 @@ import {
   seedPowerRatings,
   updatePowerRating,
 } from "./services/powerRatingsApi.js";
+import { getRatingEngineSettings } from "./services/ratingEngineSettingsApi.js";
+import {
+  DEFAULT_RATING_ENGINE_SETTINGS,
+  normalizeRatingEngineSettings,
+} from "./utils/ratingEngineSettings.js";
 import {
   arePowerRatingsDefault,
   createDefaultPowerRatings,
@@ -41,36 +48,49 @@ const pages = [
     id: "dashboard",
     Icon: LayoutDashboard,
     label: "Dashboard",
+    path: "/",
     title: "Dashboard",
   },
   {
     id: "analyzer",
     Icon: Target,
     label: "Game Analyzer",
+    path: "/analyzer",
     title: "Game Analyzer",
   },
   {
     id: "teams",
     Icon: Shield,
     label: "Teams",
+    path: "/teams",
     title: "Teams",
   },
   {
     id: "ratings",
     Icon: TrendingUp,
     label: "Power Ratings",
+    path: "/power-ratings",
     title: "Power Ratings",
+  },
+  {
+    id: "rating-lab",
+    Icon: FlaskConical,
+    label: "Rating Lab",
+    path: "/rating-lab",
+    title: "Rating Lab",
   },
   {
     id: "injuries",
     Icon: Activity,
     label: "Injury Manager",
+    path: "/injuries",
     title: "Injury Manager",
   },
   {
     id: "tracker",
     Icon: ClipboardList,
     label: "Bet Tracker",
+    path: "/bet-tracker",
     title: "Bet Tracker",
   },
 ];
@@ -80,12 +100,41 @@ const utilityPages = [
     id: "settings",
     Icon: SettingsIcon,
     label: "Settings",
+    path: "/settings",
     title: "Settings",
   },
 ];
 
+const navigationPages = [...pages, ...utilityPages];
+
+const normalizePathname = (pathname = "/") => {
+  const normalizedPathname = pathname.replace(/\/+$/, "");
+
+  return normalizedPathname || "/";
+};
+
+const pagePathById = new Map(
+  navigationPages.map((page) => [page.id, normalizePathname(page.path)]),
+);
+const pageIdByPath = new Map(
+  navigationPages.map((page) => [normalizePathname(page.path), page.id]),
+);
+
+const getPageIdFromPathname = (pathname) =>
+  pageIdByPath.get(normalizePathname(pathname)) ?? "dashboard";
+
+const getPagePath = (pageId) => pagePathById.get(pageId) ?? "/";
+
+const getInitialActivePage = () => {
+  if (typeof window === "undefined") {
+    return "dashboard";
+  }
+
+  return getPageIdFromPathname(window.location.pathname);
+};
+
 function AuthenticatedApp({ authUser, onLogout }) {
-  const [activePage, setActivePage] = useState("dashboard");
+  const [activePage, setActivePage] = useState(getInitialActivePage);
   const [analyzerPrefill, setAnalyzerPrefill] = useState(null);
   const [powerRatings, setPowerRatings] = useState(() =>
     createDefaultPowerRatings(),
@@ -103,10 +152,111 @@ function AuthenticatedApp({ authUser, onLogout }) {
   const [injurySummaryStatus, setInjurySummaryStatus] = useState("loading");
   const [injurySummaryError, setInjurySummaryError] = useState("");
   const [injurySummaryVersion, setInjurySummaryVersion] = useState(0);
+  const [ratingEngineSettings, setRatingEngineSettings] = useState(() =>
+    normalizeRatingEngineSettings(DEFAULT_RATING_ENGINE_SETTINGS),
+  );
+  const [ratingEngineSettingsStatus, setRatingEngineSettingsStatus] =
+    useState("loading");
+  const [ratingEngineSettingsError, setRatingEngineSettingsError] =
+    useState("");
+  const [ratingEngineSettingsVersion, setRatingEngineSettingsVersion] =
+    useState(0);
 
   const allPages = [...pages, ...utilityPages];
   const currentPage =
     allPages.find((page) => page.id === activePage) ?? pages[0];
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return undefined;
+    }
+
+    const handlePopState = () => {
+      setActivePage(getPageIdFromPathname(window.location.pathname));
+    };
+
+    window.addEventListener("popstate", handlePopState);
+
+    return () => {
+      window.removeEventListener("popstate", handlePopState);
+    };
+  }, []);
+
+  const applyRatingEngineSettings = useCallback((settings) => {
+    const nextSettings = normalizeRatingEngineSettings(settings);
+
+    setRatingEngineSettings(nextSettings);
+    setRatingEngineSettingsStatus("success");
+    setRatingEngineSettingsError("");
+    setRatingEngineSettingsVersion((currentVersion) => currentVersion + 1);
+
+    return nextSettings;
+  }, []);
+
+  const loadRatingEngineSettings = useCallback(async () => {
+    setRatingEngineSettingsStatus("loading");
+    setRatingEngineSettingsError("");
+
+    try {
+      const result = await getRatingEngineSettings();
+
+      return applyRatingEngineSettings(result.settings);
+    } catch (error) {
+      setRatingEngineSettingsStatus("error");
+      setRatingEngineSettingsError(error.message);
+      throw error;
+    }
+  }, [applyRatingEngineSettings]);
+
+  const retryRatingEngineSettings = useCallback(() => {
+    loadRatingEngineSettings().catch(() => {
+      // Error state is already captured for the UI.
+    });
+  }, [loadRatingEngineSettings]);
+
+  useEffect(() => {
+    let isCurrent = true;
+
+    const loadInitialRatingEngineSettings = async () => {
+      try {
+        const result = await getRatingEngineSettings();
+
+        if (!isCurrent) {
+          return;
+        }
+
+        applyRatingEngineSettings(result.settings);
+      } catch (error) {
+        if (!isCurrent) {
+          return;
+        }
+
+        setRatingEngineSettingsStatus("error");
+        setRatingEngineSettingsError(error.message);
+      }
+    };
+
+    loadInitialRatingEngineSettings();
+
+    return () => {
+      isCurrent = false;
+    };
+  }, [applyRatingEngineSettings]);
+
+  const navigateToPage = useCallback((pageId) => {
+    setActivePage(pageId);
+
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const nextPath = getPagePath(pageId);
+    const currentPath = normalizePathname(window.location.pathname);
+
+    if (currentPath !== nextPath) {
+      window.history.pushState({ pageId }, "", nextPath);
+    }
+  }, []);
 
   const updateMigrationAvailability = useCallback((ratings) => {
     const localRatings = loadLocalPowerRatings();
@@ -292,7 +442,7 @@ function AuthenticatedApp({ authUser, onLogout }) {
     const updates = NHL_TEAMS.reduce((teamUpdates, team) => {
       teamUpdates[team.id] = {
         baseRating: defaultRatings[team.id].baseRating,
-        homeAdvantage: defaultRatings[team.id].homeAdvantage,
+        homeAdjustment: defaultRatings[team.id].homeAdjustment,
         lastRatingChange: defaultRatings[team.id].lastRatingChange,
         manualAdjustment: defaultRatings[team.id].manualAdjustment,
       };
@@ -360,7 +510,7 @@ function AuthenticatedApp({ authUser, onLogout }) {
         customizedTeamIds.map((teamId) =>
           updatePowerRating(teamId, {
             baseRating: localRatings[teamId].baseRating,
-            homeAdvantage: localRatings[teamId].homeAdvantage,
+            homeAdjustment: localRatings[teamId].homeAdjustment,
             manualAdjustment: localRatings[teamId].manualAdjustment,
           }),
         ),
@@ -393,7 +543,7 @@ function AuthenticatedApp({ authUser, onLogout }) {
       marketOdds,
       scheduledStart: game.startTimeUTC ?? null,
     });
-    setActivePage("analyzer");
+    navigateToPage("analyzer");
   };
 
   return (
@@ -401,35 +551,43 @@ function AuthenticatedApp({ authUser, onLogout }) {
       activePage={activePage}
       currentPage={currentPage}
       authUser={authUser}
-      onNavigate={setActivePage}
+      onNavigate={navigateToPage}
       onLogout={onLogout}
       primaryItems={pages}
       utilityItems={utilityPages}
     >
       {activePage === "dashboard" ? (
         <Dashboard
+          baseHomeAdvantage={ratingEngineSettings.homeAdvantage}
           injurySummaries={injurySummaries}
           injurySummaryError={injurySummaryError}
           injurySummaryStatus={injurySummaryStatus}
           onAnalyzeGame={handleAnalyzeGame}
           onRetryInjuries={retryInjurySummaries}
           onRetryPowerRatings={retryPowerRatings}
+          onRetryRatingEngineSettings={retryRatingEngineSettings}
           powerRatings={powerRatings}
           powerRatingsError={powerRatingsError}
           powerRatingsStatus={powerRatingsStatus}
+          ratingEngineSettingsError={ratingEngineSettingsError}
+          ratingEngineSettingsStatus={ratingEngineSettingsStatus}
         />
       ) : activePage === "analyzer" ? (
         <GameAnalyzer
-          key={`${analyzerPrefill?.id ?? "manual-analyzer"}-${powerRatingsStatus}-${powerRatingsVersion}-${injurySummaryStatus}-${injurySummaryVersion}`}
+          key={`${analyzerPrefill?.id ?? "manual-analyzer"}-${powerRatingsStatus}-${powerRatingsVersion}-${injurySummaryStatus}-${injurySummaryVersion}-${ratingEngineSettingsStatus}-${ratingEngineSettingsVersion}`}
+          baseHomeAdvantage={ratingEngineSettings.homeAdvantage}
           injurySummaries={injurySummaries}
           injurySummaryError={injurySummaryError}
           injurySummaryStatus={injurySummaryStatus}
           onRetryInjuries={retryInjurySummaries}
           onRetryPowerRatings={retryPowerRatings}
+          onRetryRatingEngineSettings={retryRatingEngineSettings}
           powerRatings={powerRatings}
           powerRatingsError={powerRatingsError}
           powerRatingsStatus={powerRatingsStatus}
           prefillMatchup={analyzerPrefill}
+          ratingEngineSettingsError={ratingEngineSettingsError}
+          ratingEngineSettingsStatus={ratingEngineSettingsStatus}
         />
       ) : activePage === "teams" ? (
         <Teams
@@ -441,6 +599,7 @@ function AuthenticatedApp({ authUser, onLogout }) {
       ) : activePage === "ratings" ? (
         <PowerRatings
           key={`ratings-${powerRatingsStatus}-${powerRatingsVersion}`}
+          baseHomeAdvantage={ratingEngineSettings.homeAdvantage}
           errorMessage={powerRatingsError}
           migrationAvailable={migrationAvailable}
           migrationMessage={migrationMessage}
@@ -453,6 +612,8 @@ function AuthenticatedApp({ authUser, onLogout }) {
           onReset={handleResetPowerRatings}
           onSave={handleSavePowerRatings}
         />
+      ) : activePage === "rating-lab" ? (
+        <RatingLab />
       ) : activePage === "injuries" ? (
         <InjuryManager
           injurySummaries={injurySummaries}
@@ -461,7 +622,7 @@ function AuthenticatedApp({ authUser, onLogout }) {
           onInjuriesChanged={loadInjurySummaries}
         />
       ) : activePage === "settings" ? (
-        <SettingsPage />
+        <SettingsPage onRatingEngineSettingsChanged={applyRatingEngineSettings} />
       ) : (
         <BetTracker />
       )}

@@ -70,13 +70,13 @@ function AdjustmentComparison({
         </AdjustmentRow>
 
         <AdjustmentRow
-          helpText="The saved home-ice value can be adjusted for this game only."
-          label="Home advantage"
+          helpText="Base Home Advantage plus the home team's saved Home Adjustment; edit here only for this analysis."
+          label="Effective home advantage"
         >
           <ReadOnlyCell muted sideLabel="Away" value="-" />
           <NumberCell
             field="homeAdvantage"
-            label="Home advantage"
+            label="Effective home advantage"
             max="10"
             min="-10"
             side="home"

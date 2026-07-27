@@ -7,6 +7,7 @@ const router = express.Router()
 router.use(authenticate)
 
 router.get('/', powerRatingsController.getPowerRatings)
+router.post('/update', powerRatingsController.updatePowerRatingsFromCompletedGames)
 router.put('/:teamId', powerRatingsController.updatePowerRating)
 router.post('/seed', powerRatingsController.seedPowerRatings)
 

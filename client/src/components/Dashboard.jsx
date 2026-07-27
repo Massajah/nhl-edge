@@ -134,15 +134,19 @@ const getValueStatusTone = (analysis) => {
 }
 
 function Dashboard({
+  baseHomeAdvantage = 0,
   injurySummaries,
   injurySummaryError,
   injurySummaryStatus,
   onAnalyzeGame,
   onRetryInjuries,
   onRetryPowerRatings,
+  onRetryRatingEngineSettings,
   powerRatings,
   powerRatingsError,
   powerRatingsStatus,
+  ratingEngineSettingsError,
+  ratingEngineSettingsStatus,
 }) {
   const [selectedDate, setSelectedDate] = useState('')
   const [schedule, setSchedule] = useState({
@@ -325,6 +329,11 @@ function Dashboard({
           onRetry={onRetryPowerRatings}
           status={powerRatingsStatus}
         />
+        <RatingEngineSettingsNotice
+          errorMessage={ratingEngineSettingsError}
+          onRetry={onRetryRatingEngineSettings}
+          status={ratingEngineSettingsStatus}
+        />
         <InjurySummaryNotice
           errorMessage={injurySummaryError}
           onRetry={onRetryInjuries}
@@ -355,6 +364,7 @@ function Dashboard({
               <GameCard
                 game={game}
                 key={game.gameId}
+                baseHomeAdvantage={baseHomeAdvantage}
                 marketOdds={marketOddsByGame[game.gameId]}
                 onMarketOddsChange={handleMarketOddsChange}
                 onAnalyzeGame={onAnalyzeGame}
@@ -362,6 +372,7 @@ function Dashboard({
                 injurySummaryStatus={injurySummaryStatus}
                 powerRatings={powerRatings}
                 powerRatingsStatus={powerRatingsStatus}
+                ratingEngineSettingsStatus={ratingEngineSettingsStatus}
                 scheduleDate={displayDate}
               />
             ))}
@@ -388,6 +399,7 @@ function ScheduleLoadingState() {
 }
 
 function GameCard({
+  baseHomeAdvantage,
   game,
   injurySummaries,
   injurySummaryStatus,
@@ -396,13 +408,16 @@ function GameCard({
   onMarketOddsChange,
   powerRatings,
   powerRatingsStatus,
+  ratingEngineSettingsStatus,
   scheduleDate,
 }) {
   const statusTone = getStatusTone(game.status)
   const showScore = hasGameScore(game)
   const canUsePowerRatings = powerRatingsStatus === 'success'
   const canUseInjurySummaries = injurySummaryStatus === 'success'
-  const canUseModel = canUsePowerRatings && canUseInjurySummaries
+  const canUseRatingEngineSettings = ratingEngineSettingsStatus === 'success'
+  const canUseModel =
+    canUsePowerRatings && canUseInjurySummaries && canUseRatingEngineSettings
   const showPreliminaryAnalysis = isNotStartedGame(game) && canUseModel
   const awayInjurySummary = getTeamInjurySummary(
     injurySummaries,
@@ -426,6 +441,7 @@ function GameCard({
 
     return calculatePreliminaryAnalysis({
       awayTeamId: game.awayTeam.abbreviation,
+      baseHomeAdvantage,
       homeTeamId: game.homeTeam.abbreviation,
       injurySummaries,
       marketOdds: normalizedMarketOdds,
@@ -434,6 +450,7 @@ function GameCard({
   }, [
     game.awayTeam.abbreviation,
     game.homeTeam.abbreviation,
+    baseHomeAdvantage,
     injurySummaries,
     normalizedMarketOdds,
     powerRatings,
@@ -555,6 +572,37 @@ function PowerRatingsNotice({ errorMessage, onRetry, status }) {
       {isError || isEmpty ? (
         <button type="button" onClick={onRetry}>
           {isEmpty ? 'Seed teams' : 'Try again'}
+        </button>
+      ) : null}
+    </div>
+  )
+}
+
+function RatingEngineSettingsNotice({ errorMessage, onRetry, status }) {
+  if (status === 'success') {
+    return null
+  }
+
+  const isError = status === 'error'
+  const title = isError
+    ? 'Engine settings unavailable'
+    : 'Loading engine settings'
+  const message = isError
+    ? errorMessage
+    : 'Preliminary calculations will appear once Base Home Advantage loads.'
+
+  return (
+    <div
+      className={`ratings-dependency-notice ${isError ? 'error' : ''}`}
+      role={isError ? 'alert' : undefined}
+    >
+      <div>
+        <strong>{title}</strong>
+        <p>{message}</p>
+      </div>
+      {isError ? (
+        <button type="button" onClick={onRetry}>
+          Try again
         </button>
       ) : null}
     </div>

@@ -90,13 +90,13 @@ function AdjustmentPanel({
       {showHomeAdvantage ? (
         <div className="adjustment-section">
           <div className="adjustment-section-header">
-            <h3>Home Advantage</h3>
+            <h3>Effective Home Advantage</h3>
             <span>game override</span>
           </div>
           <NumberField
-            helper="Applies only to this home-team analysis and does not overwrite the saved default."
+            helper="Base Home Advantage plus team Home Adjustment; applies only to this home-team analysis."
             id={`analyzer-${side}-homeAdvantage`}
-            label="Home advantage"
+            label="Effective home advantage"
             max="10"
             min="-10"
             step="0.5"

@@ -1,16 +1,26 @@
 const path = require('path')
 const { pathToFileURL } = require('url')
 const PowerRating = require('../models/PowerRating')
+const {
+  DEFAULT_HOME_ADJUSTMENT,
+  HOME_ADJUSTMENT_LIMITS,
+  getRatingHomeAdjustment,
+} = require('./homeAdvantageService')
 
 const NUMERIC_FIELDS = [
   'baseRating',
-  'homeAdvantage',
+  'homeAdjustment',
   'manualAdjustment',
   'lastRatingChange',
 ]
 const IMMUTABLE_FIELDS = ['teamId', 'teamName', 'abbreviation']
 const DEFAULT_BASE_RATING = 50
-const DEFAULT_HOME_ADVANTAGE = 2.5
+const FIELD_STORAGE_MAP = Object.freeze({
+  homeAdjustment: 'homeAdvantage',
+})
+const NUMERIC_FIELD_LIMITS = Object.freeze({
+  homeAdjustment: HOME_ADJUSTMENT_LIMITS,
+})
 
 let seedTeamsPromise = null
 
@@ -36,8 +46,11 @@ const serializeRating = (rating) => {
           id: rating._id?.toString(),
         }
 
+  plainRating.homeAdjustment = getRatingHomeAdjustment(plainRating)
+
   delete plainRating._id
   delete plainRating.__v
+  delete plainRating.homeAdvantage
 
   return plainRating
 }
@@ -158,6 +171,7 @@ const validateUpdatePayload = (payload = {}) => {
 
   return payloadFields.reduce((updates, field) => {
     const value = Number(payload[field])
+    const limits = NUMERIC_FIELD_LIMITS[field]
 
     if (!Number.isFinite(value)) {
       throw new PowerRatingsError(
@@ -167,7 +181,15 @@ const validateUpdatePayload = (payload = {}) => {
       )
     }
 
-    updates[field] = value
+    if (limits && (value < limits.min || value > limits.max)) {
+      throw new PowerRatingsError(
+        `${field} must be between ${limits.min} and ${limits.max}.`,
+        400,
+        { field, limits },
+      )
+    }
+
+    updates[FIELD_STORAGE_MAP[field] ?? field] = value
     return updates
   }, {})
 }
@@ -184,7 +206,7 @@ const initializeDefaultPowerRatings = async (userId) => {
         $setOnInsert: {
           abbreviation: team.abbreviation,
           baseRating: DEFAULT_BASE_RATING,
-          homeAdvantage: DEFAULT_HOME_ADVANTAGE,
+          homeAdvantage: DEFAULT_HOME_ADJUSTMENT,
           lastRatingChange: 0,
           manualAdjustment: 0,
           teamId: team.teamId,
@@ -282,7 +304,7 @@ const seedPowerRatings = async (userId) => {
 
 module.exports = {
   DEFAULT_BASE_RATING,
-  DEFAULT_HOME_ADVANTAGE,
+  DEFAULT_HOME_ADJUSTMENT,
   PowerRatingsError,
   getPowerRatings,
   getSeedTeams,

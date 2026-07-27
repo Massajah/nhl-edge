@@ -6,7 +6,10 @@ import {
   parseMarketOdds,
 } from './calculateGame.js'
 import { getTeamInjurySummary } from './injuries.js'
-import { getTeamPowerRating } from './powerRatings.js'
+import {
+  getEffectiveHomeAdvantage,
+  getTeamPowerRating,
+} from './powerRatings.js'
 
 export const defaultGameInputs = {
   home: {
@@ -39,6 +42,7 @@ export const createInputsForTeams = (
   teams,
   marketOdds = {},
   injurySummaries = {},
+  baseHomeAdvantage = 0,
 ) => {
   const homeRating = getTeamPowerRating(powerRatings, teams.home)
   const awayRating = getTeamPowerRating(powerRatings, teams.away)
@@ -51,7 +55,10 @@ export const createInputsForTeams = (
     home: {
       ...defaultGameInputs.home,
       baseRating: homeRating.baseRating,
-      homeAdvantage: homeRating.homeAdvantage,
+      homeAdvantage: getEffectiveHomeAdvantage({
+        baseHomeAdvantage,
+        homeRating,
+      }),
       storedInjuryImpact: homeInjurySummary.totalImpact,
       marketOdds: homeMarketOdds ?? defaultGameInputs.home.marketOdds,
     },
@@ -69,6 +76,7 @@ export const applyTeamRatingsToInputs = (
   teams,
   inputs,
   injurySummaries = {},
+  baseHomeAdvantage = 0,
 ) => {
   const homeRating = getTeamPowerRating(powerRatings, teams.home)
   const awayRating = getTeamPowerRating(powerRatings, teams.away)
@@ -79,7 +87,10 @@ export const applyTeamRatingsToInputs = (
     home: {
       ...inputs.home,
       baseRating: homeRating.baseRating,
-      homeAdvantage: homeRating.homeAdvantage,
+      homeAdvantage: getEffectiveHomeAdvantage({
+        baseHomeAdvantage,
+        homeRating,
+      }),
       storedInjuryImpact: homeInjurySummary.totalImpact,
     },
     away: {
@@ -113,6 +124,7 @@ const createMarketSide = ({ fairOdds, marketOdds, modelProbability }) => {
 
 export const calculatePreliminaryAnalysis = ({
   awayTeamId,
+  baseHomeAdvantage = 0,
   homeTeamId,
   marketOdds = {},
   powerRatings,
@@ -127,6 +139,7 @@ export const calculatePreliminaryAnalysis = ({
     teams,
     marketOdds,
     injurySummaries,
+    baseHomeAdvantage,
   )
   const result = calculateGame(inputs.home, inputs.away)
   const homeMarket = createMarketSide({

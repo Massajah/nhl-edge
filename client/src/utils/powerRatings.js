@@ -1,10 +1,15 @@
 import { NHL_TEAMS } from '../data/teams.js'
 
 export const POWER_RATINGS_STORAGE_KEY = 'nhl-edge-power-ratings'
+export const DEFAULT_HOME_ADJUSTMENT = 0
+export const HOME_ADJUSTMENT_LIMITS = Object.freeze({
+  max: 5,
+  min: -5,
+})
 
 export const DEFAULT_POWER_RATING_VALUES = {
   baseRating: 50,
-  homeAdvantage: 2.5,
+  homeAdjustment: DEFAULT_HOME_ADJUSTMENT,
   manualAdjustment: 0,
   lastRatingChange: 0,
 }
@@ -16,6 +21,32 @@ export const POWER_RATING_NUMERIC_FIELDS = Object.keys(
 const toNumber = (value, fallback) => {
   const parsedValue = Number(value)
   return Number.isFinite(parsedValue) ? parsedValue : fallback
+}
+
+export const getRatingHomeAdjustment = (rating) =>
+  toNumber(
+    rating?.homeAdjustment ?? rating?.homeAdvantage,
+    DEFAULT_HOME_ADJUSTMENT,
+  )
+
+export const getEffectiveHomeAdvantage = ({
+  baseHomeAdvantage,
+  homeAdjustment,
+  homeRating,
+}) => {
+  const normalizedBaseHomeAdvantage = toNumber(baseHomeAdvantage, 0)
+  const normalizedHomeAdjustment =
+    homeAdjustment === undefined
+      ? getRatingHomeAdjustment(homeRating)
+      : toNumber(homeAdjustment, DEFAULT_HOME_ADJUSTMENT)
+
+  return normalizedBaseHomeAdvantage + normalizedHomeAdjustment
+}
+
+export const formatSignedHomeAdjustment = (value) => {
+  const numberValue = toNumber(value, DEFAULT_HOME_ADJUSTMENT)
+
+  return `${numberValue > 0 ? '+' : ''}${numberValue.toFixed(2)}`
 }
 
 const indexRatingsByTeamId = (storedRatings = {}) => {
@@ -59,10 +90,7 @@ export const normalizePowerRatings = (storedRatings = {}) => {
       teamName: storedTeam.teamName ?? defaultTeam.teamName,
       abbreviation: storedTeam.abbreviation ?? defaultTeam.abbreviation,
       baseRating: toNumber(storedTeam.baseRating, defaultTeam.baseRating),
-      homeAdvantage: toNumber(
-        storedTeam.homeAdvantage,
-        defaultTeam.homeAdvantage,
-      ),
+      homeAdjustment: getRatingHomeAdjustment(storedTeam),
       manualAdjustment: toNumber(
         storedTeam.manualAdjustment,
         defaultTeam.manualAdjustment,
@@ -98,7 +126,8 @@ export const arePowerRatingsDefault = (ratings) => {
 
     return (
       rating.baseRating === DEFAULT_POWER_RATING_VALUES.baseRating &&
-      rating.homeAdvantage === DEFAULT_POWER_RATING_VALUES.homeAdvantage &&
+      rating.homeAdjustment ===
+        DEFAULT_POWER_RATING_VALUES.homeAdjustment &&
       rating.manualAdjustment === DEFAULT_POWER_RATING_VALUES.manualAdjustment
     )
   })
@@ -112,7 +141,8 @@ export const getCustomizedPowerRatingTeamIds = (ratings) => {
 
     return (
       rating.baseRating !== DEFAULT_POWER_RATING_VALUES.baseRating ||
-      rating.homeAdvantage !== DEFAULT_POWER_RATING_VALUES.homeAdvantage ||
+      rating.homeAdjustment !==
+        DEFAULT_POWER_RATING_VALUES.homeAdjustment ||
       rating.manualAdjustment !== DEFAULT_POWER_RATING_VALUES.manualAdjustment
     )
   }).map((team) => team.id)

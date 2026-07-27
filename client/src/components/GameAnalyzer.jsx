@@ -76,15 +76,19 @@ const formatSavedTime = (dateTime) =>
   }).format(new Date(dateTime))
 
 function GameAnalyzer({
+  baseHomeAdvantage = 0,
   injurySummaries,
   injurySummaryError,
   injurySummaryStatus,
   onRetryInjuries,
   onRetryPowerRatings,
+  onRetryRatingEngineSettings,
   powerRatings,
   powerRatingsError,
   powerRatingsStatus,
   prefillMatchup,
+  ratingEngineSettingsError,
+  ratingEngineSettingsStatus,
 }) {
   const [matchup, setMatchup] = useState(() => {
     const initialTeams = normalizeSelectedTeams(prefillMatchup ?? defaultTeams)
@@ -96,6 +100,7 @@ function GameAnalyzer({
         initialTeams,
         prefillMatchup?.marketOdds,
         injurySummaries,
+        baseHomeAdvantage,
       ),
     }
   })
@@ -357,6 +362,7 @@ function GameAnalyzer({
         nextTeams,
         currentMatchup.inputs,
         injurySummaries,
+        baseHomeAdvantage,
       )
       const changedSides = ['home', 'away'].filter(
         (teamSide) => currentTeams[teamSide] !== nextTeams[teamSide],
@@ -472,7 +478,11 @@ function GameAnalyzer({
     }
   }
 
-  if (powerRatingsStatus !== 'success' || injurySummaryStatus !== 'success') {
+  if (
+    powerRatingsStatus !== 'success' ||
+    injurySummaryStatus !== 'success' ||
+    ratingEngineSettingsStatus !== 'success'
+  ) {
     return (
       <section className="game-analyzer" aria-label="Game Analyzer">
         <div className="matchup-panel">
@@ -481,8 +491,11 @@ function GameAnalyzer({
             injurySummaryStatus={injurySummaryStatus}
             onRetryInjuries={onRetryInjuries}
             onRetryPowerRatings={onRetryPowerRatings}
+            onRetryRatingEngineSettings={onRetryRatingEngineSettings}
             powerRatingsError={powerRatingsError}
             powerRatingsStatus={powerRatingsStatus}
+            ratingEngineSettingsError={ratingEngineSettingsError}
+            ratingEngineSettingsStatus={ratingEngineSettingsStatus}
           />
         </div>
       </section>
@@ -641,15 +654,19 @@ function ModelDataRequiredState({
   injurySummaryStatus,
   onRetryInjuries,
   onRetryPowerRatings,
+  onRetryRatingEngineSettings,
   powerRatingsError,
   powerRatingsStatus,
+  ratingEngineSettingsError,
+  ratingEngineSettingsStatus,
 }) {
   const isPowerRatingsError = powerRatingsStatus === 'error'
   const isPowerRatingsEmpty = powerRatingsStatus === 'empty'
   const isInjuryError = injurySummaryStatus === 'error'
+  const isEngineSettingsError = ratingEngineSettingsStatus === 'error'
   let title = 'Loading model data'
   let message =
-    'Game Analyzer will be ready once MongoDB ratings and injury summaries load.'
+    'Game Analyzer will be ready once MongoDB ratings, engine settings and injury summaries load.'
 
   if (isPowerRatingsError) {
     title = 'Power ratings unavailable'
@@ -660,8 +677,14 @@ function ModelDataRequiredState({
   } else if (isInjuryError) {
     title = 'Injury summary unavailable'
     message = injurySummaryError
+  } else if (isEngineSettingsError) {
+    title = 'Engine settings unavailable'
+    message = ratingEngineSettingsError
   } else if (powerRatingsStatus !== 'success') {
     title = 'Loading power ratings'
+  } else if (ratingEngineSettingsStatus !== 'success') {
+    title = 'Loading engine settings'
+    message = 'Base Home Advantage is loading for this account.'
   } else if (injurySummaryStatus !== 'success') {
     title = 'Loading injury summary'
     message = 'Stored injury impacts will be applied once MongoDB summaries load.'
@@ -670,7 +693,9 @@ function ModelDataRequiredState({
   return (
     <div
       className={`ratings-blocking-state ${
-        isPowerRatingsError || isInjuryError ? 'error' : ''
+        isPowerRatingsError || isInjuryError || isEngineSettingsError
+          ? 'error'
+          : ''
       }`}
     >
       <strong>{title}</strong>
@@ -683,6 +708,11 @@ function ModelDataRequiredState({
       {isInjuryError ? (
         <button type="button" onClick={onRetryInjuries}>
           Retry injuries
+        </button>
+      ) : null}
+      {isEngineSettingsError ? (
+        <button type="button" onClick={onRetryRatingEngineSettings}>
+          Retry settings
         </button>
       ) : null}
     </div>

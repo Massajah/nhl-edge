@@ -70,6 +70,9 @@ const getGameStartTimestamp = (game = {}) => {
   return Number.isFinite(timestamp) ? timestamp : null
 }
 
+const getReplayScheduleDate = (game = {}) =>
+  game.__replayScheduleDate ?? game.replayScheduleDate ?? game.scheduleDate ?? ''
+
 const getTeamNameFromApi = (team = {}) => {
   const fullName = getLocalizedValue(team.name)
   const placeName = getLocalizedValue(team.placeName)
@@ -137,15 +140,24 @@ const buildIneligibleResult = ({ details = {}, game, reason }) => ({
 })
 
 const isWithinDateBounds = ({
+  dateFrom,
+  dateTo,
   dateFromTimestamp,
   dateToTimestamp,
   gameTimestamp,
+  replayScheduleDate,
 }) =>
-  (!Number.isFinite(dateFromTimestamp) || gameTimestamp >= dateFromTimestamp) &&
-  (!Number.isFinite(dateToTimestamp) || gameTimestamp < dateToTimestamp + DAY_MS)
+  replayScheduleDate
+    ? (!dateFrom || replayScheduleDate >= dateFrom) &&
+      (!dateTo || replayScheduleDate <= dateTo)
+    : (!Number.isFinite(dateFromTimestamp) ||
+        gameTimestamp >= dateFromTimestamp) &&
+      (!Number.isFinite(dateToTimestamp) ||
+        gameTimestamp < dateToTimestamp + DAY_MS)
 
 const classifyGameEligibility = (game = {}, context = {}) => {
   const gameTypes = context.gameTypes ?? DEFAULT_REPLAY_GAME_TYPE_FILTERS
+  const replayScheduleDate = getReplayScheduleDate(game)
 
   if (!isPlainObject(game)) {
     return buildIneligibleResult({
@@ -171,14 +183,18 @@ const classifyGameEligibility = (game = {}, context = {}) => {
 
   if (
     !isWithinDateBounds({
+      dateFrom: context.dateFrom,
       dateFromTimestamp: context.dateFromTimestamp,
+      dateTo: context.dateTo,
       dateToTimestamp: context.dateToTimestamp,
       gameTimestamp,
+      replayScheduleDate,
     })
   ) {
     return buildIneligibleResult({
       details: {
         dateFrom: context.dateFrom ?? null,
+        replayScheduleDate: replayScheduleDate || null,
         dateTo: context.dateTo ?? null,
       },
       game,

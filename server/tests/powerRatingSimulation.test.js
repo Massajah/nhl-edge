@@ -304,6 +304,52 @@ test('games outside requested date range are excluded', async () => {
   assert.equal(replay.skipReasons[SKIP_REASONS.OUTSIDE_DATE_RANGE], 1)
 })
 
+test('schedule-date games crossing UTC midnight stay included', async () => {
+  const midnightGame = {
+    ...eligibilityFixtures.regularSeason,
+    __replayScheduleDate: '2025-03-01',
+    id: 2012,
+    startTimeUTC: '2025-03-02T00:30:00Z',
+  }
+  const eligibility = classifyGameEligibility(
+    midnightGame,
+    makeEligibilityContext(),
+  )
+
+  assert.equal(eligibility.eligible, true)
+})
+
+test('schedule-date replay keeps UTC chronological order after inclusion', async () => {
+  const earlyGame = {
+    ...eligibilityFixtures.regularSeason,
+    __replayScheduleDate: '2025-03-01',
+    id: 2013,
+    startTimeUTC: '2025-03-01T23:30:00Z',
+  }
+  const midnightGame = {
+    ...eligibilityFixtures.shootout,
+    __replayScheduleDate: '2025-03-01',
+    id: 2014,
+    startTimeUTC: '2025-03-02T00:30:00Z',
+  }
+  const replay = await replayHistoricalPowerRatings({
+    dateFrom: '2025-03-01',
+    dateTo: '2025-03-01',
+    gamesProvider: async () => [midnightGame, earlyGame],
+    includeGameResults: true,
+    startingMode: 'equal',
+    userId: 'user-1',
+  })
+
+  assert.equal(replay.summary.gamesFetched, 2)
+  assert.equal(replay.summary.gamesProcessed, 2)
+  assert.equal(Object.hasOwn(replay.skipReasons, SKIP_REASONS.OUTSIDE_DATE_RANGE), false)
+  assert.deepEqual(
+    replay.gameResults.map((game) => game.gameId),
+    [2013, 2014],
+  )
+})
+
 test('skipReasons counts match gamesSkipped', async () => {
   const replay = await replayHistoricalPowerRatings({
     dateFrom: '2025-03-01',

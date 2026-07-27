@@ -36,7 +36,7 @@ const powerRatingSchema = new mongoose.Schema(
     homeAdvantage: {
       type: Number,
       required: true,
-      default: 2.5,
+      default: 0,
     },
     manualAdjustment: {
       type: Number,

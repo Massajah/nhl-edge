@@ -27,11 +27,11 @@ const ratingFields = [
     step: 0.5,
   },
   {
-    key: 'homeAdvantage',
-    label: 'Home Adv.',
-    min: -10,
-    max: 10,
-    step: 0.5,
+    key: 'homeAdjustment',
+    label: 'Home Adjustment',
+    min: -5,
+    max: 5,
+    step: 0.1,
   },
   {
     key: 'manualAdjustment',
@@ -43,6 +43,8 @@ const ratingFields = [
 ]
 
 const formatRating = (value) => value.toFixed(1)
+const formatBaseHomeAdvantage = (value) =>
+  Number.isFinite(Number(value)) ? Number(value).toFixed(2) : '--'
 
 const createDraftRatings = (ratings) =>
   NHL_TEAMS.reduce((draftRatings, team) => {
@@ -69,6 +71,7 @@ const parseDraftValue = (value) => {
 const pluralizeTeams = (count) => `${count} ${count === 1 ? 'team' : 'teams'}`
 
 function PowerRatings({
+  baseHomeAdvantage = 0,
   errorMessage,
   migrationAvailable,
   migrationMessage,
@@ -99,7 +102,7 @@ function PowerRatings({
           ...team,
           baseRating: rating.baseRating,
           effectiveRating: getEffectiveBaseRating(rating),
-          homeAdvantage: rating.homeAdvantage,
+          homeAdjustment: rating.homeAdjustment,
           manualAdjustment: rating.manualAdjustment,
         }
       }),
@@ -124,6 +127,12 @@ function PowerRatings({
         const parsedValue = parseDraftValue(draftTeam[field.key])
 
         if (parsedValue === null) {
+          isInvalid = true
+          invalidFields.add(`${team.id}-${field.key}`)
+          return
+        }
+
+        if (parsedValue < field.min || parsedValue > field.max) {
           isInvalid = true
           invalidFields.add(`${team.id}-${field.key}`)
           return
@@ -342,6 +351,11 @@ function PowerRatings({
 
             <div className="ratings-summary" aria-label="Power ratings summary">
               <SummaryMetric
+                label="Base Home Advantage"
+                value={formatBaseHomeAdvantage(baseHomeAdvantage)}
+                detail="Configured in Settings"
+              />
+              <SummaryMetric
                 label="Highest rated"
                 value={summary.highestTeam.name}
                 detail={formatRating(summary.highestTeam.effectiveRating)}
@@ -357,6 +371,11 @@ function PowerRatings({
                 detail={`${NHL_TEAMS.length} teams`}
               />
             </div>
+
+            <p className="ratings-adjustment-note">
+              Team-specific Home Adjustment is added to the Base Home Advantage
+              configured in Settings.
+            </p>
 
             <div className="ratings-toolbar">
               <label className="field" htmlFor="team-search">
