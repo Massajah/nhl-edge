@@ -1,4 +1,13 @@
 import { apiRequest } from './apiClient.js'
+import {
+  buildPowerRatingUpdateRequestBody,
+  normalizePowerRatingUpdateResult,
+} from '../utils/powerRatingUpdates.js'
+import {
+  buildPowerRatingHistoryQueryString,
+  normalizePowerRatingHistoryResponse,
+  normalizePowerRatingHistorySeasonsResponse,
+} from '../utils/powerRatingHistory.js'
 
 const requestPowerRatings = async (path, options = {}) => {
   return apiRequest(path, options, {
@@ -27,4 +36,27 @@ export const updatePowerRating = async (teamId, values) => {
   )
 
   return data.rating
+}
+
+export const updatePowerRatings = async (range) => {
+  const data = await requestPowerRatings('/api/power-ratings/update', {
+    body: JSON.stringify(buildPowerRatingUpdateRequestBody(range)),
+    method: 'POST',
+  })
+
+  return normalizePowerRatingUpdateResult(data)
+}
+
+export const getPowerRatingHistory = async (params = {}) => {
+  const data = await requestPowerRatings(
+    `/api/power-ratings/history${buildPowerRatingHistoryQueryString(params)}`,
+  )
+
+  return normalizePowerRatingHistoryResponse(data)
+}
+
+export const getPowerRatingHistorySeasons = async () => {
+  const data = await requestPowerRatings('/api/power-ratings/history/seasons')
+
+  return normalizePowerRatingHistorySeasonsResponse(data)
 }

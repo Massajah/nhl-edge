@@ -26,6 +26,7 @@ import {
   fetchPowerRatings,
   seedPowerRatings,
   updatePowerRating,
+  updatePowerRatings,
 } from "./services/powerRatingsApi.js";
 import { getRatingEngineSettings } from "./services/ratingEngineSettingsApi.js";
 import {
@@ -466,6 +467,31 @@ function AuthenticatedApp({ authUser, onLogout }) {
     return nextRatings;
   }, [updateMigrationAvailability]);
 
+  const handleUpdatePowerRatings = useCallback(
+    async (range) => {
+      const result = await updatePowerRatings(range);
+
+      if (result.gamesProcessed > 0) {
+        try {
+          const ratingDocuments = await fetchPowerRatings();
+
+          applyPowerRatingDocuments(ratingDocuments);
+          setPowerRatingsStatus(
+            ratingDocuments.length > 0 ? "success" : "empty",
+          );
+        } catch (error) {
+          return {
+            ...result,
+            refreshError: error.message,
+          };
+        }
+      }
+
+      return result;
+    },
+    [applyPowerRatingDocuments],
+  );
+
   const handleImportLocalRatings = useCallback(async () => {
     const confirmed =
       typeof window === "undefined" ||
@@ -598,7 +624,6 @@ function AuthenticatedApp({ authUser, onLogout }) {
         />
       ) : activePage === "ratings" ? (
         <PowerRatings
-          key={`ratings-${powerRatingsStatus}-${powerRatingsVersion}`}
           baseHomeAdvantage={ratingEngineSettings.homeAdvantage}
           errorMessage={powerRatingsError}
           migrationAvailable={migrationAvailable}
@@ -611,6 +636,7 @@ function AuthenticatedApp({ authUser, onLogout }) {
           onRetry={retryPowerRatings}
           onReset={handleResetPowerRatings}
           onSave={handleSavePowerRatings}
+          onUpdatePowerRatings={handleUpdatePowerRatings}
         />
       ) : activePage === "rating-lab" ? (
         <RatingLab />

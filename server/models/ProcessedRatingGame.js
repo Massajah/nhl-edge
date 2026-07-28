@@ -150,6 +150,17 @@ const processedRatingGameSchema = new mongoose.Schema(
 processedRatingGameSchema.index({ userId: 1, gameId: 1 }, { unique: true })
 processedRatingGameSchema.index({ gameId: 1 })
 processedRatingGameSchema.index({ userId: 1, gameDate: 1 })
+processedRatingGameSchema.index({ userId: 1, processedAt: -1, gameDate: -1 })
+processedRatingGameSchema.index({
+  userId: 1,
+  awayTeamAbbreviation: 1,
+  gameDate: -1,
+})
+processedRatingGameSchema.index({
+  userId: 1,
+  homeTeamAbbreviation: 1,
+  gameDate: -1,
+})
 
 module.exports = mongoose.model('ProcessedRatingGame', processedRatingGameSchema)
 module.exports.RESULT_TYPES = RESULT_TYPES

@@ -333,8 +333,14 @@ const buildProcessedGameResponse = ({
   homeTeam,
 }) => ({
   gameId: auditRecord.gameId,
+  gameDate:
+    auditRecord.gameDate instanceof Date
+      ? auditRecord.gameDate.toISOString().slice(0, 10)
+      : null,
   awayTeam: awayTeam.abbreviation,
   homeTeam: homeTeam.abbreviation,
+  awayScore: auditRecord.awayScore,
+  homeScore: auditRecord.homeScore,
   result: buildResultLabel({
     awayScore: auditRecord.awayScore,
     awayTeam,

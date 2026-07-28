@@ -23,6 +23,38 @@ const toNumber = (value, fallback) => {
   return Number.isFinite(parsedValue) ? parsedValue : fallback
 }
 
+export const parsePowerRatingDraftValue = (value) => {
+  if (String(value ?? '').trim() === '') {
+    return null
+  }
+
+  const parsedValue = Number(value)
+
+  return Number.isFinite(parsedValue) ? parsedValue : null
+}
+
+export const formatPowerRatingDisplayValue = (
+  value,
+  { fallback = '' } = {},
+) => {
+  if (value === null || value === undefined || String(value).trim() === '') {
+    return fallback
+  }
+
+  const parsedValue = Number(value)
+
+  return Number.isFinite(parsedValue) ? parsedValue.toFixed(2) : fallback
+}
+
+export const formatSignedPowerRatingDisplayValue = (value) => {
+  const formattedValue = formatPowerRatingDisplayValue(value, {
+    fallback: '0.00',
+  })
+  const parsedValue = Number(value)
+
+  return `${parsedValue > 0 ? '+' : ''}${formattedValue}`
+}
+
 export const getRatingHomeAdjustment = (rating) =>
   toNumber(
     rating?.homeAdjustment ?? rating?.homeAdvantage,

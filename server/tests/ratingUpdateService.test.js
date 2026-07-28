@@ -248,7 +248,22 @@ test('live update combines base home advantage with home team adjustment', async
     winner: WINNERS.HOME,
   })
 
+  assert.deepEqual(Object.keys(result).sort(), [
+    'dateRange',
+    'errors',
+    'gamesAlreadyProcessed',
+    'gamesFound',
+    'gamesProcessed',
+    'gamesSkipped',
+    'processedGames',
+    'success',
+  ])
   assert.equal(result.gamesProcessed, 1)
+  assert.equal(result.success, true)
+  assert.deepEqual(result.dateRange, {
+    from: '2025-03-01',
+    to: '2025-03-01',
+  })
   assert.equal(auditRecord.engineSettingsSnapshot.homeAdvantage, 4)
   assert.equal(auditRecord.baseHomeAdvantage, 4)
   assert.equal(auditRecord.homeTeamAdjustment, 0.5)
@@ -256,6 +271,9 @@ test('live update combines base home advantage with home team adjustment', async
   assert.equal(result.processedGames[0].baseHomeAdvantage, 4)
   assert.equal(result.processedGames[0].homeTeamAdjustment, 0.5)
   assert.equal(result.processedGames[0].effectiveHomeAdvantage, 4.5)
+  assert.equal(result.processedGames[0].gameDate, '2025-03-01')
+  assert.equal(result.processedGames[0].awayScore, 2)
+  assert.equal(result.processedGames[0].homeScore, 4)
   assert.equal(auditRecord.resultType, 'REGULATION')
   assert.equal(pregameProbability.homeProbability > 0.5, true)
   assert.equal(auditRecord.homeRatingChange < 0.6, true)
@@ -376,6 +394,31 @@ test('missing persisted team rating causes a clear skip', async () => {
   assert.match(result.errors[0].reason, /Missing Power Rating/)
   assert.match(result.errors[0].reason, /TOR/)
   assert.equal(models.processedGames.length, 0)
+})
+
+test('live update response reports mixed processed and skipped games', async () => {
+  const ratings = [
+    makeRatingDocument({ teamId: 'BOS' }),
+    makeRatingDocument({ teamId: 'TOR' }),
+  ]
+  const models = makeModels({ ratings })
+  const result = await runUpdate(
+    [eligibilityFixtures.regularSeason, fixtureGames[1]],
+    models,
+    {
+      from: '2025-01-01',
+      to: '2025-03-01',
+    },
+  )
+
+  assert.equal(result.success, true)
+  assert.equal(result.gamesFound, 2)
+  assert.equal(result.gamesProcessed, 1)
+  assert.equal(result.gamesSkipped, 1)
+  assert.equal(result.errors.length, 1)
+  assert.match(result.errors[0].reason, /Missing Power Rating/)
+  assert.equal(result.processedGames.length, 1)
+  assert.equal(result.processedGames[0].gameDate, '2025-03-01')
 })
 
 test('invalid update date range is rejected', () => {

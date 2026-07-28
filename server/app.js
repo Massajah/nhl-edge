@@ -1,6 +1,7 @@
 const cors = require('cors')
 const express = require('express')
 const authRoutes = require('./routes/authRoutes')
+const bankrollRoutes = require('./routes/bankrollRoutes')
 const betsRoutes = require('./routes/betsRoutes')
 const injuriesRoutes = require('./routes/injuriesRoutes')
 const nhlApiService = require('./services/nhlApiService')
@@ -32,6 +33,7 @@ app.get('/api/health', (_request, response) => {
 })
 
 app.use('/api/auth', authRoutes)
+app.use('/api/bankroll', bankrollRoutes)
 app.use('/api/bets', betsRoutes)
 app.use('/api/injuries', injuriesRoutes)
 app.use('/api/players', playersRoutes)

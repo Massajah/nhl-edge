@@ -985,6 +985,29 @@ const getGoalieStatsForPlayer = async (playerId) => {
 
 const getScheduleForDate = async (date) => requestNhlApi(`/schedule/${date}`)
 
+const getClubScheduleSeason = async (teamAbbreviation, seasonId) => {
+  const normalizedAbbreviation = normalizeTeamAbbreviation(teamAbbreviation)
+  const normalizedSeasonId = String(seasonId ?? '').trim()
+
+  if (!isValidTeamAbbreviation(normalizedAbbreviation)) {
+    throw new NhlApiError('Team abbreviation must use 2 to 4 letters.', {
+      statusCode: 400,
+    })
+  }
+
+  if (!/^\d{8}$/.test(normalizedSeasonId)) {
+    throw new NhlApiError('Season ID must use YYYYyyyy format.', {
+      statusCode: 400,
+    })
+  }
+
+  return requestNhlApi(
+    `/club-schedule-season/${encodeURIComponent(
+      normalizedAbbreviation,
+    )}/${encodeURIComponent(normalizedSeasonId)}`,
+  )
+}
+
 const getGamesForDate = async (date) => {
   const schedule = await getScheduleForDate(date)
   const scheduleDay = schedule.gameWeek?.find((day) => day.date === date)
@@ -1056,6 +1079,8 @@ const getRosterForTeam = async (teamAbbreviation) => {
 
 module.exports = {
   NhlApiError,
+  getClubScheduleSeason,
+  getCurrentSeasonContext,
   getGamesForDate,
   getGoalieSummariesForTeam,
   getGoalieStatsForPlayer,

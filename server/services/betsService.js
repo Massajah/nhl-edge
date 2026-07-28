@@ -1,5 +1,6 @@
 const mongoose = require('mongoose')
 const Bet = require('../models/Bet')
+const bankrollService = require('./bankrollService')
 
 const RESULT_VALUES = Bet.RESULT_VALUES
 const EDITABLE_FIELDS = [
@@ -441,6 +442,7 @@ const createBet = async (userId, payload) => {
 
   applyProfit(bet)
   await bet.save()
+  await bankrollService.syncBetSettlementForBet(userId, bet)
 
   return serializeBet(bet)
 }
@@ -463,6 +465,7 @@ const updateBet = async (userId, id, payload) => {
   Object.assign(bet, updates)
   applyProfit(bet)
   await bet.save()
+  await bankrollService.syncBetSettlementForBet(userId, bet)
 
   return serializeBet(bet)
 }
@@ -480,6 +483,8 @@ const deleteBet = async (userId, id) => {
   if (!deletedBet) {
     throw new BetsError('Bet was not found.', 404)
   }
+
+  await bankrollService.removeBetSettlementForBet(userId, deletedBet._id)
 
   return serializeBet(deletedBet)
 }

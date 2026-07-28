@@ -1,4 +1,6 @@
 const powerRatingsService = require('../services/powerRatingsService')
+const powerRatingHistoryService = require('../services/powerRatingHistoryService')
+const nhlSeasonService = require('../services/nhlSeasonService')
 const ratingUpdateService = require('../services/ratingUpdateService')
 
 const getPowerRatings = async (request, response, next) => {
@@ -48,7 +50,33 @@ const updatePowerRatingsFromCompletedGames = async (request, response, next) => 
   }
 }
 
+const getPowerRatingHistory = async (request, response, next) => {
+  try {
+    const result = await powerRatingHistoryService.getPowerRatingHistory(
+      request.user.id,
+      request.query,
+    )
+
+    response.json(result)
+  } catch (error) {
+    next(error)
+  }
+}
+
+const getPowerRatingHistorySeasons = async (_request, response, next) => {
+  try {
+    const result =
+      await nhlSeasonService.getAvailablePowerRatingHistorySeasons()
+
+    response.json(result)
+  } catch (error) {
+    next(error)
+  }
+}
+
 module.exports = {
+  getPowerRatingHistory,
+  getPowerRatingHistorySeasons,
   getPowerRatings,
   seedPowerRatings,
   updatePowerRating,
