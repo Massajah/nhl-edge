@@ -51,6 +51,16 @@ const toOptionalNumber = (value, field) => {
   return parsedValue
 }
 
+const toOptionalNonNegativeNumber = (value, field) => {
+  const parsedValue = toOptionalNumber(value, field)
+
+  if (parsedValue !== null && parsedValue < 0) {
+    throw new BetsError(`${field} must be zero or greater.`, 400, { field })
+  }
+
+  return parsedValue
+}
+
 const toFiniteNumber = (value, field, { allowNull = false } = {}) => {
   if ((value === null || value === '' || value === undefined) && allowNull) {
     return null
@@ -216,6 +226,115 @@ const normalizeAdjustments = (adjustments = {}) => ({
   awayManualAdjustment: toNumber(adjustments.awayManualAdjustment),
 })
 
+const normalizeBankrollBasis = (value) => {
+  const normalizedValue = toText(value).toUpperCase()
+
+  return ['AVAILABLE', 'CURRENT'].includes(normalizedValue)
+    ? normalizedValue
+    : ''
+}
+
+const normalizeKellyMode = (value) => {
+  const normalizedValue = toText(value).toUpperCase()
+
+  return ['FULL', 'HALF', 'QUARTER', 'CUSTOM'].includes(normalizedValue)
+    ? normalizedValue
+    : ''
+}
+
+const normalizeBettingSettingsSnapshot = (snapshot = null) => {
+  if (snapshot === null || snapshot === '' || snapshot === undefined) {
+    return null
+  }
+
+  if (Array.isArray(snapshot) || typeof snapshot !== 'object') {
+    throw new BetsError(
+      'kellyRecommendation.bettingSettingsSnapshot must be an object.',
+      400,
+      { field: 'kellyRecommendation.bettingSettingsSnapshot' },
+    )
+  }
+
+  return {
+    bankrollBasis: normalizeBankrollBasis(snapshot.bankrollBasis),
+    customKellyFraction: toOptionalNonNegativeNumber(
+      snapshot.customKellyFraction,
+      'kellyRecommendation.bettingSettingsSnapshot.customKellyFraction',
+    ),
+    kellyMode: normalizeKellyMode(snapshot.kellyMode),
+    maximumStakePercent: toOptionalNonNegativeNumber(
+      snapshot.maximumStakePercent,
+      'kellyRecommendation.bettingSettingsSnapshot.maximumStakePercent',
+    ),
+    minimumEdgePercent: toOptionalNonNegativeNumber(
+      snapshot.minimumEdgePercent,
+      'kellyRecommendation.bettingSettingsSnapshot.minimumEdgePercent',
+    ),
+    stakeRoundingIncrement: toOptionalNonNegativeNumber(
+      snapshot.stakeRoundingIncrement,
+      'kellyRecommendation.bettingSettingsSnapshot.stakeRoundingIncrement',
+    ),
+  }
+}
+
+const normalizeKellyRecommendationSnapshot = (snapshot = null) => {
+  if (snapshot === null || snapshot === '' || snapshot === undefined) {
+    return undefined
+  }
+
+  if (Array.isArray(snapshot) || typeof snapshot !== 'object') {
+    throw new BetsError('kellyRecommendation must be an object.', 400, {
+      field: 'kellyRecommendation',
+    })
+  }
+
+  return {
+    appliedKellyFraction: toOptionalNonNegativeNumber(
+      snapshot.appliedKellyFraction,
+      'kellyRecommendation.appliedKellyFraction',
+    ),
+    bankrollAmountAtRecommendation: toOptionalNonNegativeNumber(
+      snapshot.bankrollAmountAtRecommendation,
+      'kellyRecommendation.bankrollAmountAtRecommendation',
+    ),
+    bankrollBasis: normalizeBankrollBasis(snapshot.bankrollBasis),
+    bettingSettingsSnapshot: normalizeBettingSettingsSnapshot(
+      snapshot.bettingSettingsSnapshot,
+    ),
+    capApplied: Boolean(snapshot.capApplied),
+    eligible: Boolean(snapshot.eligible),
+    fractionalKellyPercent: toOptionalNumber(
+      snapshot.fractionalKellyPercent,
+      'kellyRecommendation.fractionalKellyPercent',
+    ),
+    fullKellyPercent: toOptionalNumber(
+      snapshot.fullKellyPercent,
+      'kellyRecommendation.fullKellyPercent',
+    ),
+    maximumStakePercent: toOptionalNonNegativeNumber(
+      snapshot.maximumStakePercent,
+      'kellyRecommendation.maximumStakePercent',
+    ),
+    minimumEdgePercent: toOptionalNonNegativeNumber(
+      snapshot.minimumEdgePercent,
+      'kellyRecommendation.minimumEdgePercent',
+    ),
+    reason: toText(snapshot.reason),
+    recommendedStakeAmount: toOptionalNonNegativeNumber(
+      snapshot.recommendedStakeAmount,
+      'kellyRecommendation.recommendedStakeAmount',
+    ),
+    recommendedStakePercent: toOptionalNonNegativeNumber(
+      snapshot.recommendedStakePercent,
+      'kellyRecommendation.recommendedStakePercent',
+    ),
+    roundingIncrement: toOptionalNonNegativeNumber(
+      snapshot.roundingIncrement,
+      'kellyRecommendation.roundingIncrement',
+    ),
+  }
+}
+
 const calculateProfit = ({ marketOdds, result, stake }) => {
   const odds = Number(marketOdds)
   const wager = Number(stake)
@@ -365,6 +484,9 @@ const normalizeCreatePayload = (payload = {}) => {
     result,
     notes: toText(payload.notes),
     adjustments: normalizeAdjustments(payload.adjustments),
+    kellyRecommendation: normalizeKellyRecommendationSnapshot(
+      payload.kellyRecommendation,
+    ),
   }
 }
 

@@ -103,5 +103,95 @@ Settled saved bets synchronize into the bankroll ledger from the server. Editing
 a settled result or stake updates the related settlement transaction, moving the
 bet back to pending removes it, and deleting the bet removes the settlement.
 
-Scheduling, cron jobs, bankroll charts, Dashboard bankroll widgets, and Kelly
-staking remain intentionally deferred.
+## Betting Settings
+
+The Settings page includes `Betting & Staking`, a user-specific configuration
+section for future Kelly stake recommendations in Game Analyzer. These settings
+do not place bets automatically and do not modify existing bets.
+
+Defaults:
+
+- Kelly Mode: Quarter Kelly
+- Custom Kelly Fraction: `0.25`
+- Maximum Stake: `3%` of the selected bankroll basis
+- Minimum Edge: `2` percentage points
+- Stake Rounding: the active bankroll currency rounded to `0.50`
+- Bankroll Basis: Available bankroll
+
+Kelly modes map to fractions of Full Kelly:
+
+- Full Kelly: `1.00`
+- Half Kelly: `0.50`
+- Quarter Kelly: `0.25`
+- Custom: the saved Custom Kelly Fraction
+
+Maximum Stake is a hard cap for future single-bet recommendations. Minimum
+Edge is measured in probability points, not relative percent growth, and can
+suppress low-edge recommendations. Stake Rounding controls the future displayed
+stake increment.
+
+Bankroll Basis can use Available bankroll, which excludes pending stakes, or
+Current bankroll, which includes them. Settings shows bankroll currency and
+status read-only. Currency remains owned by the bankroll profile; until a
+bankroll is initialized, the display falls back to EUR. No currency conversion
+is performed.
+
+Scheduling, cron jobs, bankroll charts, and Dashboard bankroll widgets remain
+intentionally deferred.
+
+## Game Analyzer Kelly Recommendations
+
+Game Analyzer shows a `Stake Recommendation` panel for the currently selected
+side. The panel uses the displayed model probability, selected decimal market
+odds, authenticated Betting Settings, and authenticated bankroll summary. NHL
+Edge never places bets automatically.
+
+The Full Kelly formula for decimal odds is:
+
+```text
+fullKellyFraction = (decimalOdds * modelProbability - 1) / (decimalOdds - 1)
+```
+
+Kelly modes then scale Full Kelly:
+
+- Full Kelly: `1.00`
+- Half Kelly: `0.50`
+- Quarter Kelly: `0.25`
+- Custom Kelly: the saved custom multiplier
+
+The displayed recommendation uses:
+
+```text
+fractionalKellyPercent = fullKellyFraction * selectedKellyFraction * 100
+recommendedStakePercent = min(fractionalKellyPercent, maximumStakePercent)
+unroundedStakeAmount = selectedBankroll * recommendedStakePercent / 100
+```
+
+Stake amounts round down to the nearest configured increment so rounding never
+increases risk. For example, `10.49` with `0.50` rounds to `10.00`, `10.50`
+with `0.50` stays `10.50`, and `10.99` with `1.00` rounds to `10.00`.
+
+Minimum Edge is measured as model probability percentage minus market implied
+probability percentage. If the edge is below the saved threshold, the panel
+shows the Kelly percentages but suppresses the stake amount. The maximum-stake
+cap is shown when it reduces the fractional Kelly stake.
+
+Bankroll Basis controls the amount used:
+
+- Available bankroll excludes pending stake exposure.
+- Current bankroll uses the full ledger balance.
+
+If bankroll is not initialized, Game Analyzer still shows Full Kelly,
+Fractional Kelly, and the recommended stake percentage when odds and
+probability inputs are valid. It does not fabricate a currency amount; the
+panel links to Bet Tracker for bankroll setup. If the selected bankroll basis
+is zero, no amount is recommended.
+
+`Use Recommended Stake` is an explicit action. It fills the review stake input
+and opens Review & Save, but it does not save a bet or place a bet. The user can
+edit the stake afterward. Saved bets may include a passive Kelly recommendation
+snapshot, but actual stake and recommended stake remain separate.
+
+Known limitations: Kelly sizing depends directly on probability-estimate
+quality, and NHL Edge model probabilities may be uncertain. Treat the
+recommendation as sizing guidance, not a guarantee of profit.

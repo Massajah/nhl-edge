@@ -4,6 +4,13 @@ import {
   PROBABILITY_EDGE_HELP_TEXT,
   parseMarketOdds,
 } from '../utils/calculateGame.js'
+import {
+  formatKellyCurrency,
+  formatKellyEdge,
+  formatKellyPercent,
+  formatKellyProbability,
+  getKellyRecommendationReasonMessage,
+} from '../utils/kellyStaking.js'
 
 const formatPercent = (value) =>
   Number.isFinite(value) ? `${(value * 100).toFixed(1)}%` : '--'
@@ -68,11 +75,18 @@ function ResultCard({
   isBetReviewOpen = false,
   onCloseReview,
   onMarketOddsChange,
+  onOpenBetTracker,
+  onOpenBettingSettings,
   onOpenReview,
   onSaveBet,
   onSelectedSideChange,
   onStakeChange,
+  onUseRecommendedStake,
   result,
+  bankrollError = '',
+  bankrollStatus = 'idle',
+  bettingSettingsError = '',
+  bettingSettingsStatus = 'idle',
   reviewDisabled = true,
   reviewDisabledReason,
   saveDisabled,
@@ -81,6 +95,7 @@ function ResultCard({
   saveStatus = 'idle',
   selectedSide,
   stake,
+  stakeRecommendation,
   validSaveSides = [],
 }) {
   const marketSides = [
@@ -158,6 +173,22 @@ function ResultCard({
         ))}
       </div>
 
+      <StakeRecommendationCard
+        bankrollError={bankrollError}
+        bankrollStatus={bankrollStatus}
+        bettingSettingsError={bettingSettingsError}
+        bettingSettingsStatus={bettingSettingsStatus}
+        marketSides={marketSides}
+        saveStatus={saveStatus}
+        selectedMarketSide={selectedMarketSide}
+        selectedSide={selectedSide}
+        stakeRecommendation={stakeRecommendation}
+        onOpenBetTracker={onOpenBetTracker}
+        onOpenBettingSettings={onOpenBettingSettings}
+        onSelectedSideChange={onSelectedSideChange}
+        onUseRecommendedStake={onUseRecommendedStake}
+      />
+
       <ModelDetails
         awayTeam={awayTeam}
         homeTeam={homeTeam}
@@ -202,6 +233,225 @@ function ResultCard({
         />
       ) : null}
     </article>
+  )
+}
+
+function StakeRecommendationCard({
+  bankrollError,
+  bankrollStatus,
+  bettingSettingsError,
+  bettingSettingsStatus,
+  marketSides,
+  onOpenBetTracker,
+  onOpenBettingSettings,
+  onSelectedSideChange,
+  onUseRecommendedStake,
+  saveStatus,
+  selectedMarketSide,
+  selectedSide,
+  stakeRecommendation = {},
+}) {
+  const hasEligibleAmount =
+    stakeRecommendation.eligible &&
+    Number(stakeRecommendation.recommendedStakeAmount) > 0
+  const hasStakePercent = Boolean(stakeRecommendation.hasStakePercent)
+  const reasonMessage = getKellyRecommendationReasonMessage(
+    stakeRecommendation,
+  )
+  const basisLabel =
+    stakeRecommendation.bankrollBasisLabel ?? 'Available bankroll'
+  const basisText = basisLabel.toLowerCase()
+  const recommendedStakePercent = hasStakePercent
+    ? formatKellyPercent(stakeRecommendation.cappedStakePercent)
+    : '--'
+  const primaryValue = hasEligibleAmount
+    ? formatKellyCurrency(
+        stakeRecommendation.recommendedStakeAmount,
+        stakeRecommendation.currency,
+      )
+    : bankrollStatus === 'loading'
+      ? 'Loading bankroll'
+      : stakeRecommendation.reason === 'BANKROLL_NOT_INITIALIZED'
+        ? 'Bankroll required'
+        : 'No stake'
+  const primaryDetail = hasStakePercent
+    ? `${recommendedStakePercent} of ${basisText}`
+    : 'Kelly stake unavailable'
+  const selectedTeamLabel = selectedMarketSide?.team?.name ?? 'Selected side'
+  const statusNotes = [
+    bettingSettingsStatus === 'loading' ? 'Loading betting settings.' : '',
+    bankrollStatus === 'loading' ? 'Loading bankroll data.' : '',
+    bettingSettingsStatus === 'error'
+      ? `Betting settings unavailable: ${bettingSettingsError}`
+      : '',
+    bankrollStatus === 'error'
+      ? `Bankroll unavailable: ${bankrollError}`
+      : '',
+  ].filter(Boolean)
+  const showBankrollSetup =
+    stakeRecommendation.reason === 'BANKROLL_NOT_INITIALIZED'
+  const details = [
+    {
+      label: 'Model Probability',
+      value: formatKellyProbability(stakeRecommendation.modelProbability),
+    },
+    {
+      label: 'Market Implied Probability',
+      value: formatKellyProbability(stakeRecommendation.impliedProbability),
+    },
+    {
+      label: 'Edge',
+      tone:
+        Number(stakeRecommendation.edgeDecimal) > 0 ? 'positive' : 'negative',
+      value: formatKellyEdge(stakeRecommendation.edgeDecimal),
+    },
+    {
+      label: 'Full Kelly',
+      value: formatKellyPercent(stakeRecommendation.fullKellyPercent),
+    },
+    {
+      label: 'Kelly Mode',
+      value: stakeRecommendation.kellyModeLabel ?? 'Quarter Kelly',
+    },
+    {
+      label: 'Fractional Kelly',
+      value: formatKellyPercent(stakeRecommendation.fractionalKellyPercent),
+    },
+    {
+      label: 'Maximum Stake',
+      value: formatKellyPercent(stakeRecommendation.maximumStakePercent),
+    },
+    {
+      label: 'Cap Applied',
+      tone: stakeRecommendation.capApplied ? 'warning' : '',
+      value: stakeRecommendation.capApplied ? 'Yes' : 'No',
+    },
+    {
+      label: 'Bankroll Basis',
+      value: basisLabel,
+    },
+    {
+      label: basisLabel,
+      value: stakeRecommendation.bankrollInitialized
+        ? formatKellyCurrency(
+            stakeRecommendation.bankrollAmount,
+            stakeRecommendation.currency,
+          )
+        : 'Not initialized',
+    },
+    {
+      label: 'Recommended Stake %',
+      value: recommendedStakePercent,
+    },
+    {
+      label: 'Recommended Amount',
+      value: hasEligibleAmount
+        ? formatKellyCurrency(
+            stakeRecommendation.recommendedStakeAmount,
+            stakeRecommendation.currency,
+          )
+        : '--',
+    },
+  ]
+
+  return (
+    <section
+      className={`stake-recommendation-panel ${
+        hasEligibleAmount ? 'eligible' : 'ineligible'
+      }`}
+      aria-label="Stake Recommendation"
+    >
+      <div className="stake-recommendation-header">
+        <div>
+          <p className="eyebrow">Stake Recommendation</p>
+          <h3>{selectedTeamLabel}</h3>
+        </div>
+        <span className="recommendation-badge">
+          {hasEligibleAmount ? 'Stake available' : 'No recommendation'}
+        </span>
+      </div>
+
+      {marketSides.length > 1 ? (
+        <div
+          className="stake-side-toggle"
+          role="radiogroup"
+          aria-label="Stake recommendation side"
+        >
+          {marketSides.map(({ side, team }) => (
+            <button
+              key={side}
+              aria-checked={selectedSide === side}
+              className={selectedSide === side ? 'active' : ''}
+              role="radio"
+              type="button"
+              onClick={() => onSelectedSideChange?.(side)}
+            >
+              {team.name}
+            </button>
+          ))}
+        </div>
+      ) : null}
+
+      <div className="stake-recommendation-primary">
+        <span>Recommended Stake</span>
+        <strong>{primaryValue}</strong>
+        <small>{primaryDetail}</small>
+      </div>
+
+      {reasonMessage ? (
+        <p className="stake-recommendation-message" role="status">
+          {reasonMessage}
+        </p>
+      ) : stakeRecommendation.capApplied ? (
+        <p className="stake-recommendation-message warning" role="status">
+          Stake cap applied.
+        </p>
+      ) : null}
+
+      {statusNotes.length > 0 ? (
+        <div className="stake-recommendation-notes" role="status">
+          {statusNotes.map((note) => (
+            <span key={note}>{note}</span>
+          ))}
+        </div>
+      ) : null}
+
+      <div className="stake-recommendation-grid">
+        {details.map((detail) => (
+          <div key={detail.label} className={detail.tone ?? ''}>
+            <span>{detail.label}</span>
+            <strong>{detail.value}</strong>
+          </div>
+        ))}
+      </div>
+
+      <div className="stake-recommendation-actions">
+        <button
+          className="save-analysis-button"
+          type="button"
+          disabled={!hasEligibleAmount || saveStatus === 'saving'}
+          onClick={onUseRecommendedStake}
+        >
+          Use Recommended Stake
+        </button>
+        {showBankrollSetup ? (
+          <button
+            className="secondary-save-button"
+            type="button"
+            onClick={onOpenBetTracker}
+          >
+            Set Up Bankroll
+          </button>
+        ) : null}
+        <button
+          className="secondary-save-button"
+          type="button"
+          onClick={onOpenBettingSettings}
+        >
+          Edit Betting Settings
+        </button>
+      </div>
+    </section>
   )
 }
 

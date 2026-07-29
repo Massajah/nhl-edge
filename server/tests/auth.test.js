@@ -547,6 +547,63 @@ test('client-supplied userId is ignored during bet creation', async () => {
   )
 })
 
+test('Kelly recommendation snapshot does not overwrite actual stake', async () => {
+  const userId = new mongoose.Types.ObjectId().toString()
+  let savedBet = null
+
+  await withPatches(
+    [
+      [
+        Bet.prototype,
+        'save',
+        async function save() {
+          savedBet = this
+
+          return this
+        },
+      ],
+    ],
+    async () => {
+      const bet = await betsService.createBet(userId, {
+        ...createBetPayload({
+          stake: 5,
+        }),
+        kellyRecommendation: {
+          appliedKellyFraction: 0.25,
+          bankrollAmountAtRecommendation: 1000,
+          bankrollBasis: 'AVAILABLE',
+          bettingSettingsSnapshot: {
+            bankrollBasis: 'AVAILABLE',
+            customKellyFraction: 0.25,
+            kellyMode: 'QUARTER',
+            maximumStakePercent: 3,
+            minimumEdgePercent: 2,
+            stakeRoundingIncrement: 0.5,
+          },
+          capApplied: true,
+          eligible: true,
+          fractionalKellyPercent: 3.52,
+          fullKellyPercent: 14.09,
+          maximumStakePercent: 3,
+          minimumEdgePercent: 2,
+          recommendedStakeAmount: 30,
+          recommendedStakePercent: 3,
+          roundingIncrement: 0.5,
+        },
+      })
+
+      assert.equal(savedBet.stake, 5)
+      assert.equal(savedBet.kellyRecommendation.recommendedStakeAmount, 30)
+      assert.equal(bet.stake, 5)
+      assert.equal(bet.kellyRecommendation.recommendedStakeAmount, 30)
+      assert.equal(
+        bet.kellyRecommendation.bettingSettingsSnapshot.kellyMode,
+        'QUARTER',
+      )
+    },
+  )
+})
+
 test('Google token verification failure is rejected cleanly', async () => {
   await withPatches(
     [

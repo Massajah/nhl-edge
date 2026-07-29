@@ -32,6 +32,7 @@ Protected user-specific routes:
 - `GET /api/power-ratings/history`
 - `GET /api/power-ratings/history/seasons`
 - `POST /api/power-ratings/update`
+- `/api/settings/betting`
 - `/api/settings/rating-engine`
 
 Public NHL data routes:
@@ -187,6 +188,93 @@ every initialized bankroll. The script never runs automatically.
 
 Phase 1 intentionally does not add bankroll reset, transaction deletion,
 charts, Dashboard integration, Kelly sizing, or automatic historical inference.
+
+## Betting Settings
+
+Betting Settings are user-specific staking configuration for Kelly stake
+recommendations in Game Analyzer. They do not place bets and do not modify
+existing bets.
+
+Authenticated endpoints:
+
+- `GET /api/settings/betting` returns the current user's settings and whether
+  centralized defaults are being used.
+- `PUT /api/settings/betting` creates or replaces the current user's settings.
+  The request must include every supported field.
+- `POST /api/settings/betting/reset` deletes the current user's persisted
+  settings so defaults are used again.
+
+Default values:
+
+```json
+{
+  "kellyMode": "QUARTER",
+  "customKellyFraction": 0.25,
+  "maximumStakePercent": 3,
+  "minimumEdgePercent": 2,
+  "stakeRoundingIncrement": 0.5,
+  "bankrollBasis": "AVAILABLE"
+}
+```
+
+Kelly modes:
+
+- `FULL`: 1.00 Kelly
+- `HALF`: 0.50 Kelly
+- `QUARTER`: 0.25 Kelly and the default
+- `CUSTOM`: use `customKellyFraction`
+
+Validation:
+
+- `kellyMode`: `FULL`, `HALF`, `QUARTER`, or `CUSTOM`
+- `customKellyFraction`: greater than `0` and no more than `1`
+- `maximumStakePercent`: greater than `0` and no more than `100`
+- `minimumEdgePercent`: `0` to `100`
+- `stakeRoundingIncrement`: `0.01`, `0.05`, `0.10`, `0.50`, `1.00`, or `5.00`
+- `bankrollBasis`: `AVAILABLE` or `CURRENT`
+
+`maximumStakePercent` is a hard cap for recommended single-bet stakes.
+`minimumEdgePercent` is a probability-point threshold below which stake
+recommendations are suppressed. `AVAILABLE` bankroll means current bankroll
+minus pending exposure; `CURRENT` uses the full current bankroll. Betting
+settings do not store bankroll balances or currency. Stake amounts use the
+active `BankrollProfile` currency, defaulting to EUR until bankroll setup.
+
+`BettingSettings` has a unique `userId` index. API requests always use the
+authenticated user context and reject client-supplied `userId`, balances, or
+currency fields.
+
+## Kelly Recommendation Snapshots
+
+Game Analyzer Phase 1 calculates Kelly recommendations from the displayed model
+probability and selected market odds, then combines the result with Betting
+Settings and the bankroll summary.
+
+The Full Kelly formula for decimal odds is:
+
+```text
+fullKellyFraction = (decimalOdds * modelProbability - 1) / (decimalOdds - 1)
+```
+
+The analyzer scales Full Kelly by the selected mode, applies
+`maximumStakePercent`, suppresses recommendations below `minimumEdgePercent`,
+selects `AVAILABLE` or `CURRENT` bankroll according to the setting, and rounds
+the final currency amount down to the configured increment.
+
+Saved bets can store an optional `kellyRecommendation` snapshot with fields such
+as `recommendedStakePercent`, `recommendedStakeAmount`, `fullKellyPercent`,
+`appliedKellyFraction`, `maximumStakePercent`, `minimumEdgePercent`,
+`bankrollBasis`, `bankrollAmountAtRecommendation`, and
+`bettingSettingsSnapshot`. The snapshot is audit metadata only. The user's
+actual `stake` remains separate, editable, and never overwritten
+automatically.
+
+If bankroll is not initialized, Game Analyzer can still show Kelly percentages
+but does not create a fabricated currency amount. NHL Edge never places bets
+automatically.
+
+Known limitations: Kelly recommendations are only as reliable as the model
+probability estimates they use, and model probabilities may be uncertain.
 
 ## Rating Engine Settings
 

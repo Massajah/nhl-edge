@@ -69,6 +69,9 @@ const toNullableNumber = (value) => {
 const toText = (value, fallback) =>
   typeof value === 'string' && value.trim() ? value : fallback
 
+const isPlainObject = (value) =>
+  value !== null && typeof value === 'object' && !Array.isArray(value)
+
 const toOdds = (value) => Math.max(toNumber(value, 1.01), 1.01)
 
 const toNullableOdds = (value) => {
@@ -289,11 +292,54 @@ const createSelectedGoalieSnapshot = (values = {}, selectedGoalieStats = {}) => 
   }
 }
 
+const normalizeKellySettingsSnapshot = (snapshot = {}) => {
+  if (!isPlainObject(snapshot)) {
+    return null
+  }
+
+  return {
+    bankrollBasis: toText(snapshot.bankrollBasis, ''),
+    customKellyFraction: toNullableNumber(snapshot.customKellyFraction),
+    kellyMode: toText(snapshot.kellyMode, ''),
+    maximumStakePercent: toNullableNumber(snapshot.maximumStakePercent),
+    minimumEdgePercent: toNullableNumber(snapshot.minimumEdgePercent),
+    stakeRoundingIncrement: toNullableNumber(snapshot.stakeRoundingIncrement),
+  }
+}
+
+const normalizeKellyRecommendationSnapshot = (snapshot = null) => {
+  if (!isPlainObject(snapshot)) {
+    return null
+  }
+
+  return {
+    appliedKellyFraction: toNullableNumber(snapshot.appliedKellyFraction),
+    bankrollAmountAtRecommendation: toNullableNumber(
+      snapshot.bankrollAmountAtRecommendation,
+    ),
+    bankrollBasis: toText(snapshot.bankrollBasis, ''),
+    bettingSettingsSnapshot: normalizeKellySettingsSnapshot(
+      snapshot.bettingSettingsSnapshot,
+    ),
+    capApplied: Boolean(snapshot.capApplied),
+    eligible: Boolean(snapshot.eligible),
+    fractionalKellyPercent: toNullableNumber(snapshot.fractionalKellyPercent),
+    fullKellyPercent: toNullableNumber(snapshot.fullKellyPercent),
+    maximumStakePercent: toNullableNumber(snapshot.maximumStakePercent),
+    minimumEdgePercent: toNullableNumber(snapshot.minimumEdgePercent),
+    reason: toText(snapshot.reason, ''),
+    recommendedStakeAmount: toNullableNumber(snapshot.recommendedStakeAmount),
+    recommendedStakePercent: toNullableNumber(snapshot.recommendedStakePercent),
+    roundingIncrement: toNullableNumber(snapshot.roundingIncrement),
+  }
+}
+
 export const createBetPayloadFromGameAnalysis = ({
   awayTeam,
   gameId = '',
   homeTeam,
   inputs,
+  kellyRecommendation = null,
   result,
   scheduledStart = null,
   selectedSide = 'home',
@@ -354,6 +400,9 @@ export const createBetPayloadFromGameAnalysis = ({
     profit: 0,
     notes: '',
     adjustments: createAdjustmentsPayload(inputs),
+    kellyRecommendation: normalizeKellyRecommendationSnapshot(
+      kellyRecommendation,
+    ),
   }
 }
 
@@ -671,6 +720,9 @@ export const normalizeBet = (bet = {}) => {
     result: normalizeResult(bet.result),
     profit: toNumber(bet.profit),
     notes: toText(bet.notes, ''),
+    kellyRecommendation: normalizeKellyRecommendationSnapshot(
+      bet.kellyRecommendation,
+    ),
     adjustments: {
       homeAdvantage: toNumber(bet.adjustments?.homeAdvantage),
       homeStoredInjuryImpact: toNumber(bet.adjustments?.homeStoredInjuryImpact),

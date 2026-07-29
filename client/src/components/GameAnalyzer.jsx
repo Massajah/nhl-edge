@@ -4,12 +4,23 @@ import ResultCard from './ResultCard.jsx'
 import TeamSelector from './TeamSelector.jsx'
 import { getTeamMetadata } from '../data/teamMetadata.js'
 import { NHL_TEAMS } from '../data/teams.js'
+import { getBankrollSummary } from '../services/bankrollApi.js'
 import { createBet, fetchBets } from '../services/betsApi.js'
+import { getBettingSettings } from '../services/bettingSettingsApi.js'
 import {
   fetchTeamGoalieSummaries,
   fetchTeamRoster,
 } from '../services/teamsApi.js'
 import { calculateGame, parseMarketOdds } from '../utils/calculateGame.js'
+import {
+  DEFAULT_BETTING_SETTINGS,
+  normalizeBettingSettings,
+} from '../utils/bettingSettings.js'
+import {
+  createKellyRecommendationSnapshot,
+  createKellyStakeRecommendation,
+  formatStakeInputValue,
+} from '../utils/kellyStaking.js'
 import {
   applyTeamRatingsToInputs,
   createInputsForTeams,
@@ -83,6 +94,7 @@ function GameAnalyzer({
   onRetryInjuries,
   onRetryPowerRatings,
   onRetryRatingEngineSettings,
+  onNavigate,
   powerRatings,
   powerRatingsError,
   powerRatingsStatus,
@@ -113,6 +125,15 @@ function GameAnalyzer({
   const [selectedSaveSide, setSelectedSaveSide] = useState('home')
   const [isBetReviewOpen, setIsBetReviewOpen] = useState(false)
   const [stake, setStake] = useState('1')
+  const [bettingSettings, setBettingSettings] = useState(() =>
+    normalizeBettingSettings(DEFAULT_BETTING_SETTINGS),
+  )
+  const [bettingSettingsStatus, setBettingSettingsStatus] =
+    useState('loading')
+  const [bettingSettingsError, setBettingSettingsError] = useState('')
+  const [bankrollSummary, setBankrollSummary] = useState(null)
+  const [bankrollStatus, setBankrollStatus] = useState('loading')
+  const [bankrollError, setBankrollError] = useState('')
   const { teams, inputs } = matchup
 
   const homeTeam = findTeam(teams.home)
@@ -240,9 +261,102 @@ function GameAnalyzer({
     ? 'Add valid market odds for the selected side.'
     : !hasValidModelProbability
       ? 'Model probability is unavailable for the selected side.'
-      : !isStakeValid
-        ? 'Enter a stake greater than 0.'
-        : ''
+        : !isStakeValid
+          ? 'Enter a stake greater than 0.'
+          : ''
+
+  const loadBankrollSummary = useCallback(async ({ shouldApply } = {}) => {
+    const canApply = () =>
+      typeof shouldApply === 'function' ? shouldApply() : true
+
+    if (canApply()) {
+      setBankrollStatus('loading')
+      setBankrollError('')
+    }
+
+    try {
+      const summary = await getBankrollSummary()
+
+      if (canApply()) {
+        setBankrollSummary(summary)
+        setBankrollStatus('success')
+      }
+
+      return summary
+    } catch (error) {
+      if (canApply()) {
+        setBankrollSummary(null)
+        setBankrollStatus('error')
+        setBankrollError(error.message)
+      }
+      throw error
+    }
+  }, [])
+
+  useEffect(() => {
+    let isCurrent = true
+
+    const loadAnalyzerBettingSettings = async () => {
+      setBettingSettingsStatus('loading')
+      setBettingSettingsError('')
+
+      try {
+        const result = await getBettingSettings()
+
+        if (!isCurrent) {
+          return
+        }
+
+        setBettingSettings(normalizeBettingSettings(result.settings))
+        setBettingSettingsStatus('success')
+      } catch (error) {
+        if (!isCurrent) {
+          return
+        }
+
+        setBettingSettings(normalizeBettingSettings(DEFAULT_BETTING_SETTINGS))
+        setBettingSettingsStatus('error')
+        setBettingSettingsError(error.message)
+      }
+    }
+
+    loadAnalyzerBettingSettings()
+
+    return () => {
+      isCurrent = false
+    }
+  }, [])
+
+  useEffect(() => {
+    let isCurrent = true
+
+    loadBankrollSummary({ shouldApply: () => isCurrent }).catch(() => {
+      if (!isCurrent) {
+        return
+      }
+      // Error state is already captured for the recommendation card.
+    })
+
+    return () => {
+      isCurrent = false
+    }
+  }, [loadBankrollSummary])
+
+  const selectedStakeRecommendation = useMemo(
+    () =>
+      createKellyStakeRecommendation({
+        bankrollSummary,
+        decimalOdds: selectedMarket.marketOdds,
+        modelProbability: selectedMarket.modelProbability,
+        settings: bettingSettings,
+      }),
+    [
+      bankrollSummary,
+      bettingSettings,
+      selectedMarket.marketOdds,
+      selectedMarket.modelProbability,
+    ],
+  )
 
   const loadTeamGoalies = useCallback(
     async (team, { force = false } = {}) => {
@@ -424,6 +538,38 @@ function GameAnalyzer({
   const handleMarketOddsChange = (side, value) =>
     handleInputChange(side, 'marketOdds', value)
 
+  const handleUseRecommendedStake = () => {
+    if (
+      !selectedStakeRecommendation.eligible ||
+      selectedStakeRecommendation.recommendedStakeAmount <= 0
+    ) {
+      return
+    }
+
+    setStake(
+      formatStakeInputValue(selectedStakeRecommendation.recommendedStakeAmount),
+    )
+    setSaveStatus('idle')
+    setSaveMessage('Recommended stake applied. Review before saving.')
+    setIsBetReviewOpen(true)
+  }
+
+  const handleOpenBetTracker = () => {
+    onNavigate?.('tracker')
+  }
+
+  const handleOpenBettingSettings = () => {
+    onNavigate?.('settings')
+
+    if (typeof window !== 'undefined') {
+      window.setTimeout(() => {
+        document
+          .getElementById('betting-staking-settings')
+          ?.scrollIntoView({ block: 'start' })
+      }, 0)
+    }
+  }
+
   const handleSaveBet = async () => {
     if (!canSaveBet) {
       setSaveStatus('error')
@@ -447,6 +593,9 @@ function GameAnalyzer({
           goalieStatsByPlayerId[
             String(inputs[selectedSaveSide].selectedGoalieId)
           ]?.currentSeason ?? null,
+        kellyRecommendation: createKellyRecommendationSnapshot(
+          selectedStakeRecommendation,
+        ),
         stake: stakeValue,
       })
       const existingBets = normalizeBets(await fetchBets())
@@ -472,6 +621,9 @@ function GameAnalyzer({
 
       setSaveStatus('success')
       setSaveMessage(`Saved ${formatSavedTime(savedBet.analyzedAt)}`)
+      loadBankrollSummary().catch(() => {
+        // The saved bet still succeeds; the recommendation card shows reload errors.
+      })
     } catch (error) {
       setSaveStatus('error')
       setSaveMessage(error.message)
@@ -600,6 +752,8 @@ function GameAnalyzer({
           saveMessage={saveMessage}
           validSaveSides={validSaveSides}
           onCloseReview={closeBetReview}
+          onOpenBetTracker={handleOpenBetTracker}
+          onOpenBettingSettings={handleOpenBettingSettings}
           onMarketOddsChange={handleMarketOddsChange}
           onOpenReview={openBetReview}
           onSaveBet={handleSaveBet}
@@ -613,6 +767,12 @@ function GameAnalyzer({
             setSaveMessage('')
             setStake(value)
           }}
+          onUseRecommendedStake={handleUseRecommendedStake}
+          bankrollError={bankrollError}
+          bankrollStatus={bankrollStatus}
+          bettingSettingsError={bettingSettingsError}
+          bettingSettingsStatus={bettingSettingsStatus}
+          stakeRecommendation={selectedStakeRecommendation}
         />
       </div>
     </section>

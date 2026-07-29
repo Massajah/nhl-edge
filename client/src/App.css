@@ -663,6 +663,14 @@
   font-size: clamp(1.3rem, 2.4vw, 2rem);
 }
 
+.settings-betting-panel .section-heading {
+  margin-bottom: 12px;
+}
+
+.settings-betting-panel .section-heading h2 {
+  font-size: clamp(1.3rem, 2.4vw, 2rem);
+}
+
 .settings-info-note,
 .settings-loading-state {
   display: grid;
@@ -695,10 +703,40 @@
   gap: 12px;
 }
 
+.settings-betting-form {
+  display: grid;
+  gap: 12px;
+}
+
+.settings-betting-guidance {
+  display: grid;
+  gap: 5px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 8px;
+  padding: 11px 12px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.settings-betting-guidance p,
+.settings-betting-preview {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  font-weight: 780;
+  line-height: 1.45;
+}
+
 .settings-engine-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(260px, max-content));
   gap: 10px 24px;
+  align-items: start;
+}
+
+.settings-betting-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
   align-items: start;
 }
 
@@ -708,12 +746,40 @@
   align-items: center;
 }
 
+.settings-betting-field {
+  gap: 6px;
+  align-content: start;
+}
+
 .settings-engine-field input {
   width: 120px;
   min-height: 38px;
   justify-self: end;
   text-align: right;
   font-variant-numeric: tabular-nums;
+}
+
+.settings-betting-field input,
+.settings-betting-field select {
+  min-height: 38px;
+}
+
+.settings-betting-field input {
+  max-width: 180px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.settings-betting-field small {
+  min-height: 34px;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: 760;
+  line-height: 1.35;
+}
+
+.settings-betting-custom-slot {
+  min-height: 106px;
 }
 
 .settings-engine-field .field-error {
@@ -725,6 +791,47 @@
 
 .field-error {
   color: var(--danger) !important;
+}
+
+.settings-bankroll-status {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.settings-bankroll-status div {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 11px 12px;
+  background: rgba(13, 20, 28, 0.58);
+}
+
+.settings-bankroll-status svg {
+  color: var(--accent);
+}
+
+.settings-bankroll-status span,
+.settings-bankroll-status strong {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-bankroll-status span {
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.settings-bankroll-status strong {
+  color: var(--text-strong);
+  font-size: 0.94rem;
+  font-weight: 900;
 }
 
 .settings-form-actions {
@@ -5772,6 +5879,173 @@ optgroup {
   border-top: 1px solid rgba(255, 255, 255, 0.075);
 }
 
+.stake-recommendation-panel {
+  display: grid;
+  gap: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  padding: 13px;
+  background: rgba(13, 20, 28, 0.62);
+}
+
+.stake-recommendation-panel.eligible {
+  border-color: rgba(35, 211, 182, 0.5);
+  background:
+    linear-gradient(135deg, rgba(35, 211, 182, 0.1), transparent 44%),
+    rgba(13, 20, 28, 0.64);
+}
+
+.stake-recommendation-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.stake-recommendation-header h3 {
+  margin: 2px 0 0;
+  overflow-wrap: anywhere;
+  color: var(--text-strong);
+  font-size: 1rem;
+  line-height: 1.15;
+}
+
+.stake-side-toggle {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.stake-side-toggle button {
+  min-width: 0;
+  min-height: 34px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0 10px;
+  overflow: hidden;
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.045);
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 900;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.stake-side-toggle button.active {
+  border-color: rgba(35, 211, 182, 0.58);
+  color: var(--accent);
+  background: rgba(35, 211, 182, 0.11);
+}
+
+.stake-recommendation-primary {
+  display: grid;
+  gap: 4px;
+  border: 1px solid rgba(35, 211, 182, 0.18);
+  border-radius: 8px;
+  padding: 13px;
+  background: rgba(5, 12, 17, 0.42);
+}
+
+.stake-recommendation-primary span,
+.stake-recommendation-primary small {
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  font-weight: 850;
+}
+
+.stake-recommendation-primary strong {
+  color: var(--text-strong);
+  font-size: 1.7rem;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.stake-recommendation-panel.eligible .stake-recommendation-primary strong {
+  color: var(--accent);
+}
+
+.stake-recommendation-message,
+.stake-recommendation-notes {
+  margin: 0;
+  border: 1px solid rgba(255, 181, 71, 0.4);
+  border-radius: 8px;
+  padding: 9px 10px;
+  color: var(--accent-warm);
+  background: rgba(255, 181, 71, 0.08);
+  font-size: 0.74rem;
+  font-weight: 800;
+  line-height: 1.35;
+}
+
+.stake-recommendation-message.warning {
+  border-color: rgba(255, 181, 71, 0.46);
+}
+
+.stake-recommendation-notes {
+  display: grid;
+  gap: 4px;
+  border-color: rgba(255, 255, 255, 0.11);
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.stake-recommendation-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.stake-recommendation-grid div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  padding: 9px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.stake-recommendation-grid span {
+  color: var(--text-muted);
+  font-size: 0.67rem;
+  font-weight: 850;
+}
+
+.stake-recommendation-grid strong {
+  overflow-wrap: anywhere;
+  color: var(--text-strong);
+  font-size: 0.82rem;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+
+.stake-recommendation-grid .positive strong {
+  color: var(--accent);
+}
+
+.stake-recommendation-grid .negative strong {
+  color: var(--danger);
+}
+
+.stake-recommendation-grid .warning strong {
+  color: var(--accent-warm);
+}
+
+.stake-recommendation-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.stake-recommendation-actions .save-analysis-button,
+.stake-recommendation-actions .secondary-save-button {
+  min-height: 36px;
+  padding: 0 12px;
+  font-size: 0.72rem;
+}
+
 .market-details div,
 .rating-breakdown-row {
   display: flex;
@@ -5945,6 +6219,10 @@ optgroup {
   }
 
   .bankroll-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .settings-bankroll-status {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -6362,6 +6640,8 @@ optgroup {
   }
 
   .settings-engine-grid,
+  .settings-betting-grid,
+  .settings-bankroll-status,
   .settings-form-actions {
     grid-template-columns: 1fr;
   }
@@ -6373,6 +6653,11 @@ optgroup {
   .settings-engine-field input {
     width: 100%;
     max-width: 130px;
+  }
+
+  .settings-betting-field input {
+    width: 100%;
+    max-width: 180px;
   }
 
   .settings-form-actions {
@@ -6488,6 +6773,29 @@ optgroup {
 
   .market-value-grid {
     grid-template-columns: 1fr;
+  }
+
+  .stake-recommendation-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .stake-recommendation-grid,
+  .stake-side-toggle {
+    grid-template-columns: 1fr;
+  }
+
+  .stake-recommendation-primary strong {
+    font-size: 1.45rem;
+  }
+
+  .stake-recommendation-actions {
+    display: grid;
+  }
+
+  .stake-recommendation-actions .save-analysis-button,
+  .stake-recommendation-actions .secondary-save-button {
+    width: 100%;
   }
 
   .decision-item {

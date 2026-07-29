@@ -76,6 +76,102 @@ const adjustmentsSchema = new mongoose.Schema(
   { _id: false },
 )
 
+const bettingSettingsSnapshotSchema = new mongoose.Schema(
+  {
+    bankrollBasis: {
+      type: String,
+      enum: ['', 'AVAILABLE', 'CURRENT'],
+      default: '',
+    },
+    customKellyFraction: {
+      type: Number,
+      default: null,
+    },
+    kellyMode: {
+      type: String,
+      enum: ['', 'FULL', 'HALF', 'QUARTER', 'CUSTOM'],
+      default: '',
+    },
+    maximumStakePercent: {
+      type: Number,
+      default: null,
+    },
+    minimumEdgePercent: {
+      type: Number,
+      default: null,
+    },
+    stakeRoundingIncrement: {
+      type: Number,
+      default: null,
+    },
+  },
+  { _id: false },
+)
+
+const kellyRecommendationSchema = new mongoose.Schema(
+  {
+    appliedKellyFraction: {
+      type: Number,
+      default: null,
+    },
+    bankrollAmountAtRecommendation: {
+      type: Number,
+      default: null,
+    },
+    bankrollBasis: {
+      type: String,
+      enum: ['', 'AVAILABLE', 'CURRENT'],
+      default: '',
+    },
+    bettingSettingsSnapshot: {
+      type: bettingSettingsSnapshotSchema,
+      default: null,
+    },
+    capApplied: {
+      type: Boolean,
+      default: false,
+    },
+    eligible: {
+      type: Boolean,
+      default: false,
+    },
+    fractionalKellyPercent: {
+      type: Number,
+      default: null,
+    },
+    fullKellyPercent: {
+      type: Number,
+      default: null,
+    },
+    maximumStakePercent: {
+      type: Number,
+      default: null,
+    },
+    minimumEdgePercent: {
+      type: Number,
+      default: null,
+    },
+    reason: {
+      type: String,
+      trim: true,
+      default: '',
+    },
+    recommendedStakeAmount: {
+      type: Number,
+      default: null,
+    },
+    recommendedStakePercent: {
+      type: Number,
+      default: null,
+    },
+    roundingIncrement: {
+      type: Number,
+      default: null,
+    },
+  },
+  { _id: false },
+)
+
 const betSchema = new mongoose.Schema(
   {
     userId: {
@@ -253,6 +349,10 @@ const betSchema = new mongoose.Schema(
     adjustments: {
       type: adjustmentsSchema,
       default: () => ({}),
+    },
+    kellyRecommendation: {
+      type: kellyRecommendationSchema,
+      default: undefined,
     },
   },
   {
