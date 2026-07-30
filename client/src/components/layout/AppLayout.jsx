@@ -84,7 +84,9 @@ function AppLayout({
 
   return (
     <div
-      className={`app-layout ${isSidebarCollapsed ? 'sidebar-collapsed' : ''} ${
+      className={`app-layout page-${activePage} ${
+        isSidebarCollapsed ? 'sidebar-collapsed' : ''
+      } ${
         isMobileSidebarOpen ? 'mobile-sidebar-open' : ''
       }`}
     >

@@ -4,12 +4,14 @@ import {
   PROBABILITY_EDGE_HELP_TEXT,
   parseMarketOdds,
 } from '../utils/calculateGame.js'
+import { parseBankrollMoneyInput } from '../utils/bankroll.js'
 import {
   formatKellyCurrency,
   formatKellyEdge,
   formatKellyPercent,
   formatKellyProbability,
-  getKellyRecommendationReasonMessage,
+  getMaximumStakeComparison,
+  getKellyRecommendationPresentation,
 } from '../utils/kellyStaking.js'
 
 const formatPercent = (value) =>
@@ -68,6 +70,70 @@ const getStatusWarning = (modelStatus) => {
   return ''
 }
 
+const getStakeInputState = (stake) => {
+  const stakeText = String(stake ?? '')
+  const hasValue = stakeText.trim() !== ''
+  const parsedStake = parseBankrollMoneyInput(stakeText)
+
+  return {
+    hasValue,
+    isInvalid: hasValue && parsedStake === null,
+    parsedStake,
+  }
+}
+
+const formatActualStakeForReview = (stake, currency) => {
+  const { parsedStake } = getStakeInputState(stake)
+
+  return parsedStake === null
+    ? 'Enter stake'
+    : formatKellyCurrency(parsedStake, currency)
+}
+
+const createDescribedBy = (...ids) => ids.filter(Boolean).join(' ') || undefined
+
+const getMaximumStakeAmountText = (comparison, currency) =>
+  comparison.maximumStakeAmount === null
+    ? 'Not available'
+    : formatKellyCurrency(comparison.maximumStakeAmount, currency)
+
+function MaximumStakeWarning({
+  comparison,
+  currency,
+  id,
+  review = false,
+}) {
+  if (!comparison.exceedsMaximumStake) {
+    return null
+  }
+
+  const basisLabel =
+    comparison.bankrollBasisLabel?.toLowerCase() ?? 'selected bankroll'
+
+  return (
+    <div
+      className={`manual-stake-warning ${review ? 'review' : ''}`}
+      id={id}
+      role="status"
+    >
+      <strong>Your stake exceeds your configured Maximum Stake.</strong>
+      <span>
+        Maximum based on {basisLabel}:{' '}
+        {formatKellyCurrency(comparison.maximumStakeAmount, currency)}
+      </span>
+      <span>
+        Your stake: {formatKellyCurrency(comparison.actualStakeAmount, currency)}
+      </span>
+      {review ? (
+        <small>
+          Manual stake exceeds your configured Maximum Stake. The bet can still be
+          saved.
+        </small>
+      ) : null}
+    </div>
+  )
+}
+
 function ResultCard({
   awayTeam,
   homeTeam,
@@ -75,6 +141,8 @@ function ResultCard({
   isBetReviewOpen = false,
   onCloseReview,
   onMarketOddsChange,
+  notes = '',
+  onNotesChange,
   onOpenBetTracker,
   onOpenBettingSettings,
   onOpenReview,
@@ -182,10 +250,12 @@ function ResultCard({
         saveStatus={saveStatus}
         selectedMarketSide={selectedMarketSide}
         selectedSide={selectedSide}
+        stake={stake}
         stakeRecommendation={stakeRecommendation}
         onOpenBetTracker={onOpenBetTracker}
         onOpenBettingSettings={onOpenBettingSettings}
         onSelectedSideChange={onSelectedSideChange}
+        onStakeChange={onStakeChange}
         onUseRecommendedStake={onUseRecommendedStake}
       />
 
@@ -213,7 +283,11 @@ function ResultCard({
           <span className="save-analysis-status" role="status">
             {reviewDisabledReason}
           </span>
-        ) : null}
+        ) : (
+          <span className="review-save-helper">
+            Review your selection, stake, and notes before saving.
+          </span>
+        )}
       </div>
 
       {isBetReviewOpen ? (
@@ -224,9 +298,12 @@ function ResultCard({
           saveStatus={saveStatus}
           selectedMarketSide={selectedMarketSide}
           selectedSide={selectedSide}
+          stakeRecommendation={stakeRecommendation}
+          notes={notes}
           stake={stake}
           validSaveSides={validSaveSides}
           onClose={onCloseReview}
+          onNotesChange={onNotesChange}
           onSaveBet={onSaveBet}
           onSelectedSideChange={onSelectedSideChange}
           onStakeChange={onStakeChange}
@@ -245,39 +322,37 @@ function StakeRecommendationCard({
   onOpenBetTracker,
   onOpenBettingSettings,
   onSelectedSideChange,
+  onStakeChange,
   onUseRecommendedStake,
   saveStatus,
   selectedMarketSide,
   selectedSide,
+  stake,
   stakeRecommendation = {},
 }) {
-  const hasEligibleAmount =
-    stakeRecommendation.eligible &&
-    Number(stakeRecommendation.recommendedStakeAmount) > 0
-  const hasStakePercent = Boolean(stakeRecommendation.hasStakePercent)
-  const reasonMessage = getKellyRecommendationReasonMessage(
-    stakeRecommendation,
-  )
+  const presentation = getKellyRecommendationPresentation(stakeRecommendation, {
+    bankrollStatus,
+  })
   const basisLabel =
     stakeRecommendation.bankrollBasisLabel ?? 'Available bankroll'
   const basisText = basisLabel.toLowerCase()
-  const recommendedStakePercent = hasStakePercent
-    ? formatKellyPercent(stakeRecommendation.cappedStakePercent)
-    : '--'
-  const primaryValue = hasEligibleAmount
-    ? formatKellyCurrency(
-        stakeRecommendation.recommendedStakeAmount,
-        stakeRecommendation.currency,
-      )
-    : bankrollStatus === 'loading'
-      ? 'Loading bankroll'
-      : stakeRecommendation.reason === 'BANKROLL_NOT_INITIALIZED'
-        ? 'Bankroll required'
-        : 'No stake'
-  const primaryDetail = hasStakePercent
-    ? `${recommendedStakePercent} of ${basisText}`
-    : 'Kelly stake unavailable'
   const selectedTeamLabel = selectedMarketSide?.team?.name ?? 'Selected side'
+  const currency = stakeRecommendation.currency ?? 'EUR'
+  const stakeInputState = getStakeInputState(stake)
+  const maximumStakeComparison = getMaximumStakeComparison({
+    actualStakeAmount: stakeInputState.parsedStake,
+    recommendation: stakeRecommendation,
+  })
+  const stakeInputHelpId = 'stake-recommendation-your-stake-help'
+  const stakeInputErrorId = 'stake-recommendation-your-stake-error'
+  const stakeMaximumWarningId = 'stake-recommendation-maximum-warning'
+  const stakeCurrencyId = 'stake-recommendation-currency'
+  const stakeInputDescription = createDescribedBy(
+    stakeInputHelpId,
+    stakeCurrencyId,
+    stakeInputState.isInvalid ? stakeInputErrorId : '',
+    maximumStakeComparison.exceedsMaximumStake ? stakeMaximumWarningId : '',
+  )
   const statusNotes = [
     bettingSettingsStatus === 'loading' ? 'Loading betting settings.' : '',
     bankrollStatus === 'loading' ? 'Loading bankroll data.' : '',
@@ -290,7 +365,26 @@ function StakeRecommendationCard({
   ].filter(Boolean)
   const showBankrollSetup =
     stakeRecommendation.reason === 'BANKROLL_NOT_INITIALIZED'
+  const canUseRecommendedStake =
+    presentation.canUseRecommendedStake && saveStatus !== 'saving'
+  const useRecommendedStakeTitle = canUseRecommendedStake
+    ? undefined
+    : presentation.useRecommendedStakeUnavailableReason
+  const primaryDetail =
+    presentation.recommendedPercentText === 'No Kelly recommendation'
+      ? 'Kelly stake is advisory only'
+      : `${presentation.recommendedPercentText} of ${basisText}`
   const details = [
+    {
+      label: 'Recommended Stake %',
+      tone: presentation.canUseRecommendedStake ? 'positive' : '',
+      value: presentation.recommendedPercentText,
+    },
+    {
+      label: 'Recommended Amount',
+      tone: presentation.canUseRecommendedStake ? 'positive' : '',
+      value: presentation.recommendedAmountText,
+    },
     {
       label: 'Model Probability',
       value: formatKellyProbability(stakeRecommendation.modelProbability),
@@ -322,7 +416,9 @@ function StakeRecommendationCard({
       value: formatKellyPercent(stakeRecommendation.maximumStakePercent),
     },
     {
-      label: 'Cap Applied',
+      label: 'Maximum Stake Applied',
+      title:
+        'Yes means the Kelly recommendation was limited by your configured Maximum Stake.',
       tone: stakeRecommendation.capApplied ? 'warning' : '',
       value: stakeRecommendation.capApplied ? 'Yes' : 'No',
     },
@@ -339,26 +435,11 @@ function StakeRecommendationCard({
           )
         : 'Not initialized',
     },
-    {
-      label: 'Recommended Stake %',
-      value: recommendedStakePercent,
-    },
-    {
-      label: 'Recommended Amount',
-      value: hasEligibleAmount
-        ? formatKellyCurrency(
-            stakeRecommendation.recommendedStakeAmount,
-            stakeRecommendation.currency,
-          )
-        : '--',
-    },
   ]
 
   return (
     <section
-      className={`stake-recommendation-panel ${
-        hasEligibleAmount ? 'eligible' : 'ineligible'
-      }`}
+      className={`stake-recommendation-panel ${presentation.statusTone}`}
       aria-label="Stake Recommendation"
     >
       <div className="stake-recommendation-header">
@@ -366,8 +447,8 @@ function StakeRecommendationCard({
           <p className="eyebrow">Stake Recommendation</p>
           <h3>{selectedTeamLabel}</h3>
         </div>
-        <span className="recommendation-badge">
-          {hasEligibleAmount ? 'Stake available' : 'No recommendation'}
+        <span className={`recommendation-badge ${presentation.statusTone}`}>
+          {presentation.statusLabel}
         </span>
       </div>
 
@@ -392,21 +473,67 @@ function StakeRecommendationCard({
         </div>
       ) : null}
 
-      <div className="stake-recommendation-primary">
-        <span>Recommended Stake</span>
-        <strong>{primaryValue}</strong>
-        <small>{primaryDetail}</small>
+      <div className="stake-summary-grid">
+        <section className="recommended-amount-card">
+          <span>Recommended Amount</span>
+          <strong>{presentation.recommendedAmountText}</strong>
+          <small>{primaryDetail}</small>
+        </section>
+
+        <section
+          className={`actual-stake-card ${
+            stakeInputState.isInvalid ? 'invalid' : ''
+          }`}
+          aria-labelledby="stake-recommendation-your-stake-label"
+        >
+          <label
+            id="stake-recommendation-your-stake-label"
+            htmlFor="stake-recommendation-your-stake"
+          >
+            Your Stake
+          </label>
+          <div className="stake-input-row">
+            <input
+              id="stake-recommendation-your-stake"
+              aria-describedby={stakeInputDescription}
+              aria-invalid={stakeInputState.isInvalid}
+              inputMode="decimal"
+              min="0.01"
+              step="0.25"
+              type="number"
+              value={stake}
+              onChange={(event) => onStakeChange?.(event.target.value)}
+            />
+            <span
+              className="currency-label"
+              id={stakeCurrencyId}
+            >
+              {currency}
+            </span>
+          </div>
+          <small id={stakeInputHelpId}>
+            You can follow the Kelly recommendation or enter your own amount.
+          </small>
+          {stakeInputState.isInvalid ? (
+            <small id={stakeInputErrorId} className="stake-input-error" role="alert">
+              Enter a stake greater than 0 with up to two decimals.
+            </small>
+          ) : null}
+        </section>
+
+        <MaximumStakeWarning
+          comparison={maximumStakeComparison}
+          currency={currency}
+          id={stakeMaximumWarningId}
+        />
       </div>
 
-      {reasonMessage ? (
-        <p className="stake-recommendation-message" role="status">
-          {reasonMessage}
-        </p>
-      ) : stakeRecommendation.capApplied ? (
-        <p className="stake-recommendation-message warning" role="status">
-          Stake cap applied.
-        </p>
-      ) : null}
+      <p
+        className={`stake-recommendation-message ${presentation.statusTone}`}
+        role="status"
+      >
+        {presentation.supportingMessage}
+      </p>
 
       {statusNotes.length > 0 ? (
         <div className="stake-recommendation-notes" role="status">
@@ -418,7 +545,11 @@ function StakeRecommendationCard({
 
       <div className="stake-recommendation-grid">
         {details.map((detail) => (
-          <div key={detail.label} className={detail.tone ?? ''}>
+          <div
+            key={detail.label}
+            className={detail.tone ?? ''}
+            title={detail.title}
+          >
             <span>{detail.label}</span>
             <strong>{detail.value}</strong>
           </div>
@@ -429,7 +560,8 @@ function StakeRecommendationCard({
         <button
           className="save-analysis-button"
           type="button"
-          disabled={!hasEligibleAmount || saveStatus === 'saving'}
+          disabled={!canUseRecommendedStake}
+          title={useRecommendedStakeTitle}
           onClick={onUseRecommendedStake}
         >
           Use Recommended Stake
@@ -627,7 +759,9 @@ function ModelDetails({ awayTeam, homeTeam, result }) {
 }
 
 function BetReviewPanel({
+  notes = '',
   onClose,
+  onNotesChange,
   onSaveBet,
   onSelectedSideChange,
   onStakeChange,
@@ -638,6 +772,7 @@ function BetReviewPanel({
   selectedMarketSide,
   selectedSide,
   stake,
+  stakeRecommendation = {},
   validSaveSides,
 }) {
   const selectedMarketOdds = parseMarketOdds(selectedMarketSide.marketOddsValue)
@@ -648,6 +783,31 @@ function BetReviewPanel({
   const statusTone = modelStatusClass(selectedModelStatus)
   const warning = getStatusWarning(selectedModelStatus)
   const showSidePicker = validSaveSides.length > 1
+  const presentation = getKellyRecommendationPresentation(stakeRecommendation)
+  const currency = stakeRecommendation.currency ?? 'EUR'
+  const stakeInputState = getStakeInputState(stake)
+  const maximumStakeComparison = getMaximumStakeComparison({
+    actualStakeAmount: stakeInputState.parsedStake,
+    recommendation: stakeRecommendation,
+  })
+  const reviewStakeHelpId = 'save-bet-stake-help'
+  const reviewStakeErrorId = 'save-bet-stake-error'
+  const reviewMaximumWarningId = 'save-bet-maximum-warning'
+  const reviewCurrencyId = 'save-bet-stake-currency'
+  const reviewStakeDescription = createDescribedBy(
+    reviewStakeHelpId,
+    reviewCurrencyId,
+    stakeInputState.isInvalid ? reviewStakeErrorId : '',
+    maximumStakeComparison.exceedsMaximumStake ? reviewMaximumWarningId : '',
+  )
+  const actualStakeText = formatActualStakeForReview(stake, currency)
+  const kellyRecommendationText = presentation.canUseRecommendedStake
+    ? presentation.recommendedAmountText
+    : 'None'
+  const configuredMaximumText = getMaximumStakeAmountText(
+    maximumStakeComparison,
+    currency,
+  )
 
   return (
     <section className="save-bet-panel" aria-label="Review and save bet">
@@ -682,6 +842,10 @@ function BetReviewPanel({
 
       <div className="save-review-grid">
         <ReviewMetric label="Selected team" value={selectedMarketSide.team.name} />
+        <ReviewMetric
+          label="Selected side"
+          value={selectedSide === 'home' ? 'Home' : 'Away'}
+        />
         <ReviewMetric label="Model status" value={selectedModelStatus} />
         <ReviewMetric
           label="Market odds"
@@ -701,6 +865,15 @@ function BetReviewPanel({
           value={formatProbabilityEdge(selectedMarketSide.market.probabilityEdge)}
         />
         <ReviewMetric
+          label="Kelly recommendation"
+          value={kellyRecommendationText}
+        />
+        <ReviewMetric label="Your stake" value={actualStakeText} />
+        <ReviewMetric
+          label="Configured maximum"
+          value={configuredMaximumText}
+        />
+        <ReviewMetric
           label="Expected value"
           value={formatExpectedValue(selectedMarketSide.market.expectedValue)}
         />
@@ -713,15 +886,48 @@ function BetReviewPanel({
       ) : null}
 
       <label className="field stake-field" htmlFor="save-bet-stake">
-        <span>Stake</span>
-        <input
-          id="save-bet-stake"
-          type="number"
-          min="0.01"
-          step="0.25"
-          value={stake}
-          inputMode="decimal"
-          onChange={(event) => onStakeChange(event.target.value)}
+        <span>
+          Your Stake
+        </span>
+        <div className="stake-input-row">
+          <input
+            id="save-bet-stake"
+            aria-describedby={reviewStakeDescription}
+            aria-invalid={stakeInputState.isInvalid}
+            type="number"
+            min="0.01"
+            step="0.25"
+            value={stake}
+            inputMode="decimal"
+            onChange={(event) => onStakeChange?.(event.target.value)}
+          />
+          <span className="currency-label" id={reviewCurrencyId}>
+            {currency}
+          </span>
+        </div>
+        <small id={reviewStakeHelpId}>
+          This is the actual stake that will be saved with the bet.
+        </small>
+        {stakeInputState.isInvalid ? (
+          <small id={reviewStakeErrorId} className="stake-input-error" role="alert">
+            Enter a stake greater than 0 with up to two decimals.
+          </small>
+        ) : null}
+      </label>
+
+      <MaximumStakeWarning
+        comparison={maximumStakeComparison}
+        currency={currency}
+        id={reviewMaximumWarningId}
+        review
+      />
+
+      <label className="field tracker-field save-bet-notes" htmlFor="save-bet-notes">
+        <span>Notes</span>
+        <textarea
+          id="save-bet-notes"
+          value={notes}
+          onChange={(event) => onNotesChange?.(event.target.value)}
         />
       </label>
 

@@ -7,6 +7,7 @@ import { NHL_TEAMS } from '../data/teams.js'
 import { getBankrollSummary } from '../services/bankrollApi.js'
 import { createBet, fetchBets } from '../services/betsApi.js'
 import { getBettingSettings } from '../services/bettingSettingsApi.js'
+import { parseBankrollMoneyInput } from '../utils/bankroll.js'
 import {
   fetchTeamGoalieSummaries,
   fetchTeamRoster,
@@ -124,7 +125,8 @@ function GameAnalyzer({
   const [saveMessage, setSaveMessage] = useState('')
   const [selectedSaveSide, setSelectedSaveSide] = useState('home')
   const [isBetReviewOpen, setIsBetReviewOpen] = useState(false)
-  const [stake, setStake] = useState('1')
+  const [stake, setStake] = useState('')
+  const [betNotes, setBetNotes] = useState('')
   const [bettingSettings, setBettingSettings] = useState(() =>
     normalizeBettingSettings(DEFAULT_BETTING_SETTINGS),
   )
@@ -249,8 +251,9 @@ function GameAnalyzer({
 
   const selectedMarket = selectedSaveSide === 'home' ? homeMarket : awayMarket
   const selectedMarketOdds = selectedMarket.marketOdds
-  const stakeValue = Number(stake)
-  const isStakeValid = Number.isFinite(stakeValue) && stakeValue > 0
+  const parsedStake = parseBankrollMoneyInput(stake)
+  const stakeValue = parsedStake ?? 0
+  const isStakeValid = parsedStake !== null
   const hasValidModelProbability =
     Number.isFinite(selectedMarket.modelProbability) &&
     selectedMarket.modelProbability > 0 &&
@@ -261,9 +264,9 @@ function GameAnalyzer({
     ? 'Add valid market odds for the selected side.'
     : !hasValidModelProbability
       ? 'Model probability is unavailable for the selected side.'
-        : !isStakeValid
-          ? 'Enter a stake greater than 0.'
-          : ''
+      : !isStakeValid
+        ? 'Enter a stake greater than 0 with up to two decimals.'
+        : ''
 
   const loadBankrollSummary = useCallback(async ({ shouldApply } = {}) => {
     const canApply = () =>
@@ -550,8 +553,7 @@ function GameAnalyzer({
       formatStakeInputValue(selectedStakeRecommendation.recommendedStakeAmount),
     )
     setSaveStatus('idle')
-    setSaveMessage('Recommended stake applied. Review before saving.')
-    setIsBetReviewOpen(true)
+    setSaveMessage('Recommended stake copied to Your Stake.')
   }
 
   const handleOpenBetTracker = () => {
@@ -596,6 +598,7 @@ function GameAnalyzer({
         kellyRecommendation: createKellyRecommendationSnapshot(
           selectedStakeRecommendation,
         ),
+        notes: betNotes,
         stake: stakeValue,
       })
       const existingBets = normalizeBets(await fetchBets())
@@ -755,8 +758,14 @@ function GameAnalyzer({
           onOpenBetTracker={handleOpenBetTracker}
           onOpenBettingSettings={handleOpenBettingSettings}
           onMarketOddsChange={handleMarketOddsChange}
+          notes={betNotes}
           onOpenReview={openBetReview}
           onSaveBet={handleSaveBet}
+          onNotesChange={(value) => {
+            setSaveStatus('idle')
+            setSaveMessage('')
+            setBetNotes(value)
+          }}
           onSelectedSideChange={(side) => {
             setSaveStatus('idle')
             setSaveMessage('')

@@ -589,6 +589,7 @@ function AuthenticatedApp({ authUser, onLogout }) {
           injurySummaryError={injurySummaryError}
           injurySummaryStatus={injurySummaryStatus}
           onAnalyzeGame={handleAnalyzeGame}
+          onNavigate={navigateToPage}
           onRetryInjuries={retryInjurySummaries}
           onRetryPowerRatings={retryPowerRatings}
           onRetryRatingEngineSettings={retryRatingEngineSettings}

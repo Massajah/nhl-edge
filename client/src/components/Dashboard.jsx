@@ -4,6 +4,17 @@ import {
   fetchTodaysGames,
   isUsingMockGames,
 } from '../services/scheduleApi.js'
+import { getBankrollSummary } from '../services/bankrollApi.js'
+import { fetchBets } from '../services/betsApi.js'
+import { getBettingSettings } from '../services/bettingSettingsApi.js'
+import {
+  formatBankrollCurrency,
+  formatSignedBankrollCurrency,
+} from '../utils/bankroll.js'
+import {
+  DEFAULT_BETTING_SETTINGS,
+  normalizeBettingSettings,
+} from '../utils/bettingSettings.js'
 import {
   formatInjuryImpact,
   getTeamInjurySummary,
@@ -17,35 +28,34 @@ import {
   MODEL_STATUSES,
   PROBABILITY_EDGE_HELP_TEXT,
 } from '../utils/calculateGame.js'
-
-const toDateValue = (date) => {
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
-
-  return `${year}-${month}-${day}`
-}
-
-const parseDateValue = (date) => {
-  const [year, month, day] = date.split('-').map(Number)
-  const parsedDate = new Date(year, month - 1, day, 12)
-
-  return Number.isNaN(parsedDate.getTime()) ? new Date() : parsedDate
-}
-
-const shiftDate = (date, dayCount) => {
-  const nextDate = parseDateValue(date)
-  nextDate.setDate(nextDate.getDate() + dayCount)
-
-  return toDateValue(nextDate)
-}
+import {
+  DASHBOARD_GAME_STATUSES,
+  buildLastNightBettingSummary,
+  buildOpenBetSummary,
+  buildTodayActivitySummary,
+  getDashboardDateContextLabels,
+  getBetProfit,
+  getBetsForGames,
+  getDashboardCurrency,
+  getDashboardGameStatus,
+  getModelLean,
+  getPreviousLocalDateValue,
+  getWinner,
+  groupBetsByGameId,
+  isGameFinal,
+  isGameStarted,
+  shiftLocalDateValue,
+  toLocalDateValue,
+  parseLocalDateValue,
+} from '../utils/dashboard.js'
+import { normalizeBets } from '../utils/savedAnalyses.js'
 
 const formatScheduleDate = (date) => {
   if (!date) {
     return 'Select a date'
   }
 
-  const scheduleDate = parseDateValue(date)
+  const scheduleDate = parseLocalDateValue(date)
 
   return new Intl.DateTimeFormat(undefined, {
     day: 'numeric',
@@ -62,7 +72,7 @@ const formatStartTime = (startTimeUTC, scheduleDate) => {
     return 'Time TBD'
   }
 
-  const localDate = toDateValue(startTime)
+  const localDate = toLocalDateValue(startTime)
   const includeLocalDate = localDate !== scheduleDate
 
   return new Intl.DateTimeFormat(undefined, {
@@ -95,10 +105,6 @@ const getStatusTone = (status = '') => {
 const hasScore = (team = {}) => Number.isFinite(team.score)
 
 const hasGameScore = (game) => hasScore(game.homeTeam) && hasScore(game.awayTeam)
-
-const notStartedGameStates = new Set(['FUT', 'PRE'])
-
-const isNotStartedGame = (game) => notStartedGameStates.has(game.gameState)
 
 const formatOdds = (value) =>
   Number.isFinite(value) ? value.toFixed(2) : '--'
@@ -133,12 +139,92 @@ const getValueStatusTone = (analysis) => {
   return 'no-value'
 }
 
+const getGameId = (gameOrBet = {}) =>
+  String(gameOrBet.gameId ?? gameOrBet.id ?? '').trim()
+
+const formatDashboardCurrency = (value, currency) =>
+  formatBankrollCurrency(value, currency)
+
+const formatSignedDashboardCurrency = (value, currency) =>
+  formatSignedBankrollCurrency(value, currency)
+
+const formatSavedBetOdds = (value) =>
+  Number.isFinite(value) && value > 1 ? `@ ${value.toFixed(2)}` : 'Odds --'
+
+const getBetTeamName = (bet = {}) =>
+  bet.selectedTeam?.name ||
+  bet.selectedSide?.name ||
+  bet.team ||
+  'Selected team'
+
+const getBetResultPresentation = (result) => {
+  if (result === 'win') {
+    return {
+      label: 'Bet won',
+      tone: 'positive',
+    }
+  }
+
+  if (result === 'loss') {
+    return {
+      label: 'Bet lost',
+      tone: 'negative',
+    }
+  }
+
+  if (result === 'push') {
+    return {
+      label: 'Bet pushed',
+      tone: 'neutral',
+    }
+  }
+
+  if (result === 'void') {
+    return {
+      label: 'Bet void',
+      tone: 'neutral',
+    }
+  }
+
+  return {
+    label: 'Settlement pending',
+    tone: 'pending',
+  }
+}
+
+const getProfitTone = (value) => {
+  if (value > 0) {
+    return 'positive'
+  }
+
+  if (value < 0) {
+    return 'negative'
+  }
+
+  return 'neutral'
+}
+
 function Dashboard({
   baseHomeAdvantage = 0,
   injurySummaries,
   injurySummaryError,
   injurySummaryStatus,
+  initialBankrollSummary = null,
+  initialBankrollError = '',
+  initialBankrollStatus = null,
+  initialBets = null,
+  initialBetsError = '',
+  initialBetsStatus = null,
+  initialBettingSettings = null,
+  initialBettingSettingsError = '',
+  initialBettingSettingsStatus = null,
+  initialMarketOdds = null,
+  initialPreviousSchedule = null,
+  initialPreviousError = '',
+  initialPreviousStatus = null,
+  initialSchedule = null,
   onAnalyzeGame,
+  onNavigate,
   onRetryInjuries,
   onRetryPowerRatings,
   onRetryRatingEngineSettings,
@@ -147,16 +233,49 @@ function Dashboard({
   powerRatingsStatus,
   ratingEngineSettingsError,
   ratingEngineSettingsStatus,
+  todayDateValue = toLocalDateValue(new Date()),
 }) {
-  const [selectedDate, setSelectedDate] = useState('')
+  const [selectedDate, setSelectedDate] = useState(initialSchedule?.date ?? '')
   const [schedule, setSchedule] = useState({
-    date: '',
-    games: [],
+    date: initialSchedule?.date ?? '',
+    games: initialSchedule?.games ?? [],
   })
-  const [status, setStatus] = useState('loading')
+  const [previousSchedule, setPreviousSchedule] = useState({
+    date: initialPreviousSchedule?.date ?? '',
+    games: initialPreviousSchedule?.games ?? [],
+  })
+  const [status, setStatus] = useState(initialSchedule ? 'success' : 'loading')
   const [errorMessage, setErrorMessage] = useState('')
+  const [previousStatus, setPreviousStatus] = useState(
+    initialPreviousStatus ??
+      (initialPreviousSchedule ? 'success' : 'loading'),
+  )
+  const [previousErrorMessage, setPreviousErrorMessage] =
+    useState(initialPreviousError)
+  const [bankrollSummary, setBankrollSummary] = useState(initialBankrollSummary)
+  const [bankrollStatus, setBankrollStatus] = useState(
+    initialBankrollStatus ??
+      (initialBankrollSummary ? 'success' : 'loading'),
+  )
+  const [bankrollError, setBankrollError] = useState(initialBankrollError)
+  const [bets, setBets] = useState(() => normalizeBets(initialBets ?? []))
+  const [betsStatus, setBetsStatus] = useState(
+    initialBetsStatus ?? (initialBets ? 'success' : 'loading'),
+  )
+  const [betsError, setBetsError] = useState(initialBetsError)
+  const [bettingSettings, setBettingSettings] = useState(() =>
+    normalizeBettingSettings(initialBettingSettings ?? DEFAULT_BETTING_SETTINGS),
+  )
+  const [bettingSettingsStatus, setBettingSettingsStatus] =
+    useState(
+      initialBettingSettingsStatus ??
+        (initialBettingSettings ? 'success' : 'loading'),
+    )
+  const [bettingSettingsError, setBettingSettingsError] = useState(
+    initialBettingSettingsError,
+  )
   const [marketOddsByGame, setMarketOddsByGame] = useState(() =>
-    loadDashboardMarketOdds(),
+    initialMarketOdds ?? loadDashboardMarketOdds(),
   )
 
   const applySchedule = useCallback((nextSchedule, fallbackDate = '') => {
@@ -170,6 +289,74 @@ function Dashboard({
     setStatus('success')
   }, [])
 
+  const loadPreviousSchedule = useCallback(async (date) => {
+    const previousDate = getPreviousLocalDateValue(date)
+
+    setPreviousStatus('loading')
+    setPreviousErrorMessage('')
+
+    try {
+      const nextSchedule = await fetchGamesForDate(previousDate)
+      const nextDate = nextSchedule.date ?? previousDate
+
+      setPreviousSchedule({
+        date: nextDate,
+        games: nextSchedule.games ?? [],
+      })
+      setPreviousStatus('success')
+    } catch (error) {
+      setPreviousSchedule({
+        date: previousDate,
+        games: [],
+      })
+      setPreviousStatus('error')
+      setPreviousErrorMessage(error.message)
+    }
+  }, [])
+
+  const loadAccountData = useCallback(async () => {
+    setBankrollStatus('loading')
+    setBankrollError('')
+    setBetsStatus('loading')
+    setBetsError('')
+    setBettingSettingsStatus('loading')
+    setBettingSettingsError('')
+
+    const [bankrollResult, betsResult, settingsResult] =
+      await Promise.allSettled([
+        getBankrollSummary(),
+        fetchBets(),
+        getBettingSettings(),
+      ])
+
+    if (bankrollResult.status === 'fulfilled') {
+      setBankrollSummary(bankrollResult.value)
+      setBankrollStatus('success')
+    } else {
+      setBankrollSummary(null)
+      setBankrollStatus('error')
+      setBankrollError(bankrollResult.reason.message)
+    }
+
+    if (betsResult.status === 'fulfilled') {
+      setBets(normalizeBets(betsResult.value))
+      setBetsStatus('success')
+    } else {
+      setBets([])
+      setBetsStatus('error')
+      setBetsError(betsResult.reason.message)
+    }
+
+    if (settingsResult.status === 'fulfilled') {
+      setBettingSettings(normalizeBettingSettings(settingsResult.value.settings))
+      setBettingSettingsStatus('success')
+    } else {
+      setBettingSettings(normalizeBettingSettings(DEFAULT_BETTING_SETTINGS))
+      setBettingSettingsStatus('error')
+      setBettingSettingsError(settingsResult.reason.message)
+    }
+  }, [])
+
   const loadScheduleForDate = useCallback(
     async (date) => {
       setSelectedDate(date)
@@ -179,12 +366,13 @@ function Dashboard({
       try {
         const nextSchedule = await fetchGamesForDate(date)
         applySchedule(nextSchedule, date)
+        await loadPreviousSchedule(nextSchedule.date ?? date)
       } catch (error) {
         setStatus('error')
         setErrorMessage(error.message)
       }
     },
-    [applySchedule],
+    [applySchedule, loadPreviousSchedule],
   )
 
   const loadTodaySchedule = useCallback(async () => {
@@ -193,12 +381,13 @@ function Dashboard({
 
     try {
       const nextSchedule = await fetchTodaysGames()
-      applySchedule(nextSchedule, toDateValue(new Date()))
+      applySchedule(nextSchedule, toLocalDateValue(new Date()))
+      await loadPreviousSchedule(nextSchedule.date ?? toLocalDateValue(new Date()))
     } catch (error) {
       setStatus('error')
       setErrorMessage(error.message)
     }
-  }, [applySchedule])
+  }, [applySchedule, loadPreviousSchedule])
 
   useEffect(() => {
     let isCurrent = true
@@ -211,7 +400,8 @@ function Dashboard({
           return
         }
 
-        applySchedule(todaySchedule, toDateValue(new Date()))
+        applySchedule(todaySchedule, toLocalDateValue(new Date()))
+        loadPreviousSchedule(todaySchedule.date ?? toLocalDateValue(new Date()))
       } catch (error) {
         if (!isCurrent) {
           return
@@ -227,9 +417,30 @@ function Dashboard({
     return () => {
       isCurrent = false
     }
-  }, [applySchedule])
+  }, [applySchedule, loadPreviousSchedule])
+
+  useEffect(() => {
+    const timerId = setTimeout(() => {
+      loadAccountData()
+    }, 0)
+
+    return () => {
+      clearTimeout(timerId)
+    }
+  }, [loadAccountData])
 
   const displayDate = selectedDate || schedule.date
+  const dateContextLabels = useMemo(
+    () =>
+      getDashboardDateContextLabels({
+        selectedDateValue: displayDate,
+        todayDateValue,
+      }),
+    [displayDate, todayDateValue],
+  )
+  const gamesSectionTitle = `${dateContextLabels.gamesTitlePrefix}${formatScheduleDate(
+    displayDate,
+  )}`
 
   const scheduleSummary = useMemo(() => {
     if (status === 'loading') {
@@ -244,6 +455,110 @@ function Dashboard({
       schedule.games.length === 1 ? 'game' : 'games'
     }`
   }, [schedule.games.length, status])
+  const headerStatusSummary =
+    status === 'loading' || status === 'error' ? scheduleSummary : ''
+  const previousDate = previousSchedule.date || getPreviousLocalDateValue(displayDate)
+  const canUsePowerRatings = powerRatingsStatus === 'success'
+  const canUseInjurySummaries = injurySummaryStatus === 'success'
+  const canUseRatingEngineSettings = ratingEngineSettingsStatus === 'success'
+  const canUseModel =
+    canUsePowerRatings && canUseInjurySummaries && canUseRatingEngineSettings
+  const betsByGameId = useMemo(() => groupBetsByGameId(bets), [bets])
+  const currency = getDashboardCurrency(bankrollSummary)
+  const openBetSummary = useMemo(() => buildOpenBetSummary(bets), [bets])
+  const dashboardGames = useMemo(
+    () =>
+      schedule.games.map((game) => {
+        const normalizedMarketOdds = {
+          away: marketOddsByGame[game.gameId]?.away ?? '',
+          home: marketOddsByGame[game.gameId]?.home ?? '',
+        }
+        const preliminaryAnalysis =
+          !isGameStarted(game) && canUseModel
+            ? calculatePreliminaryAnalysis({
+                awayTeamId: game.awayTeam.abbreviation,
+                baseHomeAdvantage,
+                homeTeamId: game.homeTeam.abbreviation,
+                injurySummaries,
+                marketOdds: normalizedMarketOdds,
+                powerRatings,
+              })
+            : null
+        const savedBets = betsByGameId[String(game.gameId)] ?? []
+        const dashboardStatus = getDashboardGameStatus({
+          analysis: preliminaryAnalysis,
+          awayTeam: game.awayTeam,
+          bankrollSummary,
+          bettingSettings,
+          game,
+          homeTeam: game.homeTeam,
+          savedBets,
+        })
+
+        return {
+          canAnalyze: canUseModel,
+          dashboardStatus,
+          game,
+          marketOdds: normalizedMarketOdds,
+          modelLean: getModelLean(
+            preliminaryAnalysis,
+            game.awayTeam,
+            game.homeTeam,
+          ),
+          preliminaryAnalysis,
+          savedBets,
+        }
+      }),
+    [
+      bankrollSummary,
+      baseHomeAdvantage,
+      bettingSettings,
+      betsByGameId,
+      canUseModel,
+      injurySummaries,
+      marketOddsByGame,
+      powerRatings,
+      schedule.games,
+    ],
+  )
+  const todayActivitySummary = useMemo(
+    () =>
+      buildTodayActivitySummary({
+        bets,
+        gameStatuses: dashboardGames.map(
+          (dashboardGame) => dashboardGame.dashboardStatus,
+        ),
+        games: schedule.games,
+        preliminaryAnalyses: dashboardGames.map(
+          (dashboardGame) => dashboardGame.preliminaryAnalysis,
+        ),
+      }),
+    [bets, dashboardGames, schedule.games],
+  )
+  const todaySavedBets = useMemo(
+    () => getBetsForGames(bets, schedule.games),
+    [bets, schedule.games],
+  )
+  const selectedDaySavedBetSummary =
+    betsStatus === 'loading'
+      ? 'Loading saved bets'
+      : todaySavedBets.length === 0
+        ? `No bets saved for ${dateContextLabels.gameBetsLabel}.`
+        : `${todaySavedBets.length} ${
+            todaySavedBets.length === 1 ? 'bet saved' : 'bets saved'
+          }`
+  const previousCompletedGames = useMemo(
+    () => previousSchedule.games.filter(isGameFinal),
+    [previousSchedule.games],
+  )
+  const previousBets = useMemo(
+    () => getBetsForGames(bets, previousSchedule.games),
+    [bets, previousSchedule.games],
+  )
+  const lastNightBettingSummary = useMemo(
+    () => buildLastNightBettingSummary(previousBets),
+    [previousBets],
+  )
 
   const handleDateChange = (event) => {
     const nextDate = event.target.value
@@ -254,7 +569,9 @@ function Dashboard({
   }
 
   const handleShiftDate = (dayCount) => {
-    loadScheduleForDate(shiftDate(displayDate || toDateValue(new Date()), dayCount))
+    loadScheduleForDate(
+      shiftLocalDateValue(displayDate || toLocalDateValue(new Date()), dayCount),
+    )
   }
 
   const handleRetry = () => {
@@ -264,6 +581,15 @@ function Dashboard({
     }
 
     loadTodaySchedule()
+  }
+
+  const handleRefreshDashboard = () => {
+    handleRetry()
+    loadAccountData()
+  }
+
+  const handleViewBets = () => {
+    onNavigate?.('tracker')
   }
 
   const handleMarketOddsChange = (gameId, side, value) => {
@@ -297,8 +623,18 @@ function Dashboard({
             </div>
             <h2>{formatScheduleDate(displayDate)}</h2>
           </div>
-          <span>{scheduleSummary}</span>
+          {headerStatusSummary ? <span>{headerStatusSummary}</span> : null}
         </div>
+
+        <DashboardSummary
+          bankrollError={bankrollError}
+          bankrollStatus={bankrollStatus}
+          bankrollSummary={bankrollSummary}
+          betsError={betsError}
+          betsStatus={betsStatus}
+          currency={currency}
+          openBetSummary={openBetSummary}
+        />
 
         <div className="schedule-toolbar" aria-label="Schedule date controls">
           <button type="button" onClick={() => handleShiftDate(-1)}>
@@ -322,6 +658,10 @@ function Dashboard({
           <button type="button" onClick={loadTodaySchedule}>
             Today
           </button>
+
+          <button type="button" onClick={handleRefreshDashboard}>
+            Refresh
+          </button>
         </div>
 
         <PowerRatingsNotice
@@ -340,52 +680,227 @@ function Dashboard({
           status={injurySummaryStatus}
         />
 
-        {status === 'loading' ? <ScheduleLoadingState /> : null}
+        <div className="dashboard-daily-layout">
+          <main
+            className="dashboard-today-column"
+            aria-labelledby="dashboard-games-heading"
+          >
+            <div className="dashboard-section-heading dashboard-today-heading">
+              <div>
+                <p className="eyebrow">{dateContextLabels.gamesEyebrow}</p>
+                <h3 id="dashboard-games-heading">{gamesSectionTitle}</h3>
+              </div>
+              <span>{selectedDaySavedBetSummary}</span>
+            </div>
 
-        {status === 'error' ? (
-          <div className="schedule-state error-state" role="alert">
-            <strong>Schedule unavailable</strong>
-            <p>{errorMessage}</p>
-            <button type="button" onClick={handleRetry}>
-              Try again
-            </button>
-          </div>
-        ) : null}
+            <TodayActivitySummary
+              ariaLabel={dateContextLabels.activityAriaLabel}
+              betsStatus={betsStatus}
+              summary={todayActivitySummary}
+            />
 
-        {status === 'success' && schedule.games.length === 0 ? (
-          <p className="empty-state">
-            No NHL games scheduled for {formatScheduleDate(displayDate)}.
-          </p>
-        ) : null}
+            {bettingSettingsStatus === 'error' ? (
+              <p className="dashboard-data-warning" role="status">
+                Betting settings unavailable. Candidate counts are using default
+                thresholds. {bettingSettingsError}
+              </p>
+            ) : null}
 
-        {status === 'success' && schedule.games.length > 0 ? (
-          <div className="schedule-grid">
-            {schedule.games.map((game) => (
-              <GameCard
-                game={game}
-                key={game.gameId}
-                baseHomeAdvantage={baseHomeAdvantage}
-                marketOdds={marketOddsByGame[game.gameId]}
-                onMarketOddsChange={handleMarketOddsChange}
-                onAnalyzeGame={onAnalyzeGame}
-                injurySummaries={injurySummaries}
-                injurySummaryStatus={injurySummaryStatus}
-                powerRatings={powerRatings}
-                powerRatingsStatus={powerRatingsStatus}
-                ratingEngineSettingsStatus={ratingEngineSettingsStatus}
-                scheduleDate={displayDate}
-              />
-            ))}
-          </div>
-        ) : null}
+            {status === 'loading' ? (
+              <ScheduleLoadingState className="dashboard-today-games-grid" />
+            ) : null}
+
+            {status === 'error' ? (
+              <div className="schedule-state error-state" role="alert">
+                <strong>Schedule unavailable</strong>
+                <p>{errorMessage}</p>
+                <button type="button" onClick={handleRetry}>
+                  Try again
+                </button>
+              </div>
+            ) : null}
+
+            {status === 'success' && schedule.games.length === 0 ? (
+              <p className="empty-state">
+                No NHL games scheduled for {formatScheduleDate(displayDate)}.
+              </p>
+            ) : null}
+
+            {status === 'success' && schedule.games.length > 0 ? (
+              <div className="dashboard-today-games-grid">
+                {dashboardGames.map((dashboardGame) => (
+                  <GameCard
+                    dashboardGame={dashboardGame}
+                    key={dashboardGame.game.gameId}
+                    currency={currency}
+                    onMarketOddsChange={handleMarketOddsChange}
+                    onAnalyzeGame={onAnalyzeGame}
+                    onViewBets={handleViewBets}
+                    injurySummaries={injurySummaries}
+                    injurySummaryStatus={injurySummaryStatus}
+                    scheduleDate={displayDate}
+                  />
+                ))}
+              </div>
+            ) : null}
+          </main>
+
+          <aside className="dashboard-last-night-column">
+            <LastNightSection
+              betsByGameId={betsByGameId}
+              currency={currency}
+              date={previousDate}
+              eyebrow={dateContextLabels.previousEyebrow}
+              games={previousCompletedGames}
+              onRetry={() => loadPreviousSchedule(displayDate)}
+              onViewBets={handleViewBets}
+              status={previousStatus}
+              errorMessage={previousErrorMessage}
+              bettingSummary={lastNightBettingSummary}
+            />
+          </aside>
+        </div>
       </div>
     </section>
   )
 }
 
-function ScheduleLoadingState() {
+function DashboardSummary({
+  bankrollError,
+  bankrollStatus,
+  bankrollSummary,
+  betsError,
+  betsStatus,
+  currency,
+  openBetSummary,
+}) {
+  const isBankrollLoading = bankrollStatus === 'loading'
+  const isBankrollError = bankrollStatus === 'error'
+  const isInitialized = Boolean(bankrollSummary?.initialized)
+  const bankrollUnavailableText = isBankrollLoading
+    ? 'Loading'
+    : isBankrollError
+      ? 'Unavailable'
+      : 'Bankroll not set up'
+  const openBetsValue =
+    betsStatus === 'loading'
+      ? 'Loading'
+      : betsStatus === 'error'
+        ? 'Unavailable'
+        : String(openBetSummary.openBetCount)
+
   return (
-    <div className="schedule-grid" aria-label="Loading schedule">
+    <section
+      className="dashboard-bankroll-section"
+      aria-labelledby="dashboard-bankroll-heading"
+    >
+      <div className="dashboard-section-heading dashboard-bankroll-heading">
+        <div>
+          <p className="eyebrow">Bankroll</p>
+          <h3 id="dashboard-bankroll-heading">Bankroll Overview</h3>
+        </div>
+      </div>
+
+      <div className="dashboard-bankroll-grid">
+        <DashboardMetricCard
+          label="Current Bankroll"
+          value={
+            isInitialized
+              ? formatBankrollCurrency(bankrollSummary.currentBankroll, currency)
+              : bankrollUnavailableText
+          }
+          detail={
+            isBankrollError
+              ? bankrollError
+              : isInitialized
+                ? 'Settled bankroll balance'
+                : 'Set up bankroll in Bet Tracker'
+          }
+        />
+        <DashboardMetricCard
+          label="Available Bankroll"
+          value={
+            isInitialized
+              ? formatBankrollCurrency(bankrollSummary.availableBankroll, currency)
+              : bankrollUnavailableText
+          }
+          detail={isInitialized ? 'Current minus pending exposure' : ''}
+        />
+        <DashboardMetricCard
+          label="Pending Exposure"
+          tone={isInitialized && bankrollSummary.pendingStake > 0 ? 'warning' : ''}
+          value={
+            isInitialized
+              ? formatBankrollCurrency(bankrollSummary.pendingStake, currency)
+              : bankrollUnavailableText
+          }
+          detail={isInitialized ? 'Open stakes from Bet Tracker' : ''}
+        />
+        <DashboardMetricCard
+          label="Open Bets"
+          value={openBetsValue}
+          detail={
+            betsStatus === 'error'
+              ? betsError
+              : betsStatus === 'success'
+                ? `${formatBankrollCurrency(
+                    openBetSummary.pendingExposure,
+                    currency,
+                  )} pending exposure`
+                : ''
+          }
+        />
+      </div>
+    </section>
+  )
+}
+
+function TodayActivitySummary({ ariaLabel, betsStatus, summary }) {
+  const items = [
+    {
+      label: 'Games',
+      value: String(summary.gameCount),
+    },
+    {
+      label: 'Analyzed',
+      value: String(summary.analyzedCount),
+    },
+    {
+      label: 'Candidates',
+      tone: summary.candidateCount > 0 ? 'positive' : '',
+      value: String(summary.candidateCount),
+    },
+    {
+      label: 'Bets saved',
+      value: betsStatus === 'loading' ? 'Loading' : String(summary.savedBetCount),
+    },
+  ]
+
+  return (
+    <section className="today-activity-strip" aria-label={ariaLabel}>
+      {items.map((item) => (
+        <div className={`today-activity-stat ${item.tone ?? ''}`} key={item.label}>
+          <strong>{item.value}</strong>
+          <span>{item.label}</span>
+        </div>
+      ))}
+    </section>
+  )
+}
+
+function DashboardMetricCard({ detail = '', label, tone = '', value }) {
+  return (
+    <div className={`dashboard-metric-card ${tone}`}>
+      <span>{label}</span>
+      <strong>{value}</strong>
+      {detail ? <small>{detail}</small> : null}
+    </div>
+  )
+}
+
+function ScheduleLoadingState({ className = 'schedule-grid' }) {
+  return (
+    <div className={className} aria-label="Loading schedule">
       {[0, 1, 2].map((item) => (
         <div className="schedule-card schedule-card-loading" key={item}>
           <span />
@@ -399,26 +914,39 @@ function ScheduleLoadingState() {
 }
 
 function GameCard({
-  baseHomeAdvantage,
-  game,
+  currency,
+  dashboardGame,
   injurySummaries,
   injurySummaryStatus,
-  marketOdds = {},
   onAnalyzeGame,
   onMarketOddsChange,
-  powerRatings,
-  powerRatingsStatus,
-  ratingEngineSettingsStatus,
+  onViewBets,
   scheduleDate,
 }) {
+  const {
+    canAnalyze,
+    dashboardStatus,
+    game,
+    marketOdds,
+    modelLean,
+    preliminaryAnalysis,
+    savedBets,
+  } = dashboardGame
+  const statusPresentation = dashboardStatus?.statusPresentation ?? {
+    label: '',
+    tone: 'neutral',
+  }
   const statusTone = getStatusTone(game.status)
   const showScore = hasGameScore(game)
-  const canUsePowerRatings = powerRatingsStatus === 'success'
   const canUseInjurySummaries = injurySummaryStatus === 'success'
-  const canUseRatingEngineSettings = ratingEngineSettingsStatus === 'success'
-  const canUseModel =
-    canUsePowerRatings && canUseInjurySummaries && canUseRatingEngineSettings
-  const showPreliminaryAnalysis = isNotStartedGame(game) && canUseModel
+  const isCompletedGame =
+    dashboardStatus?.status === DASHBOARD_GAME_STATUSES.FINAL ||
+    isGameFinal(game)
+  const showDashboardStatus =
+    Boolean(statusPresentation.label) &&
+    dashboardStatus?.status !== DASHBOARD_GAME_STATUSES.FINAL
+  const actionLabel =
+    isCompletedGame && savedBets.length > 0 ? 'View Analysis' : 'Analyze Game'
   const awayInjurySummary = getTeamInjurySummary(
     injurySummaries,
     game.awayTeam.abbreviation,
@@ -427,42 +955,27 @@ function GameCard({
     injurySummaries,
     game.homeTeam.abbreviation,
   )
-  const normalizedMarketOdds = useMemo(
-    () => ({
-      away: marketOdds.away ?? '',
-      home: marketOdds.home ?? '',
-    }),
-    [marketOdds.away, marketOdds.home],
-  )
-  const preliminaryAnalysis = useMemo(() => {
-    if (!showPreliminaryAnalysis) {
-      return null
-    }
-
-    return calculatePreliminaryAnalysis({
-      awayTeamId: game.awayTeam.abbreviation,
-      baseHomeAdvantage,
-      homeTeamId: game.homeTeam.abbreviation,
-      injurySummaries,
-      marketOdds: normalizedMarketOdds,
-      powerRatings,
-    })
-  }, [
-    game.awayTeam.abbreviation,
-    game.homeTeam.abbreviation,
-    baseHomeAdvantage,
-    injurySummaries,
-    normalizedMarketOdds,
-    powerRatings,
-    showPreliminaryAnalysis,
-  ])
+  const cardClassName = [
+    'schedule-card',
+    statusPresentation.tone,
+    savedBets.length > 0 ? 'has-saved-bet' : '',
+  ]
+    .filter(Boolean)
+    .join(' ')
 
   return (
-    <article className="schedule-card">
+    <article className={cardClassName}>
       <div className="game-card-top">
-        <span className={`status-pill game-status ${statusTone}`}>
-          {game.status}
-        </span>
+        <div className="game-card-status-stack">
+          <span className={`status-pill game-status ${statusTone}`}>
+            {game.status}
+          </span>
+          {showDashboardStatus ? (
+            <span className={`dashboard-card-status ${statusPresentation.tone}`}>
+              {statusPresentation.label}
+            </span>
+          ) : null}
+        </div>
         <time dateTime={game.startTimeUTC}>
           {formatStartTime(game.startTimeUTC, scheduleDate)}
         </time>
@@ -487,27 +1000,353 @@ function GameCard({
         </div>
       ) : null}
 
+      <ModelLeanSummary modelLean={modelLean} />
+
+      {dashboardStatus.bestOpportunity ? (
+        <BestOpportunitySummary opportunity={dashboardStatus.bestOpportunity} />
+      ) : null}
+
+      {savedBets.length > 0 ? (
+        <SavedBetSummary
+          currency={currency}
+          savedBetSummary={dashboardStatus.savedBetSummary}
+        />
+      ) : null}
+
       {preliminaryAnalysis ? (
         <PreliminaryAnalysis
           analysis={preliminaryAnalysis}
           awayTeam={game.awayTeam}
           homeTeam={game.homeTeam}
-          marketOdds={normalizedMarketOdds}
+          marketOdds={marketOdds}
           onMarketOddsChange={(side, value) =>
             onMarketOddsChange(game.gameId, side, value)
           }
         />
       ) : null}
 
-      <button
-        className="analyze-game-button"
-        type="button"
-        disabled={!canUseModel}
-        onClick={() => onAnalyzeGame(game, normalizedMarketOdds)}
+      <div
+        className={`game-card-actions ${
+          savedBets.length > 0 ? 'with-secondary' : ''
+        }`}
       >
-        Analyze Game
-      </button>
+        <button
+          className={`analyze-game-button ${isCompletedGame ? 'historical' : ''}`}
+          type="button"
+          disabled={!canAnalyze}
+          onClick={() => onAnalyzeGame(game, marketOdds)}
+        >
+          {actionLabel}
+        </button>
+        {savedBets.length > 0 ? (
+          <button
+            className="view-bet-button"
+            type="button"
+            onClick={onViewBets}
+          >
+            View Bet
+          </button>
+        ) : null}
+      </div>
     </article>
+  )
+}
+
+function ModelLeanSummary({ modelLean }) {
+  const hasLean = Boolean(modelLean?.team)
+
+  return (
+    <div className="model-lean-row">
+      <span>Model lean</span>
+      <strong>
+        {hasLean ? modelLean.team.name : 'Not available'}
+        {hasLean && Number.isFinite(modelLean.probability) ? (
+          <small>{formatPercent(modelLean.probability)} win probability</small>
+        ) : null}
+      </strong>
+    </div>
+  )
+}
+
+function BestOpportunitySummary({ opportunity }) {
+  if (!opportunity?.team || !Number.isFinite(opportunity.edge)) {
+    return null
+  }
+
+  return (
+    <div className="best-value-row">
+      <span>Best value</span>
+      <strong>
+        {opportunity.team.name} {formatProbabilityEdge(opportunity.edge)}
+      </strong>
+    </div>
+  )
+}
+
+function SavedBetSummary({ currency, savedBetSummary }) {
+  if (!savedBetSummary?.hasBets) {
+    return null
+  }
+
+  const { betCount, firstBet, pendingCount, totalStake } = savedBetSummary
+
+  if (betCount > 1) {
+    return (
+      <div className="saved-bet-summary">
+        <span>{betCount} bets saved</span>
+        <strong>Total stake {formatDashboardCurrency(totalStake, currency)}</strong>
+        {pendingCount > 0 ? <small>{pendingCount} unsettled</small> : null}
+      </div>
+    )
+  }
+
+  const resultPresentation = getBetResultPresentation(firstBet.result)
+  const showResult = firstBet.result !== 'pending'
+
+  return (
+    <div className="saved-bet-summary">
+      <span>Bet saved</span>
+      <strong>{getBetTeamName(firstBet)}</strong>
+      <small>
+        {formatDashboardCurrency(firstBet.stake, currency)}{' '}
+        {formatSavedBetOdds(firstBet.marketOdds)}
+      </small>
+      {showResult ? (
+        <small className={`saved-bet-result ${resultPresentation.tone}`}>
+          {resultPresentation.label}
+        </small>
+      ) : null}
+    </div>
+  )
+}
+
+function LastNightSection({
+  bettingSummary,
+  betsByGameId,
+  currency,
+  date,
+  errorMessage,
+  eyebrow,
+  games,
+  onRetry,
+  onViewBets,
+  status,
+}) {
+  const isLoading = status === 'loading'
+  const isError = status === 'error'
+  const isSuccess = status === 'success'
+  const netProfitTone = getProfitTone(bettingSummary.netProfit)
+  const summaryValue = (value) => (isLoading ? 'Loading' : String(value))
+
+  return (
+    <section
+      className="last-night-section"
+      aria-labelledby="dashboard-previous-heading"
+    >
+      <div className="dashboard-section-heading">
+        <div>
+          <p className="eyebrow">{eyebrow}</p>
+          <h3 id="dashboard-previous-heading">{formatScheduleDate(date)}</h3>
+        </div>
+      </div>
+
+      <LastNightBettingSummary
+        bettingSummary={bettingSummary}
+        currency={currency}
+        emptyMessage="No bets were recorded for this day."
+        isLoading={isLoading}
+        netProfitTone={netProfitTone}
+        summaryValue={summaryValue}
+      />
+
+      {isLoading ? (
+        <div
+          className="last-night-result-list"
+          aria-label="Loading previous day results"
+        >
+          {[0, 1].map((item) => (
+            <div
+              className="last-night-result-card schedule-card-loading"
+              key={item}
+            >
+              <span />
+              <strong />
+              <div />
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      {isError ? (
+        <div className="schedule-state error-state" role="alert">
+          <strong>Last night unavailable</strong>
+          <p>{errorMessage}</p>
+          <button type="button" onClick={onRetry}>
+            Try again
+          </button>
+        </div>
+      ) : null}
+
+      {isSuccess && games.length === 0 ? (
+        <p className="empty-state">
+          No NHL games were completed last night.
+        </p>
+      ) : null}
+
+      {isSuccess && games.length > 0 ? (
+        <div className="last-night-result-list">
+          {games.map((game) => (
+            <LastNightGameCard
+              bets={betsByGameId[getGameId(game)] ?? []}
+              currency={currency}
+              game={game}
+              key={game.gameId}
+              onViewBets={onViewBets}
+            />
+          ))}
+        </div>
+      ) : null}
+    </section>
+  )
+}
+
+function LastNightBettingSummary({
+  bettingSummary,
+  currency,
+  emptyMessage,
+  isLoading,
+  netProfitTone,
+  summaryValue,
+}) {
+  if (!isLoading && bettingSummary.betCount === 0) {
+    return <p className="last-night-no-bets">{emptyMessage}</p>
+  }
+
+  return (
+    <dl className="last-night-compact-summary" aria-label="Previous day bets">
+      <div>
+        <dt>Bets</dt>
+        <dd>{summaryValue(bettingSummary.betCount)}</dd>
+      </div>
+      <div>
+        <dt>Record</dt>
+        <dd>
+          {isLoading
+            ? 'Loading'
+            : `${bettingSummary.wonCount}-${bettingSummary.lostCount}`}
+        </dd>
+      </div>
+      <div>
+        <dt>Pending</dt>
+        <dd>{summaryValue(bettingSummary.pendingCount)}</dd>
+      </div>
+      <div className={`net ${netProfitTone}`}>
+        <dt>Net</dt>
+        <dd>
+          {isLoading
+            ? 'Loading'
+            : formatSignedDashboardCurrency(bettingSummary.netProfit, currency)}
+        </dd>
+      </div>
+    </dl>
+  )
+}
+
+function LastNightGameCard({ bets, currency, game, onViewBets }) {
+  const showScore = hasGameScore(game)
+  const statusTone = getStatusTone(game.status)
+  const winner = getWinner(game)
+  const visibleBets = bets.slice(0, 3)
+  const remainingBetCount = Math.max(0, bets.length - visibleBets.length)
+
+  return (
+    <article
+      className={`last-night-result-card ${bets.length > 0 ? 'has-bet' : ''}`}
+    >
+      <div className="last-night-result-meta">
+        <span className={`status-pill game-status ${statusTone}`}>
+          {game.status}
+        </span>
+        <span className="last-night-winner">
+          Winner <strong>{winner?.name ?? 'Unavailable'}</strong>
+        </span>
+      </div>
+
+      <div className="last-night-scoreline">
+        <LastNightTeamLine
+          isWinner={winner?.abbreviation === game.awayTeam.abbreviation}
+          showScore={showScore}
+          team={game.awayTeam}
+        />
+        <LastNightTeamLine
+          isWinner={winner?.abbreviation === game.homeTeam.abbreviation}
+          showScore={showScore}
+          team={game.homeTeam}
+        />
+      </div>
+
+      {bets.length > 0 ? (
+        <div className="last-night-bet-list">
+          {visibleBets.map((bet) => (
+            <LastNightBetDetail bet={bet} currency={currency} key={bet.id} />
+          ))}
+          {remainingBetCount > 0 ? (
+            <small className="dashboard-muted-note compact">
+              +{remainingBetCount} more in Bet Tracker
+            </small>
+          ) : null}
+          <button className="view-bet-button compact" type="button" onClick={onViewBets}>
+            View Bet
+          </button>
+        </div>
+      ) : (
+        <p className="dashboard-muted-note compact">No bet recorded.</p>
+      )}
+    </article>
+  )
+}
+
+function LastNightTeamLine({ isWinner, showScore, team = {} }) {
+  return (
+    <div className={`last-night-team-line ${isWinner ? 'winner' : ''}`}>
+      <div className="last-night-logo-shell">
+        {team.logo ? (
+          <img src={team.logo} alt={`${team.name} logo`} loading="lazy" />
+        ) : (
+          <span>{team.abbreviation}</span>
+        )}
+      </div>
+      <span>{team.name}</span>
+      <strong>{showScore ? team.score : '--'}</strong>
+    </div>
+  )
+}
+
+function LastNightBetDetail({ bet, currency }) {
+  const resultPresentation = getBetResultPresentation(bet.result)
+  const profit = getBetProfit(bet)
+  const showProfit = bet.result !== 'pending'
+
+  return (
+    <div className="last-night-bet-detail">
+      <div className="last-night-bet-main">
+        <span className={`saved-bet-result ${resultPresentation.tone}`}>
+          {resultPresentation.label}
+        </span>
+        <strong>{getBetTeamName(bet)}</strong>
+      </div>
+      <small>
+        {formatDashboardCurrency(bet.stake, currency)}{' '}
+        {formatSavedBetOdds(bet.marketOdds)}
+      </small>
+      {showProfit ? (
+        <small className={`profit-value ${getProfitTone(profit)}`}>
+          Profit {formatSignedDashboardCurrency(profit, currency)}
+        </small>
+      ) : (
+        <small>Settlement pending</small>
+      )}
+    </div>
   )
 }
 

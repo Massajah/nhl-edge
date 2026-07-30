@@ -362,6 +362,32 @@ export const formatKellyPercent = (value) => {
   return numberValue === null ? '--' : `${numberValue.toFixed(2)} %`
 }
 
+const formatKellyPercentText = (value) => {
+  const numberValue = toOptionalNumber(value)
+
+  return numberValue === null ? null : `${numberValue.toFixed(2)} %`
+}
+
+const formatKellySignedPercentagePoints = (value) => {
+  const numberValue = toOptionalNumber(value)
+
+  if (numberValue === null) {
+    return '--'
+  }
+
+  const sign = numberValue >= 0 ? '+' : ''
+
+  return `${sign}${numberValue.toFixed(2)} percentage points`
+}
+
+const formatKellyMinimumPercentagePoint = (value) => {
+  const numberValue = toOptionalNumber(value)
+
+  return numberValue === null
+    ? '-- percentage-point minimum'
+    : `${numberValue.toFixed(2)} percentage-point minimum`
+}
+
 export const formatKellyPercentagePoints = (value) => {
   const numberValue = toOptionalNumber(value)
 
@@ -393,7 +419,20 @@ export const formatKellyCurrency = (
     return '--'
   }
 
-  return formatBankrollCurrency(Number(amount.toFixed(2)), currency)
+  const normalizedCurrency = normalizeBankrollCurrency(currency)
+  const roundedAmount = Number(amount.toFixed(2))
+  const locale = normalizedCurrency === 'EUR' ? 'fi-FI' : undefined
+
+  try {
+    return new Intl.NumberFormat(locale, {
+      currency: normalizedCurrency,
+      maximumFractionDigits: 2,
+      minimumFractionDigits: 2,
+      style: 'currency',
+    }).format(roundedAmount)
+  } catch {
+    return formatBankrollCurrency(roundedAmount, normalizedCurrency)
+  }
 }
 
 export const formatStakeInputValue = (value) => {
@@ -406,59 +445,244 @@ export const formatStakeInputValue = (value) => {
   return String(Number(amount.toFixed(2)))
 }
 
+export const getMaximumStakeComparison = ({
+  actualStakeAmount = null,
+  recommendation = {},
+} = {}) => {
+  const bankrollBasisAmount = recommendation.bankrollInitialized
+    ? toOptionalNumber(recommendation.bankrollAmount)
+    : null
+  const maximumStakePercent = toOptionalNumber(
+    recommendation.maximumStakePercent,
+  )
+  const actualAmount = toOptionalNumber(actualStakeAmount)
+  const canCalculateMaximum =
+    bankrollBasisAmount !== null &&
+    bankrollBasisAmount > 0 &&
+    maximumStakePercent !== null &&
+    maximumStakePercent > 0
+  const maximumStakeAmount = canCalculateMaximum
+    ? Number(((bankrollBasisAmount * maximumStakePercent) / 100).toFixed(2))
+    : null
+  const normalizedActualStakeAmount =
+    actualAmount !== null && actualAmount > 0
+      ? Number(actualAmount.toFixed(2))
+      : null
+
+  return {
+    actualStakeAmount: normalizedActualStakeAmount,
+    bankrollBasis: recommendation.bankrollBasis ?? null,
+    bankrollBasisAmount,
+    bankrollBasisLabel: recommendation.bankrollBasisLabel ?? '',
+    exceedsMaximumStake:
+      maximumStakeAmount !== null &&
+      normalizedActualStakeAmount !== null &&
+      normalizedActualStakeAmount - maximumStakeAmount > MONEY_EPSILON,
+    maximumStakeAmount,
+    maximumStakePercent:
+      maximumStakePercent !== null && maximumStakePercent > 0
+        ? maximumStakePercent
+        : null,
+    recommendationWasCapped: Boolean(recommendation.capApplied),
+  }
+}
+
 export const getKellyRecommendationReasonMessage = (
   recommendation = {},
   { currency = recommendation.currency ?? BANKROLL_DEFAULT_CURRENCY } = {},
 ) => {
+  return getKellyRecommendationPresentation(recommendation, {
+    currency,
+  }).supportingMessage
+}
+
+const NO_KELLY_RECOMMENDATION_TEXT = 'No Kelly recommendation'
+
+export const getKellyRecommendationPresentation = (
+  recommendation = {},
+  {
+    bankrollStatus = 'success',
+    currency = recommendation.currency ?? BANKROLL_DEFAULT_CURRENCY,
+  } = {},
+) => {
   const reason = recommendation.reason
-  const minimumEdge = formatKellyPercentagePoints(
-    recommendation.minimumEdgePercent,
-  )
-  const edgePoints = formatKellyPercentagePoints(
+  const normalizedCurrency = normalizeBankrollCurrency(currency)
+  const hasEligibleAmount =
+    Boolean(recommendation.eligible) &&
+    Number(recommendation.recommendedStakeAmount) > 0
+  const hasStakePercent =
+    Boolean(recommendation.hasStakePercent) &&
+    formatKellyPercentText(recommendation.cappedStakePercent) !== null
+  const canShowBankrollPendingPercent =
+    reason === KELLY_RECOMMENDATION_REASONS.BANKROLL_NOT_INITIALIZED &&
+    hasStakePercent
+  const canUseRecommendedStake = hasEligibleAmount
+  const recommendedPercentText =
+    hasEligibleAmount || canShowBankrollPendingPercent
+      ? formatKellyPercent(recommendation.cappedStakePercent)
+      : NO_KELLY_RECOMMENDATION_TEXT
+  const recommendedAmountText = hasEligibleAmount
+    ? formatKellyCurrency(recommendation.recommendedStakeAmount, normalizedCurrency)
+    : NO_KELLY_RECOMMENDATION_TEXT
+  const edgePoints = formatKellySignedPercentagePoints(
     recommendation.edgePercentagePoints,
+  )
+  const minimumEdge = formatKellyMinimumPercentagePoint(
+    recommendation.minimumEdgePercent,
   )
   const rounding = formatKellyCurrency(
     recommendation.roundingIncrement,
-    currency,
+    normalizedCurrency,
   )
 
-  if (reason === KELLY_RECOMMENDATION_REASONS.INVALID_PROBABILITY) {
-    return 'Model probability is unavailable for the selected side.'
+  if (bankrollStatus === 'loading') {
+    return {
+      canUseRecommendedStake: false,
+      recommendedAmountText: 'Loading bankroll',
+      recommendedPercentText,
+      statusLabel: 'Loading bankroll',
+      statusTone: 'info',
+      supportingMessage:
+        'Kelly stake amounts will update when bankroll data finishes loading. You may still enter a manual stake.',
+      useRecommendedStakeUnavailableReason:
+        'Recommended stake is unavailable while bankroll data is loading.',
+    }
   }
 
-  if (reason === KELLY_RECOMMENDATION_REASONS.INVALID_ODDS) {
-    return 'Enter decimal odds greater than 1.00.'
-  }
-
-  if (reason === KELLY_RECOMMENDATION_REASONS.NO_POSITIVE_EDGE) {
-    return 'The selected odds do not offer a positive model edge.'
+  if (hasEligibleAmount) {
+    return {
+      canUseRecommendedStake,
+      recommendedAmountText,
+      recommendedPercentText,
+      statusLabel: 'Kelly stake recommended',
+      statusTone: 'positive',
+      supportingMessage: recommendation.capApplied
+        ? 'Your Kelly recommendation was limited by Maximum Stake.'
+        : 'Kelly stake recommendation is available from your Betting Settings.',
+      useRecommendedStakeUnavailableReason: '',
+    }
   }
 
   if (reason === KELLY_RECOMMENDATION_REASONS.BELOW_MINIMUM_EDGE) {
-    return `The model edge is ${edgePoints}. Your minimum is ${minimumEdge}.`
+    return {
+      canUseRecommendedStake: false,
+      recommendedAmountText,
+      recommendedPercentText,
+      statusLabel: 'No Kelly stake recommended',
+      statusTone: 'warning',
+      supportingMessage: `Edge ${edgePoints} is below your ${minimumEdge}. You may still enter your own stake.`,
+      useRecommendedStakeUnavailableReason:
+        'No eligible Kelly currency amount is available to copy.',
+    }
+  }
+
+  if (reason === KELLY_RECOMMENDATION_REASONS.NO_POSITIVE_EDGE) {
+    return {
+      canUseRecommendedStake: false,
+      recommendedAmountText,
+      recommendedPercentText,
+      statusLabel: 'No Kelly stake recommended',
+      statusTone: 'neutral',
+      supportingMessage:
+        'The model does not show a positive edge at these odds. You may still enter your own stake.',
+      useRecommendedStakeUnavailableReason:
+        'No eligible Kelly currency amount is available to copy.',
+    }
   }
 
   if (reason === KELLY_RECOMMENDATION_REASONS.NON_POSITIVE_KELLY) {
-    return 'The current probability and odds do not produce a positive Kelly fraction.'
+    return {
+      canUseRecommendedStake: false,
+      recommendedAmountText,
+      recommendedPercentText,
+      statusLabel: 'No Kelly stake recommended',
+      statusTone: 'neutral',
+      supportingMessage:
+        'The current probability and odds do not produce a positive Kelly stake. You may still enter your own stake.',
+      useRecommendedStakeUnavailableReason:
+        'No eligible Kelly currency amount is available to copy.',
+    }
   }
 
   if (reason === KELLY_RECOMMENDATION_REASONS.BANKROLL_NOT_INITIALIZED) {
-    return 'Set up your bankroll in Bet Tracker to receive a stake amount. Kelly percentages are still shown.'
+    return {
+      canUseRecommendedStake: false,
+      recommendedAmountText: 'Bankroll required',
+      recommendedPercentText,
+      statusLabel: 'Bankroll required for amount',
+      statusTone: 'info',
+      supportingMessage:
+        'Set up your bankroll in Bet Tracker to calculate a currency amount. You may still enter a manual stake.',
+      useRecommendedStakeUnavailableReason:
+        'Set up your bankroll to calculate a currency amount before copying a recommendation.',
+    }
   }
 
   if (reason === KELLY_RECOMMENDATION_REASONS.NO_AVAILABLE_BANKROLL) {
-    return recommendation.bankrollBasis === 'CURRENT'
-      ? 'Current bankroll is zero, so no stake amount can be recommended.'
-      : 'All available bankroll is currently reserved by pending bets.'
+    return {
+      canUseRecommendedStake: false,
+      recommendedAmountText: 'No available bankroll',
+      recommendedPercentText,
+      statusLabel: 'No available bankroll',
+      statusTone: 'info',
+      supportingMessage:
+        recommendation.bankrollBasis === 'CURRENT'
+          ? 'Current bankroll is zero. You may still enter a manual stake.'
+          : 'Pending stakes currently use the available bankroll. You may still enter a manual stake.',
+      useRecommendedStakeUnavailableReason:
+        'No available bankroll is available to calculate a currency recommendation.',
+    }
   }
 
-  if (
-    reason === KELLY_RECOMMENDATION_REASONS.STAKE_BELOW_ROUNDING_INCREMENT
-  ) {
-    return `The calculated stake is below the configured rounding increment of ${rounding}.`
+  if (reason === KELLY_RECOMMENDATION_REASONS.INVALID_ODDS) {
+    return {
+      canUseRecommendedStake: false,
+      recommendedAmountText: 'Enter valid odds',
+      recommendedPercentText: NO_KELLY_RECOMMENDATION_TEXT,
+      statusLabel: 'Enter valid odds',
+      statusTone: 'error',
+      supportingMessage: 'Decimal odds must be greater than 1.00.',
+      useRecommendedStakeUnavailableReason:
+        'Enter valid decimal odds before copying a recommendation.',
+    }
   }
 
-  return ''
+  if (reason === KELLY_RECOMMENDATION_REASONS.INVALID_PROBABILITY) {
+    return {
+      canUseRecommendedStake: false,
+      recommendedAmountText: 'Invalid model probability',
+      recommendedPercentText: NO_KELLY_RECOMMENDATION_TEXT,
+      statusLabel: 'Invalid model probability',
+      statusTone: 'error',
+      supportingMessage: 'Model probability is unavailable for the selected side.',
+      useRecommendedStakeUnavailableReason:
+        'Model probability is invalid, so no recommendation can be copied.',
+    }
+  }
+
+  if (reason === KELLY_RECOMMENDATION_REASONS.STAKE_BELOW_ROUNDING_INCREMENT) {
+    return {
+      canUseRecommendedStake: false,
+      recommendedAmountText,
+      recommendedPercentText,
+      statusLabel: 'No Kelly stake recommended',
+      statusTone: 'warning',
+      supportingMessage: `The calculated Kelly stake is below your ${rounding} rounding increment. You may still enter your own stake.`,
+      useRecommendedStakeUnavailableReason:
+        'No eligible Kelly currency amount is available to copy.',
+    }
+  }
+
+  return {
+    canUseRecommendedStake: false,
+    recommendedAmountText,
+    recommendedPercentText,
+    statusLabel: 'No Kelly stake recommended',
+    statusTone: 'neutral',
+    supportingMessage: 'Kelly does not have an actionable stake recommendation. You may still enter your own stake.',
+    useRecommendedStakeUnavailableReason:
+      'No eligible Kelly currency amount is available to copy.',
+  }
 }
 
 export const createKellyRecommendationSnapshot = (recommendation = null) => {

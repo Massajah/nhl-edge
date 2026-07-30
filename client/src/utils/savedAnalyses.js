@@ -340,6 +340,7 @@ export const createBetPayloadFromGameAnalysis = ({
   homeTeam,
   inputs,
   kellyRecommendation = null,
+  notes = '',
   result,
   scheduledStart = null,
   selectedSide = 'home',
@@ -398,7 +399,7 @@ export const createBetPayloadFromGameAnalysis = ({
     closingOdds: null,
     result: savedAnalysis.result,
     profit: 0,
-    notes: '',
+    notes: toText(notes, ''),
     adjustments: createAdjustmentsPayload(inputs),
     kellyRecommendation: normalizeKellyRecommendationSnapshot(
       kellyRecommendation,
