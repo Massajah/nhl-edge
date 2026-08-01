@@ -57,6 +57,7 @@ import {
   MODEL_STATUSES,
   PROBABILITY_EDGE_HELP_TEXT,
 } from '../utils/calculateGame.js'
+import { formatSignedGameContextAdjustment } from '../utils/gameContext.js'
 import { formatLocalDateInputValue } from '../utils/powerRatingUpdates.js'
 
 const filterOptions = [
@@ -1904,6 +1905,24 @@ const getInjuryDetail = (bet) => {
   return total
 }
 
+const getGameContextDetail = (bet) => {
+  const snapshot = bet.gameContextSnapshot
+  const selectedSide = bet.selectedSide?.homeAway === 'away' ? 'away' : 'home'
+  const context = snapshot?.[`${selectedSide}Context`]
+
+  if (!context) {
+    return null
+  }
+
+  return `${formatSignedGameContextAdjustment(
+    context.totalGameContextAdjustment,
+  )} total (rest ${formatSignedGameContextAdjustment(
+    context.effectiveRestFatigueAdjustment,
+  )}, quick ${formatSignedGameContextAdjustment(
+    context.effectiveQuickRematchAdjustment,
+  )})`
+}
+
 function BetAnalysisDetails({ bet }) {
   const rows = [
     createDetailRow('Model probability', formatPercent(bet.modelProbability)),
@@ -1925,6 +1944,11 @@ function BetAnalysisDetails({ bet }) {
       'Rest and fatigue',
       formatSignedNumber(bet.restFatigueAdjustment),
     ),
+    createDetailRow(
+      'Quick rematch',
+      formatSignedNumber(bet.quickRematchAdjustment),
+    ),
+    createDetailRow('Game context', getGameContextDetail(bet)),
     createDetailRow('Motivation', formatSignedNumber(bet.motivationAdjustment)),
     createDetailRow('Manual / X-factor', formatSignedNumber(bet.manualAdjustment)),
   ].filter(Boolean)

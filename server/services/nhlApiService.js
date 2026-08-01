@@ -2,6 +2,17 @@ const NHL_API_BASE_URL = 'https://api-web.nhle.com/v1'
 const NHL_STATS_API_BASE_URL = 'https://api.nhle.com/stats/rest/en'
 const NHL_TIME_ZONE = 'America/New_York'
 const REQUEST_TIMEOUT_MS = 8000
+const MS_PER_DAY = 24 * 60 * 60 * 1000
+const DEFAULT_NHL_API_CONCURRENCY_LIMIT = 3
+const DEFAULT_NHL_API_MAX_RETRIES = 2
+const NHL_API_RETRY_BASE_DELAY_MS = 250
+const NHL_API_RETRY_MAX_DELAY_MS = 5000
+const NHL_API_CACHE_TTLS_MS = Object.freeze({
+  currentSchedule: 30 * 1000,
+  default: 5 * 60 * 1000,
+  futureSchedule: 15 * 60 * 1000,
+  historicalSchedule: 24 * 60 * 60 * 1000,
+})
 const REGULAR_SEASON_GAME_TYPE_ID = 2
 const SPECIAL_TEAMS_CACHE_TTL_MS = 8 * 60 * 60 * 1000
 const GOALIE_STATS_CACHE_TTL_MS = 6 * 60 * 60 * 1000
@@ -16,6 +27,8 @@ const goalieStatsCache = new Map()
 const goalieStatsPromises = new Map()
 const goalieSeasonStatsCache = new Map()
 const goalieSeasonStatsPromises = new Map()
+const nhlApiResponseCache = new Map()
+const nhlApiInFlightRequests = new Map()
 
 class NhlApiError extends Error {
   constructor(message, options = {}) {
@@ -24,9 +37,276 @@ class NhlApiError extends Error {
     this.statusCode = options.statusCode ?? 500
     this.upstreamStatus = options.upstreamStatus
     this.publicMessage = options.publicMessage
+    this.retryAfterMs = options.retryAfterMs
     this.cause = options.cause
   }
 }
+
+const sleep = (delayMs) =>
+  new Promise((resolve) => {
+    setTimeout(resolve, delayMs)
+  })
+
+const normalizeRequestPath = (path) => String(path ?? '').trim()
+
+const getHeaderValue = (headers, headerName) => {
+  if (!headers) {
+    return null
+  }
+
+  if (typeof headers.get === 'function') {
+    return headers.get(headerName)
+  }
+
+  return headers[headerName] ?? headers[headerName.toLowerCase()] ?? null
+}
+
+const parseRetryAfterMs = (headers) => {
+  const retryAfter = getHeaderValue(headers, 'Retry-After')
+
+  if (!retryAfter) {
+    return null
+  }
+
+  const seconds = Number(retryAfter)
+
+  if (Number.isFinite(seconds)) {
+    return Math.max(0, seconds * 1000)
+  }
+
+  const retryAt = Date.parse(retryAfter)
+
+  return Number.isFinite(retryAt) ? Math.max(0, retryAt - Date.now()) : null
+}
+
+const getUtcDateValue = (date = new Date()) => {
+  const year = date.getUTCFullYear()
+  const month = String(date.getUTCMonth() + 1).padStart(2, '0')
+  const day = String(date.getUTCDate()).padStart(2, '0')
+
+  return `${year}-${month}-${day}`
+}
+
+const getScheduleCacheTtlMs = (path, now = new Date()) => {
+  const scheduleMatch = normalizeRequestPath(path).match(/^\/schedule\/(.+)$/)
+
+  if (!scheduleMatch || !isValidScheduleDate(scheduleMatch[1])) {
+    return NHL_API_CACHE_TTLS_MS.default
+  }
+
+  const requestDate = scheduleMatch[1]
+  const today = getTodayNhlDate(now)
+
+  if (requestDate < today) {
+    return NHL_API_CACHE_TTLS_MS.historicalSchedule
+  }
+
+  if (requestDate === today) {
+    return NHL_API_CACHE_TTLS_MS.currentSchedule
+  }
+
+  return NHL_API_CACHE_TTLS_MS.futureSchedule
+}
+
+const getCacheTtlMs = (path, now = new Date()) => {
+  const normalizedPath = normalizeRequestPath(path)
+
+  if (normalizedPath.startsWith('/schedule/')) {
+    return getScheduleCacheTtlMs(normalizedPath, now)
+  }
+
+  if (normalizedPath.startsWith('/club-schedule-season/')) {
+    return NHL_API_CACHE_TTLS_MS.historicalSchedule
+  }
+
+  return NHL_API_CACHE_TTLS_MS.default
+}
+
+const createConcurrencyLimiter = (limit = DEFAULT_NHL_API_CONCURRENCY_LIMIT) => {
+  const maxConcurrent = Math.max(1, Number(limit) || 1)
+  const queue = []
+  let activeCount = 0
+
+  const pump = () => {
+    if (activeCount >= maxConcurrent || queue.length === 0) {
+      return
+    }
+
+    const next = queue.shift()
+    activeCount += 1
+
+    next
+      .task()
+      .then(next.resolve, next.reject)
+      .finally(() => {
+        activeCount -= 1
+        pump()
+      })
+  }
+
+  return {
+    run(task) {
+      return new Promise((resolve, reject) => {
+        queue.push({
+          reject,
+          resolve,
+          task,
+        })
+        pump()
+      })
+    },
+  }
+}
+
+const defaultNhlLimiter = createConcurrencyLimiter()
+
+const createNhlApiRequester = ({
+  cache = new Map(),
+  concurrencyLimit = DEFAULT_NHL_API_CONCURRENCY_LIMIT,
+  fetchImpl = fetch,
+  inFlightRequests = new Map(),
+  jitterMs = () => Math.floor(Math.random() * 100),
+  limiter = createConcurrencyLimiter(concurrencyLimit),
+  logger = console,
+  maxRetries = DEFAULT_NHL_API_MAX_RETRIES,
+  now = () => Date.now(),
+  sleepImpl = sleep,
+} = {}) => {
+  const logDevelopmentRequest = ({ cacheStatus, key, path }) => {
+    if (
+      process.env.NODE_ENV === 'production' ||
+      process.env.NHL_EDGE_API_DEBUG !== 'true'
+    ) {
+      return
+    }
+
+    logger.debug?.('NHL API request', {
+      cacheStatus,
+      caller: 'nhlApiService',
+      endpointUrl: key,
+      path,
+      requestStartTime: new Date(now()).toISOString(),
+    })
+  }
+
+  const executeFetch = async ({ baseUrl, path }) => {
+    let attempt = 0
+
+    while (attempt <= maxRetries) {
+      const controller = new AbortController()
+      const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+
+      try {
+        const response = await fetchImpl(`${baseUrl}${path}`, {
+          headers: {
+            Accept: 'application/json',
+          },
+          signal: controller.signal,
+        })
+
+        if (response.ok) {
+          return await response.json()
+        }
+
+        const retryAfterMs = parseRetryAfterMs(response.headers)
+
+        if (response.status === 429 && attempt < maxRetries) {
+          const delayMs =
+            retryAfterMs ??
+            Math.min(
+              NHL_API_RETRY_MAX_DELAY_MS,
+              NHL_API_RETRY_BASE_DELAY_MS * 2 ** attempt + jitterMs(),
+            )
+
+          await sleepImpl(delayMs)
+          attempt += 1
+          continue
+        }
+
+        throw new NhlApiError('NHL API returned an unsuccessful response.', {
+          publicMessage:
+            response.status === 429
+              ? 'NHL API rate limit reached. Try again shortly.'
+              : undefined,
+          retryAfterMs,
+          statusCode: response.status === 429 ? 429 : 500,
+          upstreamStatus: response.status,
+        })
+      } catch (error) {
+        if (error instanceof NhlApiError) {
+          throw error
+        }
+
+        const isTimeout = error.name === 'AbortError'
+
+        throw new NhlApiError(
+          isTimeout
+            ? 'NHL API request timed out.'
+            : 'Unable to reach the NHL API.',
+          { cause: error },
+        )
+      } finally {
+        clearTimeout(timeout)
+      }
+    }
+
+    throw new NhlApiError('NHL API returned an unsuccessful response.')
+  }
+
+  return async (baseUrl, rawPath) => {
+    const path = normalizeRequestPath(rawPath)
+    const key = `${baseUrl}${path}`
+    const cachedResponse = cache.get(key)
+    const nowMs = now()
+
+    if (cachedResponse && cachedResponse.expiresAt > nowMs) {
+      logDevelopmentRequest({ cacheStatus: 'hit', key, path })
+      return cachedResponse.data
+    }
+
+    if (inFlightRequests.has(key)) {
+      logDevelopmentRequest({ cacheStatus: 'in_flight', key, path })
+      return inFlightRequests.get(key)
+    }
+
+    logDevelopmentRequest({
+      cacheStatus: cachedResponse ? 'stale' : 'miss',
+      key,
+      path,
+    })
+
+    const requestPromise = limiter
+      .run(() => executeFetch({ baseUrl, path }))
+      .then((data) => {
+        cache.set(key, {
+          data,
+          expiresAt: now() + getCacheTtlMs(path, new Date(now())),
+        })
+
+        return data
+      })
+      .catch((error) => {
+        if (error.upstreamStatus === 429 && cachedResponse?.data) {
+          return cachedResponse.data
+        }
+
+        throw error
+      })
+      .finally(() => {
+        inFlightRequests.delete(key)
+      })
+
+    inFlightRequests.set(key, requestPromise)
+
+    return requestPromise
+  }
+}
+
+const requestNhlResourceWithCache = createNhlApiRequester({
+  cache: nhlApiResponseCache,
+  inFlightRequests: nhlApiInFlightRequests,
+  limiter: defaultNhlLimiter,
+})
 
 const gameStateLabels = {
   FUT: 'Scheduled',
@@ -97,6 +377,18 @@ const simplifyTeam = (team = {}) => ({
   score: Number.isFinite(team.score) ? team.score : null,
 })
 
+const getVenueCity = (game = {}) => {
+  const rawLocation =
+    getLocalizedValue(game.venueCity) ||
+    getLocalizedValue(game.venueCityName) ||
+    getLocalizedValue(game.venueLocation) ||
+    getLocalizedValue(game.venue?.city) ||
+    getLocalizedValue(game.venue?.location) ||
+    getLocalizedValue(game.venue?.venueLocation)
+
+  return rawLocation ? rawLocation.split(',')[0].trim() : ''
+}
+
 const simplifyGame = (game = {}) => ({
   gameId: game.id,
   startTimeUTC: game.startTimeUTC,
@@ -104,6 +396,9 @@ const simplifyGame = (game = {}) => ({
   awayTeam: simplifyTeam(game.awayTeam),
   gameState: game.gameState ?? 'UNKNOWN',
   status: getGameStatus(game),
+  venueCity: getVenueCity(game),
+  venueLocation: getLocalizedValue(game.venueLocation),
+  venueName: getLocalizedValue(game.venueName) || getLocalizedValue(game.venue),
 })
 
 const simplifyStandingTeam = (standing = {}) => ({
@@ -193,7 +488,8 @@ const formatDateInTimeZone = (date, timeZone) => {
   return `${values.year}-${values.month}-${values.day}`
 }
 
-const getTodayNhlDate = () => formatDateInTimeZone(new Date(), NHL_TIME_ZONE)
+const getTodayNhlDate = (date = new Date()) =>
+  formatDateInTimeZone(date, NHL_TIME_ZONE)
 
 const isValidScheduleDate = (date) => {
   if (!DATE_PATTERN.test(date)) {
@@ -218,42 +514,8 @@ const normalizePlayerId = (playerId = '') => String(playerId).trim()
 const isValidPlayerId = (playerId) =>
   PLAYER_ID_PATTERN.test(normalizePlayerId(playerId))
 
-const requestNhlResource = async (baseUrl, path) => {
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
-
-  try {
-    const response = await fetch(`${baseUrl}${path}`, {
-      headers: {
-        Accept: 'application/json',
-      },
-      signal: controller.signal,
-    })
-
-    if (!response.ok) {
-      throw new NhlApiError('NHL API returned an unsuccessful response.', {
-        upstreamStatus: response.status,
-      })
-    }
-
-    return await response.json()
-  } catch (error) {
-    if (error instanceof NhlApiError) {
-      throw error
-    }
-
-    const isTimeout = error.name === 'AbortError'
-
-    throw new NhlApiError(
-      isTimeout
-        ? 'NHL API request timed out.'
-        : 'Unable to reach the NHL API.',
-      { cause: error },
-    )
-  } finally {
-    clearTimeout(timeout)
-  }
-}
+const requestNhlResource = async (baseUrl, path) =>
+  requestNhlResourceWithCache(baseUrl, path)
 
 const requestNhlApi = async (path) => requestNhlResource(NHL_API_BASE_URL, path)
 
@@ -1008,6 +1270,99 @@ const getClubScheduleSeason = async (teamAbbreviation, seasonId) => {
   )
 }
 
+const parseUtcDateValue = (date) => {
+  if (!isValidScheduleDate(date)) {
+    throw new NhlApiError('Schedule date must use YYYY-MM-DD format.', {
+      statusCode: 400,
+    })
+  }
+
+  const [year, month, day] = date.split('-').map(Number)
+
+  return new Date(Date.UTC(year, month - 1, day))
+}
+
+const addUtcDays = (date, dayCount) =>
+  new Date(date.getTime() + dayCount * MS_PER_DAY)
+
+const formatUtcDateValue = (date) => {
+  const year = date.getUTCFullYear()
+  const month = String(date.getUTCMonth() + 1).padStart(2, '0')
+  const day = String(date.getUTCDate()).padStart(2, '0')
+
+  return `${year}-${month}-${day}`
+}
+
+const buildScheduleDateRequests = (dateFrom, dateTo) => {
+  const startDate = parseUtcDateValue(dateFrom)
+  const endDate = parseUtcDateValue(dateTo)
+
+  if (startDate.getTime() > endDate.getTime()) {
+    throw new NhlApiError('Schedule start date must be before end date.', {
+      statusCode: 400,
+    })
+  }
+
+  const requestDates = []
+  let cursor = startDate
+
+  while (cursor.getTime() <= endDate.getTime()) {
+    requestDates.push(formatUtcDateValue(cursor))
+    cursor = addUtcDays(cursor, 7)
+  }
+
+  const endDateValue = formatUtcDateValue(endDate)
+
+  if (!requestDates.includes(endDateValue)) {
+    requestDates.push(endDateValue)
+  }
+
+  return requestDates
+}
+
+const extractScheduleGamesForDateRange = (
+  schedules = [],
+  dateFrom,
+  dateTo,
+) => {
+  const gamesById = new Map()
+
+  schedules.forEach((schedule) => {
+    const scheduleDays = Array.isArray(schedule?.gameWeek)
+      ? schedule.gameWeek
+      : []
+
+    scheduleDays.forEach((scheduleDay) => {
+      if (scheduleDay.date < dateFrom || scheduleDay.date > dateTo) {
+        return
+      }
+
+      ;(Array.isArray(scheduleDay.games) ? scheduleDay.games : []).forEach(
+        (game) => {
+          const simplifiedGame = simplifyGame(game)
+
+          if (simplifiedGame.gameId) {
+            gamesById.set(String(simplifiedGame.gameId), simplifiedGame)
+          }
+        },
+      )
+    })
+  })
+
+  return [...gamesById.values()].sort(
+    (left, right) =>
+      new Date(left.startTimeUTC).getTime() -
+      new Date(right.startTimeUTC).getTime(),
+  )
+}
+
+const getScheduleGamesForDateRange = async (dateFrom, dateTo) => {
+  const requestDates = buildScheduleDateRequests(dateFrom, dateTo)
+  const schedules = await Promise.all(requestDates.map(getScheduleForDate))
+
+  return extractScheduleGamesForDateRange(schedules, dateFrom, dateTo)
+}
+
 const getGamesForDate = async (date) => {
   const schedule = await getScheduleForDate(date)
   const scheduleDay = schedule.gameWeek?.find((day) => day.date === date)
@@ -1078,13 +1433,20 @@ const getRosterForTeam = async (teamAbbreviation) => {
 }
 
 module.exports = {
+  NHL_API_CACHE_TTLS_MS,
   NhlApiError,
+  buildScheduleDateRequests,
+  createConcurrencyLimiter,
+  createNhlApiRequester,
+  extractScheduleGamesForDateRange,
   getClubScheduleSeason,
+  getCacheTtlMs,
   getCurrentSeasonContext,
   getGamesForDate,
   getGoalieSummariesForTeam,
   getGoalieStatsForPlayer,
   getRosterForTeam,
+  getScheduleGamesForDateRange,
   getScheduleForDate,
   getSpecialTeamsForTeam,
   getTeams,
@@ -1093,4 +1455,5 @@ module.exports = {
   isValidPlayerId,
   isValidScheduleDate,
   isValidTeamAbbreviation,
+  parseRetryAfterMs,
 }

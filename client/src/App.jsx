@@ -560,9 +560,11 @@ function AuthenticatedApp({ authUser, onLogout }) {
     }
   }, [applyPowerRatingDocuments]);
 
-  const handleAnalyzeGame = (game, marketOdds = {}) => {
+  const handleAnalyzeGame = (game, marketOdds = {}, gameContext = null) => {
     setAnalyzerPrefill({
       away: game.awayTeam.abbreviation,
+      game,
+      gameContext,
       gameId: String(game.gameId ?? ""),
       home: game.homeTeam.abbreviation,
       id: `${game.gameId}-${Date.now()}`,

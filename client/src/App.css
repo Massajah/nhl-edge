@@ -668,6 +668,26 @@
   background: var(--panel);
 }
 
+.settings-page-header {
+  display: grid;
+  gap: 5px;
+}
+
+.settings-page-header h1 {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: clamp(1.65rem, 3vw, 2.45rem);
+}
+
+.settings-page-header p {
+  max-width: 760px;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  font-weight: 760;
+  line-height: 1.5;
+}
+
 .settings-engine-panel .section-heading {
   margin-bottom: 12px;
 }
@@ -746,7 +766,8 @@
   align-items: start;
 }
 
-.settings-betting-grid {
+.settings-betting-grid,
+.settings-quick-rematch-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
@@ -789,6 +810,33 @@
   font-size: 0.72rem;
   font-weight: 760;
   line-height: 1.35;
+}
+
+.settings-quick-rematch-form {
+  display: grid;
+  gap: 12px;
+}
+
+.settings-quick-rematch-toggle {
+  min-height: 38px;
+  align-self: start;
+  margin-top: 26px;
+}
+
+.toggle-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.toggle-field input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
 }
 
 .settings-betting-custom-slot {
@@ -865,6 +913,287 @@
 .settings-form-actions button span {
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-dirty-state {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  margin-right: auto;
+  color: var(--text-muted);
+  font-size: 0.74rem;
+  font-weight: 850;
+}
+
+.settings-subsection-heading,
+.settings-rule-card-heading {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.settings-subsection-heading {
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding-top: 10px;
+}
+
+.settings-subsection-heading h3,
+.settings-rule-card-heading h3 {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: 0.98rem;
+}
+
+.settings-subsection-heading p,
+.settings-rule-card-heading p,
+.settings-card-note,
+.settings-card-save-note,
+.settings-compact-details p {
+  margin: 3px 0 0;
+  color: var(--text-muted);
+  font-size: 0.76rem;
+  font-weight: 760;
+  line-height: 1.45;
+}
+
+.settings-rule-card-heading > span {
+  flex: 0 0 auto;
+  border: 1px solid rgba(35, 211, 182, 0.3);
+  border-radius: 999px;
+  padding: 5px 9px;
+  color: var(--accent);
+  background: rgba(35, 211, 182, 0.07);
+  font-size: 0.66rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.settings-adjustment-catalog {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.settings-adjustment-catalog span {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+  padding: 5px 9px;
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.035);
+  font-size: 0.68rem;
+  font-weight: 850;
+}
+
+.settings-model-grid,
+.settings-model-adjustments-form,
+.settings-engine-sections {
+  display: grid;
+  gap: 12px;
+}
+
+.settings-model-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+}
+
+.settings-model-adjustments-form,
+.settings-rest-fatigue-card,
+.settings-form-actions {
+  grid-column: 1 / -1;
+}
+
+.settings-rule-card,
+.settings-engine-subsection {
+  display: grid;
+  gap: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px;
+  background: rgba(13, 20, 28, 0.54);
+}
+
+.settings-compact-number-field {
+  grid-template-columns: minmax(0, 1fr) minmax(96px, 128px);
+  gap: 6px 10px;
+  align-items: center;
+}
+
+.settings-compact-number-field input,
+.settings-adjustment-input input {
+  min-height: 38px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.settings-compact-number-field input {
+  justify-self: end;
+  width: 128px;
+}
+
+.field-error-placeholder {
+  min-height: 18px;
+  color: var(--text-muted);
+}
+
+.settings-formula-note,
+.settings-priority-note {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  align-items: center;
+  border: 1px solid rgba(255, 181, 71, 0.22);
+  border-radius: 8px;
+  padding: 9px 10px;
+  color: var(--text-muted);
+  background: rgba(255, 181, 71, 0.07);
+  font-size: 0.76rem;
+  font-weight: 820;
+}
+
+.settings-formula-note strong,
+.settings-priority-note strong {
+  color: var(--text-strong);
+}
+
+.settings-card-save-note {
+  border-left: 2px solid rgba(35, 211, 182, 0.45);
+  padding-left: 9px;
+}
+
+.settings-master-toggle {
+  min-height: 36px;
+}
+
+.settings-rule-table {
+  display: grid;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+}
+
+.settings-rule-table-header,
+.settings-rule-row {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(116px, 140px) minmax(120px, 150px);
+  gap: 10px;
+  align-items: center;
+  padding: 10px 12px;
+}
+
+.settings-rule-table-header {
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.045);
+  font-size: 0.68rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.settings-rule-row {
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.settings-rule-label {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.settings-rule-label strong,
+.settings-adjustment-label {
+  color: var(--text-strong);
+  font-size: 0.82rem;
+  font-weight: 900;
+}
+
+.settings-rule-label small {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: 740;
+  line-height: 1.35;
+}
+
+.settings-rule-toggle {
+  justify-self: start;
+}
+
+.settings-adjustment-input {
+  display: grid;
+  gap: 4px;
+}
+
+.settings-adjustment-input input {
+  width: 120px;
+  justify-self: end;
+}
+
+.settings-adjustment-input small {
+  min-height: 18px;
+  text-align: right;
+  font-size: 0.7rem;
+  font-weight: 820;
+}
+
+.settings-compact-details {
+  color: var(--text-muted);
+  font-size: 0.76rem;
+  font-weight: 760;
+}
+
+.settings-compact-details summary {
+  width: fit-content;
+  cursor: pointer;
+  color: var(--accent);
+  font-weight: 900;
+}
+
+.settings-quick-fields {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(130px, 150px) minmax(130px, 160px);
+  gap: 12px;
+  align-items: start;
+}
+
+.settings-context-example {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 72px;
+  gap: 6px 10px;
+  border: 1px solid rgba(35, 211, 182, 0.22);
+  border-radius: 8px;
+  padding: 10px;
+  background: rgba(35, 211, 182, 0.055);
+}
+
+.settings-context-example span {
+  color: var(--text-muted);
+  font-size: 0.74rem;
+  font-weight: 780;
+}
+
+.settings-context-example strong {
+  justify-self: end;
+  color: var(--text-strong);
+  font-size: 0.78rem;
+  font-weight: 950;
+  font-variant-numeric: tabular-nums;
+}
+
+.settings-context-example span:last-of-type,
+.settings-context-example strong:last-of-type {
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  padding-top: 6px;
+}
+
+.sr-only {
+  position: absolute;
+  overflow: hidden;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  clip: rect(0, 0, 0, 0);
   white-space: nowrap;
 }
 
@@ -2059,8 +2388,34 @@
   font-variant-numeric: tabular-nums;
 }
 
-.model-lean-row,
-.best-value-row,
+.game-context-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  border: 1px solid rgba(35, 211, 182, 0.28);
+  border-radius: 8px;
+  padding: 8px;
+  background: rgba(35, 211, 182, 0.06);
+}
+
+.game-context-summary.neutral {
+  border-color: var(--border);
+  background: rgba(13, 20, 28, 0.66);
+}
+
+.game-context-summary span,
+.game-context-summary small {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.game-context-summary strong {
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+
+.dashboard-intelligence,
 .saved-bet-summary {
   display: grid;
   gap: 4px;
@@ -2071,9 +2426,20 @@
   background: rgba(13, 20, 28, 0.66);
 }
 
-.best-value-row {
+.dashboard-intelligence {
   border-color: rgba(255, 181, 71, 0.3);
   background: rgba(255, 181, 71, 0.075);
+}
+
+.dashboard-intelligence.neutral {
+  border-color: var(--border);
+  background: rgba(13, 20, 28, 0.66);
+}
+
+.value-side-row {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
 }
 
 .saved-bet-summary {
@@ -2081,8 +2447,9 @@
   background: rgba(35, 211, 182, 0.075);
 }
 
-.model-lean-row span,
-.best-value-row span,
+.value-side-row span,
+.dashboard-intelligence-metrics span,
+.dashboard-intelligence small,
 .saved-bet-summary span,
 .saved-bet-summary small,
 .last-night-winner,
@@ -2093,8 +2460,8 @@
   line-height: 1.35;
 }
 
-.model-lean-row strong,
-.best-value-row strong,
+.value-side-row strong,
+.dashboard-intelligence > strong,
 .saved-bet-summary strong,
 .last-night-winner strong,
 .last-night-bet-detail strong {
@@ -2106,13 +2473,25 @@
   overflow-wrap: anywhere;
 }
 
-.model-lean-row small {
-  color: var(--text-muted);
-  font-size: 0.68rem;
-  font-weight: 800;
+.dashboard-intelligence-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
 }
 
-.best-value-row strong {
+.dashboard-intelligence-metrics span {
+  display: grid;
+  gap: 2px;
+}
+
+.dashboard-intelligence-metrics strong {
+  color: var(--text-strong);
+  font-size: 0.82rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.value-side-row strong,
+.dashboard-intelligence-metrics strong {
   color: var(--accent-warm);
 }
 
@@ -2672,6 +3051,7 @@
 .matchup-panel,
 .team-adjustments-section,
 .adjustment-panel,
+.game-context-panel,
 .result-card {
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -2680,7 +3060,8 @@
 }
 
 .matchup-panel,
-.team-adjustments-section {
+.team-adjustments-section,
+.game-context-panel {
   padding: 16px;
 }
 
@@ -5886,6 +6267,168 @@ optgroup {
   background: rgba(255, 255, 255, 0.08);
 }
 
+.game-context-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.game-context-panel .section-heading {
+  margin-bottom: 0;
+}
+
+.game-context-panel .section-heading h2 {
+  font-size: clamp(1.15rem, 2vw, 1.45rem);
+}
+
+.game-context-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.game-context-team-card {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  background: rgba(13, 20, 28, 0.58);
+}
+
+.game-context-card-header {
+  display: grid;
+  grid-template-columns: minmax(0, 0.35fr) minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.game-context-card-header span,
+.game-context-card-header em,
+.game-context-note,
+.game-context-metrics dt {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-style: normal;
+  font-weight: 800;
+}
+
+.game-context-card-header strong {
+  overflow: hidden;
+  color: var(--text-strong);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.game-context-card-header em {
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+
+.game-context-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+
+.game-context-metrics div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.game-context-metrics dd {
+  overflow: hidden;
+  margin: 0;
+  color: var(--text-strong);
+  font-size: 0.82rem;
+  font-weight: 850;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.game-context-metrics dd.game-context-breakdown,
+.game-context-metrics dd.game-context-detected {
+  display: grid;
+  gap: 3px;
+  overflow: visible;
+  white-space: normal;
+}
+
+.game-context-breakdown span,
+.game-context-detected span {
+  display: flex;
+  min-width: 0;
+  gap: 6px;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.game-context-breakdown em,
+.game-context-detected em {
+  overflow-wrap: anywhere;
+  color: var(--text-strong);
+  font-style: normal;
+}
+
+.game-context-detected small {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-size: 0.68rem;
+  font-weight: 800;
+}
+
+.game-context-breakdown strong {
+  flex: 0 0 auto;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+
+.game-context-note {
+  min-height: 18px;
+  line-height: 1.35;
+}
+
+.game-context-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 96px;
+  gap: 8px 10px;
+  align-items: center;
+}
+
+.game-context-controls input[type='number'] {
+  width: 96px;
+  min-height: 34px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.game-context-loading {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  font-weight: 800;
+  background: rgba(13, 20, 28, 0.54);
+}
+
+.game-context-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.game-context-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+}
+
 .recommendation-badge.positive {
   color: #06120f;
   background: var(--accent);
@@ -7372,16 +7915,59 @@ optgroup {
 
   .settings-engine-grid,
   .settings-betting-grid,
+  .settings-quick-rematch-grid,
+  .settings-model-grid,
+  .settings-quick-fields,
   .settings-bankroll-status,
   .settings-form-actions {
     grid-template-columns: 1fr;
+  }
+
+  .settings-model-adjustments-form,
+  .settings-rest-fatigue-card,
+  .settings-form-actions {
+    grid-column: auto;
+  }
+
+  .settings-rule-table {
+    border: 0;
+    gap: 8px;
+  }
+
+  .settings-rule-table-header {
+    display: none;
+  }
+
+  .settings-rule-row {
+    grid-template-columns: minmax(0, 1fr);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 8px;
+    padding: 10px;
+  }
+
+  .settings-adjustment-input input {
+    justify-self: start;
+  }
+
+  .settings-adjustment-input small {
+    text-align: left;
   }
 
   .settings-engine-field {
     grid-template-columns: minmax(0, 1fr) minmax(100px, 130px);
   }
 
+  .settings-compact-number-field {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .settings-engine-field input {
+    width: 100%;
+    max-width: 130px;
+  }
+
+  .settings-compact-number-field input {
+    justify-self: start;
     width: 100%;
     max-width: 130px;
   }
@@ -7676,6 +8262,22 @@ optgroup {
 
   .numeric-field input {
     text-align: left;
+  }
+
+  .game-context-grid,
+  .game-context-metrics,
+  .game-context-controls {
+    grid-template-columns: 1fr;
+  }
+
+  .game-context-controls input[type='number'] {
+    width: 100%;
+    text-align: left;
+  }
+
+  .game-context-actions {
+    display: grid;
+    justify-content: stretch;
   }
 
   .projection-summary,

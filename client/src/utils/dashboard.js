@@ -1,33 +1,38 @@
 import { BANKROLL_DEFAULT_CURRENCY } from './bankroll.js'
 import {
   createKellyStakeRecommendation,
+  KELLY_RECOMMENDATION_REASONS,
 } from './kellyStaking.js'
 import { calculateProfit } from './savedAnalyses.js'
 
 const POSITIVE_EPSILON = 1e-9
+const SIDE_TIEBREAKER_ORDER = Object.freeze({
+  away: 0,
+  home: 1,
+})
 
 export const DASHBOARD_GAME_STATUSES = Object.freeze({
-  ANALYZED_NO_VALUE: 'ANALYZED_NO_VALUE',
+  ADD_ODDS: 'ADD_ODDS',
   BET_CANDIDATE: 'BET_CANDIDATE',
   BET_SAVED: 'BET_SAVED',
   FINAL: 'FINAL',
   GAME_STARTED: 'GAME_STARTED',
-  NEEDS_ODDS: 'NEEDS_ODDS',
-  NOT_ANALYZED: 'NOT_ANALYZED',
-  POTENTIAL_VALUE: 'POTENTIAL_VALUE',
+  NO_CURRENT_VALUE: 'NO_CURRENT_VALUE',
+  PRELIMINARY_ANALYSIS_UNAVAILABLE: 'PRELIMINARY_ANALYSIS_UNAVAILABLE',
+  WORTH_REVIEWING: 'WORTH_REVIEWING',
 })
 
 export const DASHBOARD_GAME_STATUS_PRESENTATION = Object.freeze({
-  [DASHBOARD_GAME_STATUSES.ANALYZED_NO_VALUE]: {
-    label: 'No current value',
-    tone: 'neutral',
+  [DASHBOARD_GAME_STATUSES.ADD_ODDS]: {
+    label: 'Add odds',
+    tone: 'needs-odds',
   },
   [DASHBOARD_GAME_STATUSES.BET_CANDIDATE]: {
-    label: 'Bet candidate',
+    label: 'Bet Candidate',
     tone: 'candidate',
   },
   [DASHBOARD_GAME_STATUSES.BET_SAVED]: {
-    label: 'Bet saved',
+    label: 'Bet Saved',
     tone: 'saved',
   },
   [DASHBOARD_GAME_STATUSES.FINAL]: {
@@ -38,15 +43,15 @@ export const DASHBOARD_GAME_STATUS_PRESENTATION = Object.freeze({
     label: 'In progress',
     tone: 'neutral',
   },
-  [DASHBOARD_GAME_STATUSES.NEEDS_ODDS]: {
-    label: 'Add odds',
-    tone: 'needs-odds',
-  },
-  [DASHBOARD_GAME_STATUSES.NOT_ANALYZED]: {
-    label: '',
+  [DASHBOARD_GAME_STATUSES.NO_CURRENT_VALUE]: {
+    label: 'No current value',
     tone: 'neutral',
   },
-  [DASHBOARD_GAME_STATUSES.POTENTIAL_VALUE]: {
+  [DASHBOARD_GAME_STATUSES.PRELIMINARY_ANALYSIS_UNAVAILABLE]: {
+    label: 'Preliminary analysis unavailable',
+    tone: 'neutral',
+  },
+  [DASHBOARD_GAME_STATUSES.WORTH_REVIEWING]: {
     label: 'Worth reviewing',
     tone: 'attention',
   },
@@ -173,31 +178,6 @@ export const summarizeSavedBets = (bets = []) => {
   }
 }
 
-export const getModelLean = (analysis, awayTeam = {}, homeTeam = {}) => {
-  const awayProbability = toNullableNumber(analysis?.awayMarket?.modelProbability)
-  const homeProbability = toNullableNumber(analysis?.homeMarket?.modelProbability)
-
-  if (awayProbability === null || homeProbability === null) {
-    return {
-      probability: null,
-      side: '',
-      team: null,
-    }
-  }
-
-  return homeProbability >= awayProbability
-    ? {
-        probability: homeProbability,
-        side: 'home',
-        team: homeTeam,
-      }
-    : {
-        probability: awayProbability,
-        side: 'away',
-        team: awayTeam,
-      }
-}
-
 const getDashboardSideOpportunities = ({
   analysis,
   awayTeam = {},
@@ -243,19 +223,93 @@ const getDashboardSideOpportunities = ({
   })
 }
 
-const getBestOpportunity = (opportunities = []) =>
+export const getDashboardValueSide = (opportunities = []) =>
   opportunities
     .filter((opportunity) => opportunity.hasValidOdds && opportunity.hasPositiveEdge)
+    // Tie-breaker: larger positive edge, then larger expected value, then away/home order.
     .sort((opportunityA, opportunityB) => {
       const edgeDifference =
         toNumber(opportunityB.edge) - toNumber(opportunityA.edge)
 
-      if (edgeDifference !== 0) {
+      if (Math.abs(edgeDifference) > POSITIVE_EPSILON) {
         return edgeDifference
       }
 
-      return toNumber(opportunityB.expectedValue) - toNumber(opportunityA.expectedValue)
+      const expectedValueDifference =
+        toNumber(opportunityB.expectedValue) -
+        toNumber(opportunityA.expectedValue)
+
+      if (Math.abs(expectedValueDifference) > POSITIVE_EPSILON) {
+        return expectedValueDifference
+      }
+
+      return (
+        SIDE_TIEBREAKER_ORDER[opportunityA.side] -
+        SIDE_TIEBREAKER_ORDER[opportunityB.side]
+      )
     })[0] ?? null
+
+const getStatusReason = ({ status, valueSide }) => {
+  if (status === DASHBOARD_GAME_STATUSES.ADD_ODDS) {
+    return 'Enter market odds to evaluate betting value.'
+  }
+
+  if (status === DASHBOARD_GAME_STATUSES.NO_CURRENT_VALUE) {
+    return 'No positive edge at the entered odds.'
+  }
+
+  if (status === DASHBOARD_GAME_STATUSES.PRELIMINARY_ANALYSIS_UNAVAILABLE) {
+    return 'Missing core model data for this game.'
+  }
+
+  if (status !== DASHBOARD_GAME_STATUSES.WORTH_REVIEWING || !valueSide) {
+    return ''
+  }
+
+  const reason = valueSide.recommendation?.reason
+  const minimumEdgePercent =
+    toNullableNumber(valueSide.recommendation?.minimumEdgePercent) ?? 0
+
+  if (reason === KELLY_RECOMMENDATION_REASONS.BELOW_MINIMUM_EDGE) {
+    return `Below ${minimumEdgePercent.toFixed(2)} pp minimum`
+  }
+
+  if (reason === KELLY_RECOMMENDATION_REASONS.BANKROLL_NOT_INITIALIZED) {
+    return 'Bankroll setup needed for Kelly amount'
+  }
+
+  if (reason === KELLY_RECOMMENDATION_REASONS.NO_AVAILABLE_BANKROLL) {
+    return 'No available bankroll for Kelly amount'
+  }
+
+  if (reason === KELLY_RECOMMENDATION_REASONS.STAKE_BELOW_ROUNDING_INCREMENT) {
+    return 'Kelly stake below rounding increment'
+  }
+
+  if (reason === KELLY_RECOMMENDATION_REASONS.NON_POSITIVE_KELLY) {
+    return 'No actionable Kelly amount'
+  }
+
+  return 'Confirm preliminary inputs in Analyzer'
+}
+
+const createDashboardStatus = ({
+  evaluatedSideCount = 0,
+  savedBetSummary,
+  status,
+  valueSide = null,
+}) => ({
+  bestOpportunity: valueSide,
+  evaluatedSideCount,
+  savedBetSummary,
+  status,
+  statusPresentation: DASHBOARD_GAME_STATUS_PRESENTATION[status],
+  statusReason: getStatusReason({
+    status,
+    valueSide,
+  }),
+  valueSide,
+})
 
 export const getDashboardGameStatus = ({
   analysis = null,
@@ -269,43 +323,31 @@ export const getDashboardGameStatus = ({
   const savedBetSummary = summarizeSavedBets(savedBets)
 
   if (savedBetSummary.hasBets) {
-    return {
-      bestOpportunity: null,
+    return createDashboardStatus({
       savedBetSummary,
       status: DASHBOARD_GAME_STATUSES.BET_SAVED,
-      statusPresentation:
-        DASHBOARD_GAME_STATUS_PRESENTATION[DASHBOARD_GAME_STATUSES.BET_SAVED],
-    }
+    })
   }
 
   if (isGameFinal(game)) {
-    return {
-      bestOpportunity: null,
+    return createDashboardStatus({
       savedBetSummary,
       status: DASHBOARD_GAME_STATUSES.FINAL,
-      statusPresentation:
-        DASHBOARD_GAME_STATUS_PRESENTATION[DASHBOARD_GAME_STATUSES.FINAL],
-    }
+    })
   }
 
   if (isGameStarted(game)) {
-    return {
-      bestOpportunity: null,
+    return createDashboardStatus({
       savedBetSummary,
       status: DASHBOARD_GAME_STATUSES.GAME_STARTED,
-      statusPresentation:
-        DASHBOARD_GAME_STATUS_PRESENTATION[DASHBOARD_GAME_STATUSES.GAME_STARTED],
-    }
+    })
   }
 
-  if (!analysis) {
-    return {
-      bestOpportunity: null,
+  if (!analysis?.available) {
+    return createDashboardStatus({
       savedBetSummary,
-      status: DASHBOARD_GAME_STATUSES.NOT_ANALYZED,
-      statusPresentation:
-        DASHBOARD_GAME_STATUS_PRESENTATION[DASHBOARD_GAME_STATUSES.NOT_ANALYZED],
-    }
+      status: DASHBOARD_GAME_STATUSES.PRELIMINARY_ANALYSIS_UNAVAILABLE,
+    })
   }
 
   const opportunities = getDashboardSideOpportunities({
@@ -315,57 +357,49 @@ export const getDashboardGameStatus = ({
     bettingSettings,
     homeTeam,
   })
-  const bestOpportunity = getBestOpportunity(opportunities)
+  const valueSide = getDashboardValueSide(opportunities)
   const hasAnyOdds = opportunities.some((opportunity) => opportunity.hasValidOdds)
-  const hasCandidate = opportunities.some(
-    (opportunity) =>
-      opportunity.hasValidOdds &&
-      opportunity.hasPositiveEdge &&
-      opportunity.recommendation?.eligible,
+  const evaluatedSideCount = opportunities.filter(
+    (opportunity) => opportunity.hasValidOdds,
+  ).length
+  const candidateSide = getDashboardValueSide(
+    opportunities.filter((opportunity) => opportunity.recommendation?.eligible),
   )
 
-  if (hasCandidate) {
-    return {
-      bestOpportunity,
+  if (candidateSide) {
+    return createDashboardStatus({
+      evaluatedSideCount,
       savedBetSummary,
       status: DASHBOARD_GAME_STATUSES.BET_CANDIDATE,
-      statusPresentation:
-        DASHBOARD_GAME_STATUS_PRESENTATION[DASHBOARD_GAME_STATUSES.BET_CANDIDATE],
-    }
+      valueSide: candidateSide,
+    })
   }
 
-  if (bestOpportunity) {
-    return {
-      bestOpportunity,
+  if (valueSide) {
+    return createDashboardStatus({
+      evaluatedSideCount,
       savedBetSummary,
-      status: DASHBOARD_GAME_STATUSES.POTENTIAL_VALUE,
-      statusPresentation:
-        DASHBOARD_GAME_STATUS_PRESENTATION[DASHBOARD_GAME_STATUSES.POTENTIAL_VALUE],
-    }
+      status: DASHBOARD_GAME_STATUSES.WORTH_REVIEWING,
+      valueSide,
+    })
   }
 
   if (!hasAnyOdds) {
-    return {
-      bestOpportunity: null,
+    return createDashboardStatus({
       savedBetSummary,
-      status: DASHBOARD_GAME_STATUSES.NEEDS_ODDS,
-      statusPresentation:
-        DASHBOARD_GAME_STATUS_PRESENTATION[DASHBOARD_GAME_STATUSES.NEEDS_ODDS],
-    }
+      status: DASHBOARD_GAME_STATUSES.ADD_ODDS,
+    })
   }
 
-  return {
-    bestOpportunity: null,
+  return createDashboardStatus({
+    evaluatedSideCount,
     savedBetSummary,
-    status: DASHBOARD_GAME_STATUSES.ANALYZED_NO_VALUE,
-    statusPresentation:
-      DASHBOARD_GAME_STATUS_PRESENTATION[
-        DASHBOARD_GAME_STATUSES.ANALYZED_NO_VALUE
-      ],
-  }
+    status: DASHBOARD_GAME_STATUSES.NO_CURRENT_VALUE,
+  })
 }
 
 export const hasModelProbabilities = (analysis = null) =>
+  Boolean(analysis?.available) &&
   Number.isFinite(analysis?.awayMarket?.modelProbability) &&
   Number.isFinite(analysis?.homeMarket?.modelProbability)
 

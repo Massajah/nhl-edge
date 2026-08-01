@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   fetchGamesForDate,
   fetchTodaysGames,
@@ -7,6 +7,7 @@ import {
 import { getBankrollSummary } from '../services/bankrollApi.js'
 import { fetchBets } from '../services/betsApi.js'
 import { getBettingSettings } from '../services/bettingSettingsApi.js'
+import { fetchGameContexts } from '../services/gameContextApi.js'
 import {
   formatBankrollCurrency,
   formatSignedBankrollCurrency,
@@ -25,8 +26,8 @@ import {
   saveDashboardMarketOdds,
 } from '../utils/marketOdds.js'
 import {
-  MODEL_STATUSES,
   PROBABILITY_EDGE_HELP_TEXT,
+  parseMarketOdds,
 } from '../utils/calculateGame.js'
 import {
   DASHBOARD_GAME_STATUSES,
@@ -38,7 +39,6 @@ import {
   getBetsForGames,
   getDashboardCurrency,
   getDashboardGameStatus,
-  getModelLean,
   getPreviousLocalDateValue,
   getWinner,
   groupBetsByGameId,
@@ -49,6 +49,13 @@ import {
   parseLocalDateValue,
 } from '../utils/dashboard.js'
 import { normalizeBets } from '../utils/savedAnalyses.js'
+import {
+  formatSignedGameContextAdjustment,
+  getGameContextForSide,
+  hasNonZeroGameContextAdjustment,
+  normalizeGameContext,
+} from '../utils/gameContext.js'
+import { createLatestRequestTracker } from '../utils/requestTracker.js'
 
 const formatScheduleDate = (date) => {
   if (!date) {
@@ -117,27 +124,11 @@ const formatPercent = (value) =>
 
 const formatProbabilityEdge = (value) =>
   Number.isFinite(value)
-    ? `${value >= 0 ? '+' : ''}${(value * 100).toFixed(1)} pp`
+    ? `${value >= 0 ? '+' : ''}${(value * 100).toFixed(2)} pp`
     : '--'
 
 const formatExpectedValue = (value) =>
   Number.isFinite(value) ? `${value >= 0 ? '+' : ''}${value.toFixed(1)}%` : '--'
-
-const getValueStatusTone = (analysis) => {
-  if (!analysis.hasAnyMarketOdds) {
-    return 'empty'
-  }
-
-  if (analysis.status === MODEL_STATUSES.POSITIVE_VALUE) {
-    return 'positive-value'
-  }
-
-  if (analysis.status === MODEL_STATUSES.BELOW_THRESHOLD) {
-    return 'below-threshold'
-  }
-
-  return 'no-value'
-}
 
 const getGameId = (gameOrBet = {}) =>
   String(gameOrBet.gameId ?? gameOrBet.id ?? '').trim()
@@ -192,6 +183,20 @@ const getBetResultPresentation = (result) => {
   }
 }
 
+const indexGameContexts = (contexts = []) =>
+  (Array.isArray(contexts) ? contexts : []).reduce(
+    (contextsByGameId, context) => {
+      const normalizedContext = normalizeGameContext(context)
+
+      if (normalizedContext?.gameId) {
+        contextsByGameId[normalizedContext.gameId] = normalizedContext
+      }
+
+      return contextsByGameId
+    },
+    {},
+  )
+
 const getProfitTone = (value) => {
   if (value > 0) {
     return 'positive'
@@ -218,6 +223,9 @@ function Dashboard({
   initialBettingSettings = null,
   initialBettingSettingsError = '',
   initialBettingSettingsStatus = null,
+  initialGameContexts = null,
+  initialGameContextsError = '',
+  initialGameContextsStatus = null,
   initialMarketOdds = null,
   initialPreviousSchedule = null,
   initialPreviousError = '',
@@ -274,9 +282,21 @@ function Dashboard({
   const [bettingSettingsError, setBettingSettingsError] = useState(
     initialBettingSettingsError,
   )
+  const [gameContextsByGameId, setGameContextsByGameId] = useState(() =>
+    indexGameContexts(initialGameContexts ?? []),
+  )
+  const [gameContextStatus, setGameContextStatus] = useState(
+    initialGameContextsStatus ??
+      (initialGameContexts ? 'success' : 'idle'),
+  )
+  const [gameContextError, setGameContextError] = useState(
+    initialGameContextsError,
+  )
   const [marketOddsByGame, setMarketOddsByGame] = useState(() =>
     initialMarketOdds ?? loadDashboardMarketOdds(),
   )
+  const dateChangeDebounceRef = useRef(null)
+  const scheduleRequestTrackerRef = useRef(createLatestRequestTracker())
 
   const applySchedule = useCallback((nextSchedule, fallbackDate = '') => {
     const nextDate = nextSchedule.date ?? fallbackDate
@@ -289,8 +309,13 @@ function Dashboard({
     setStatus('success')
   }, [])
 
-  const loadPreviousSchedule = useCallback(async (date) => {
+  const loadPreviousSchedule = useCallback(async (date, options = {}) => {
     const previousDate = getPreviousLocalDateValue(date)
+    const shouldApply = options.shouldApply ?? (() => true)
+
+    if (!shouldApply()) {
+      return
+    }
 
     setPreviousStatus('loading')
     setPreviousErrorMessage('')
@@ -299,12 +324,20 @@ function Dashboard({
       const nextSchedule = await fetchGamesForDate(previousDate)
       const nextDate = nextSchedule.date ?? previousDate
 
+      if (!shouldApply()) {
+        return
+      }
+
       setPreviousSchedule({
         date: nextDate,
         games: nextSchedule.games ?? [],
       })
       setPreviousStatus('success')
     } catch (error) {
+      if (!shouldApply()) {
+        return
+      }
+
       setPreviousSchedule({
         date: previousDate,
         games: [],
@@ -359,15 +392,28 @@ function Dashboard({
 
   const loadScheduleForDate = useCallback(
     async (date) => {
+      const request = scheduleRequestTrackerRef.current.start()
+
       setSelectedDate(date)
       setStatus('loading')
       setErrorMessage('')
 
       try {
         const nextSchedule = await fetchGamesForDate(date)
+
+        if (!request.isLatest()) {
+          return
+        }
+
         applySchedule(nextSchedule, date)
-        await loadPreviousSchedule(nextSchedule.date ?? date)
+        await loadPreviousSchedule(nextSchedule.date ?? date, {
+          shouldApply: request.isLatest,
+        })
       } catch (error) {
+        if (!request.isLatest()) {
+          return
+        }
+
         setStatus('error')
         setErrorMessage(error.message)
       }
@@ -376,14 +422,27 @@ function Dashboard({
   )
 
   const loadTodaySchedule = useCallback(async () => {
+    const request = scheduleRequestTrackerRef.current.start()
+
     setStatus('loading')
     setErrorMessage('')
 
     try {
       const nextSchedule = await fetchTodaysGames()
+
+      if (!request.isLatest()) {
+        return
+      }
+
       applySchedule(nextSchedule, toLocalDateValue(new Date()))
-      await loadPreviousSchedule(nextSchedule.date ?? toLocalDateValue(new Date()))
+      await loadPreviousSchedule(nextSchedule.date ?? toLocalDateValue(new Date()), {
+        shouldApply: request.isLatest,
+      })
     } catch (error) {
+      if (!request.isLatest()) {
+        return
+      }
+
       setStatus('error')
       setErrorMessage(error.message)
     }
@@ -393,17 +452,21 @@ function Dashboard({
     let isCurrent = true
 
     const loadInitialSchedule = async () => {
+      const request = scheduleRequestTrackerRef.current.start()
+
       try {
         const todaySchedule = await fetchTodaysGames()
 
-        if (!isCurrent) {
+        if (!isCurrent || !request.isLatest()) {
           return
         }
 
         applySchedule(todaySchedule, toLocalDateValue(new Date()))
-        loadPreviousSchedule(todaySchedule.date ?? toLocalDateValue(new Date()))
+        loadPreviousSchedule(todaySchedule.date ?? toLocalDateValue(new Date()), {
+          shouldApply: () => isCurrent && request.isLatest(),
+        })
       } catch (error) {
-        if (!isCurrent) {
+        if (!isCurrent || !request.isLatest()) {
           return
         }
 
@@ -419,6 +482,17 @@ function Dashboard({
     }
   }, [applySchedule, loadPreviousSchedule])
 
+  useEffect(
+    () => () => {
+      if (dateChangeDebounceRef.current) {
+        clearTimeout(dateChangeDebounceRef.current)
+      }
+
+      scheduleRequestTrackerRef.current.invalidate()
+    },
+    [],
+  )
+
   useEffect(() => {
     const timerId = setTimeout(() => {
       loadAccountData()
@@ -428,6 +502,47 @@ function Dashboard({
       clearTimeout(timerId)
     }
   }, [loadAccountData])
+
+  useEffect(() => {
+    let isCurrent = true
+
+    const loadGameContexts = async () => {
+      if (status !== 'success' || schedule.games.length === 0) {
+        setGameContextsByGameId({})
+        setGameContextStatus('idle')
+        setGameContextError('')
+        return
+      }
+
+      setGameContextStatus('loading')
+      setGameContextError('')
+
+      try {
+        const result = await fetchGameContexts(schedule.games)
+
+        if (!isCurrent) {
+          return
+        }
+
+        setGameContextsByGameId(indexGameContexts(result.contexts))
+        setGameContextStatus('success')
+      } catch (error) {
+        if (!isCurrent) {
+          return
+        }
+
+        setGameContextsByGameId({})
+        setGameContextStatus('error')
+        setGameContextError(error.message)
+      }
+    }
+
+    loadGameContexts()
+
+    return () => {
+      isCurrent = false
+    }
+  }, [schedule.games, status])
 
   const displayDate = selectedDate || schedule.date
   const dateContextLabels = useMemo(
@@ -478,6 +593,7 @@ function Dashboard({
             ? calculatePreliminaryAnalysis({
                 awayTeamId: game.awayTeam.abbreviation,
                 baseHomeAdvantage,
+                gameContext: gameContextsByGameId[String(game.gameId)] ?? null,
                 homeTeamId: game.homeTeam.abbreviation,
                 injurySummaries,
                 marketOdds: normalizedMarketOdds,
@@ -494,17 +610,16 @@ function Dashboard({
           homeTeam: game.homeTeam,
           savedBets,
         })
+        const canAnalyzeGame =
+          canUseModel &&
+          (isGameStarted(game) || preliminaryAnalysis?.available !== false)
 
         return {
-          canAnalyze: canUseModel,
+          canAnalyze: canAnalyzeGame,
           dashboardStatus,
           game,
+          gameContext: gameContextsByGameId[String(game.gameId)] ?? null,
           marketOdds: normalizedMarketOdds,
-          modelLean: getModelLean(
-            preliminaryAnalysis,
-            game.awayTeam,
-            game.homeTeam,
-          ),
           preliminaryAnalysis,
           savedBets,
         }
@@ -515,6 +630,7 @@ function Dashboard({
       bettingSettings,
       betsByGameId,
       canUseModel,
+      gameContextsByGameId,
       injurySummaries,
       marketOddsByGame,
       powerRatings,
@@ -564,7 +680,19 @@ function Dashboard({
     const nextDate = event.target.value
 
     if (nextDate) {
-      loadScheduleForDate(nextDate)
+      scheduleRequestTrackerRef.current.invalidate()
+      setSelectedDate(nextDate)
+      setStatus('loading')
+      setErrorMessage('')
+
+      if (dateChangeDebounceRef.current) {
+        clearTimeout(dateChangeDebounceRef.current)
+      }
+
+      dateChangeDebounceRef.current = setTimeout(() => {
+        dateChangeDebounceRef.current = null
+        loadScheduleForDate(nextDate)
+      }, 200)
     }
   }
 
@@ -733,6 +861,8 @@ function Dashboard({
                     dashboardGame={dashboardGame}
                     key={dashboardGame.game.gameId}
                     currency={currency}
+                    gameContextError={gameContextError}
+                    gameContextStatus={gameContextStatus}
                     onMarketOddsChange={handleMarketOddsChange}
                     onAnalyzeGame={onAnalyzeGame}
                     onViewBets={handleViewBets}
@@ -866,7 +996,7 @@ function TodayActivitySummary({ ariaLabel, betsStatus, summary }) {
       value: String(summary.analyzedCount),
     },
     {
-      label: 'Candidates',
+      label: 'Bet Candidates',
       tone: summary.candidateCount > 0 ? 'positive' : '',
       value: String(summary.candidateCount),
     },
@@ -918,6 +1048,8 @@ function GameCard({
   dashboardGame,
   injurySummaries,
   injurySummaryStatus,
+  gameContextError,
+  gameContextStatus,
   onAnalyzeGame,
   onMarketOddsChange,
   onViewBets,
@@ -927,8 +1059,8 @@ function GameCard({
     canAnalyze,
     dashboardStatus,
     game,
+    gameContext,
     marketOdds,
-    modelLean,
     preliminaryAnalysis,
     savedBets,
   } = dashboardGame
@@ -1000,12 +1132,6 @@ function GameCard({
         </div>
       ) : null}
 
-      <ModelLeanSummary modelLean={modelLean} />
-
-      {dashboardStatus.bestOpportunity ? (
-        <BestOpportunitySummary opportunity={dashboardStatus.bestOpportunity} />
-      ) : null}
-
       {savedBets.length > 0 ? (
         <SavedBetSummary
           currency={currency}
@@ -1013,7 +1139,18 @@ function GameCard({
         />
       ) : null}
 
-      {preliminaryAnalysis ? (
+      <DashboardIntelligenceSummary
+        currency={currency}
+        dashboardStatus={dashboardStatus}
+      />
+
+      <GameContextSummary
+        gameContext={gameContext}
+        gameContextError={gameContextError}
+        gameContextStatus={gameContextStatus}
+      />
+
+      {preliminaryAnalysis?.available ? (
         <PreliminaryAnalysis
           analysis={preliminaryAnalysis}
           awayTeam={game.awayTeam}
@@ -1034,7 +1171,7 @@ function GameCard({
           className={`analyze-game-button ${isCompletedGame ? 'historical' : ''}`}
           type="button"
           disabled={!canAnalyze}
-          onClick={() => onAnalyzeGame(game, marketOdds)}
+          onClick={() => onAnalyzeGame(game, marketOdds, gameContext)}
         >
           {actionLabel}
         </button>
@@ -1052,33 +1189,47 @@ function GameCard({
   )
 }
 
-function ModelLeanSummary({ modelLean }) {
-  const hasLean = Boolean(modelLean?.team)
+function GameContextSummary({
+  gameContext,
+  gameContextError = '',
+  gameContextStatus = 'idle',
+}) {
+  if (!gameContext) {
+    if (gameContextStatus === 'error') {
+      return (
+        <div className="game-context-summary neutral" role="status">
+          <span>Context unavailable</span>
+          <small>{gameContextError}</small>
+        </div>
+      )
+    }
 
-  return (
-    <div className="model-lean-row">
-      <span>Model lean</span>
-      <strong>
-        {hasLean ? modelLean.team.name : 'Not available'}
-        {hasLean && Number.isFinite(modelLean.probability) ? (
-          <small>{formatPercent(modelLean.probability)} win probability</small>
-        ) : null}
-      </strong>
-    </div>
-  )
-}
+    return null
+  }
 
-function BestOpportunitySummary({ opportunity }) {
-  if (!opportunity?.team || !Number.isFinite(opportunity.edge)) {
+  const awayContext = getGameContextForSide(gameContext, 'away')
+  const homeContext = getGameContextForSide(gameContext, 'home')
+  const items = [
+    ['Away', awayContext],
+    ['Home', homeContext],
+  ].filter(([, context]) => hasNonZeroGameContextAdjustment(context))
+
+  if (items.length === 0) {
     return null
   }
 
   return (
-    <div className="best-value-row">
-      <span>Best value</span>
-      <strong>
-        {opportunity.team.name} {formatProbabilityEdge(opportunity.edge)}
-      </strong>
+    <div className="game-context-summary" aria-label="Game context adjustments">
+      {items.map(([label, context]) => (
+        <span key={label}>
+          {label} context{' '}
+          <strong>
+            {formatSignedGameContextAdjustment(
+              context.totalGameContextAdjustment,
+            )}
+          </strong>
+        </span>
+      ))}
     </div>
   )
 }
@@ -1105,7 +1256,7 @@ function SavedBetSummary({ currency, savedBetSummary }) {
 
   return (
     <div className="saved-bet-summary">
-      <span>Bet saved</span>
+      <span>Bet Saved</span>
       <strong>{getBetTeamName(firstBet)}</strong>
       <small>
         {formatDashboardCurrency(firstBet.stake, currency)}{' '}
@@ -1118,6 +1269,91 @@ function SavedBetSummary({ currency, savedBetSummary }) {
       ) : null}
     </div>
   )
+}
+
+function DashboardIntelligenceSummary({ currency, dashboardStatus }) {
+  const status = dashboardStatus?.status
+  const statusReason = dashboardStatus?.statusReason ?? ''
+  const valueSide = dashboardStatus?.valueSide
+  const evaluatedSideCount = dashboardStatus?.evaluatedSideCount ?? 0
+  const oneSideNote =
+    evaluatedSideCount === 1 ? 'Only one side evaluated.' : ''
+
+  if (
+    status === DASHBOARD_GAME_STATUSES.BET_SAVED ||
+    status === DASHBOARD_GAME_STATUSES.FINAL ||
+    status === DASHBOARD_GAME_STATUSES.GAME_STARTED
+  ) {
+    return null
+  }
+
+  if (
+    status === DASHBOARD_GAME_STATUSES.BET_CANDIDATE ||
+    status === DASHBOARD_GAME_STATUSES.WORTH_REVIEWING
+  ) {
+    const kellyAmount = valueSide?.recommendation?.recommendedStakeAmount
+    const showKelly =
+      status === DASHBOARD_GAME_STATUSES.BET_CANDIDATE &&
+      valueSide?.recommendation?.eligible &&
+      Number.isFinite(kellyAmount) &&
+      kellyAmount > 0
+
+    if (!valueSide?.team || !Number.isFinite(valueSide.edge)) {
+      return null
+    }
+
+    return (
+      <div className="dashboard-intelligence" aria-label="Dashboard intelligence">
+        <div className="value-side-row">
+          <span>Value Side</span>
+          <strong>{valueSide.team.name}</strong>
+        </div>
+        <div className="dashboard-intelligence-metrics">
+          <span title={PROBABILITY_EDGE_HELP_TEXT}>
+            Edge <strong>{formatProbabilityEdge(valueSide.edge)}</strong>
+          </span>
+          {showKelly ? (
+            <span>
+              Kelly{' '}
+              <strong>{formatDashboardCurrency(kellyAmount, currency)}</strong>
+            </span>
+          ) : null}
+        </div>
+        {statusReason || oneSideNote ? (
+          <small>{[statusReason, oneSideNote].filter(Boolean).join(' ')}</small>
+        ) : null}
+      </div>
+    )
+  }
+
+  if (status === DASHBOARD_GAME_STATUSES.ADD_ODDS) {
+    return (
+      <div className="dashboard-intelligence neutral" aria-label="Dashboard intelligence">
+        <strong>Preliminary probabilities are ready.</strong>
+        <small>Enter market odds to evaluate betting value.</small>
+      </div>
+    )
+  }
+
+  if (status === DASHBOARD_GAME_STATUSES.NO_CURRENT_VALUE) {
+    return (
+      <div className="dashboard-intelligence neutral" aria-label="Dashboard intelligence">
+        <strong>No positive edge at the entered odds.</strong>
+        {oneSideNote ? <small>{oneSideNote}</small> : null}
+      </div>
+    )
+  }
+
+  if (status === DASHBOARD_GAME_STATUSES.PRELIMINARY_ANALYSIS_UNAVAILABLE) {
+    return (
+      <div className="dashboard-intelligence neutral" aria-label="Dashboard intelligence">
+        <strong>Preliminary analysis unavailable.</strong>
+        {statusReason ? <small>{statusReason}</small> : null}
+      </div>
+    )
+  }
+
+  return null
 }
 
 function LastNightSection({
@@ -1455,16 +1691,13 @@ function PreliminaryAnalysis({
   marketOdds,
   onMarketOddsChange,
 }) {
-  const statusTone = getValueStatusTone(analysis)
-
   return (
     <div className="preliminary-panel" aria-label="Preliminary model analysis">
       <div className="preliminary-status-row">
         <span className="preliminary-badge">Preliminary</span>
-        <span className="review-badge">Needs review</span>
-        <strong className={`preliminary-value-status ${statusTone}`}>
-          {analysis.status}
-        </strong>
+        {analysis.usesUnknownInputs ? (
+          <span className="review-badge">Defaults used</span>
+        ) : null}
       </div>
 
       <div className="preliminary-market-grid">
@@ -1512,6 +1745,13 @@ function PreliminaryMarketSide({
   onMarketOddsChange,
   team,
 }) {
+  const hasInvalidOdds =
+    marketOddsValue !== '' &&
+    marketOddsValue !== null &&
+    marketOddsValue !== undefined &&
+    !parseMarketOdds(marketOddsValue)
+  const validationId = `dashboard-${team.abbreviation || label}-market-odds-validation`
+
   return (
     <div className="preliminary-market-side">
       <div>
@@ -1522,6 +1762,8 @@ function PreliminaryMarketSide({
         <span>Market</span>
         <input
           aria-label={`${team.name} market odds`}
+          aria-describedby={hasInvalidOdds ? validationId : undefined}
+          aria-invalid={hasInvalidOdds}
           inputMode="decimal"
           min="1.01"
           placeholder="Odds"
@@ -1530,6 +1772,11 @@ function PreliminaryMarketSide({
           value={marketOddsValue}
           onChange={(event) => onMarketOddsChange(event.target.value)}
         />
+        {hasInvalidOdds ? (
+          <small id={validationId} role="alert">
+            Market odds must be greater than 1.
+          </small>
+        ) : null}
       </label>
     </div>
   )

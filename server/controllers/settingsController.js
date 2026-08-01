@@ -1,5 +1,6 @@
 const ratingEngineSettingsService = require('../services/ratingEngineSettingsService')
 const bettingSettingsService = require('../services/bettingSettingsService')
+const quickRematchSettingsService = require('../services/quickRematchSettingsService')
 
 const getBettingSettings = async (request, response, next) => {
   try {
@@ -75,11 +76,51 @@ const resetRatingEngineSettings = async (request, response, next) => {
   }
 }
 
+const getQuickRematchSettings = async (request, response, next) => {
+  try {
+    const result = await quickRematchSettingsService.getQuickRematchSettings(
+      request.user.id,
+    )
+
+    response.json(result)
+  } catch (error) {
+    next(error)
+  }
+}
+
+const updateQuickRematchSettings = async (request, response, next) => {
+  try {
+    const result = await quickRematchSettingsService.updateQuickRematchSettings(
+      request.user.id,
+      request.body,
+    )
+
+    response.json(result)
+  } catch (error) {
+    next(error)
+  }
+}
+
+const resetQuickRematchSettings = async (request, response, next) => {
+  try {
+    const result = await quickRematchSettingsService.resetQuickRematchSettings(
+      request.user.id,
+    )
+
+    response.json(result)
+  } catch (error) {
+    next(error)
+  }
+}
+
 module.exports = {
   getBettingSettings,
+  getQuickRematchSettings,
   getRatingEngineSettings,
   resetBettingSettings,
+  resetQuickRematchSettings,
   resetRatingEngineSettings,
   updateBettingSettings,
+  updateQuickRematchSettings,
   updateRatingEngineSettings,
 }

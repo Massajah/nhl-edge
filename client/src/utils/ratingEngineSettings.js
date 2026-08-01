@@ -60,7 +60,12 @@ export const normalizeRatingEngineSettings = (
   settings = DEFAULT_RATING_ENGINE_SETTINGS,
 ) =>
   RATING_ENGINE_SETTING_FIELDS.reduce((normalizedSettings, field) => {
-    const value = Number(settings[field.key])
+    const sourceValue = settings[field.key]
+    const value = Number(
+      typeof sourceValue === 'string'
+        ? sourceValue.trim().replace(',', '.')
+        : sourceValue,
+    )
 
     normalizedSettings[field.key] = Number.isFinite(value)
       ? value
@@ -75,7 +80,9 @@ export const parseRatingEngineSettingsDraft = (draft = {}) => {
 
   RATING_ENGINE_SETTING_FIELDS.forEach((field) => {
     const rawValue = draft[field.key]
-    const value = Number(rawValue)
+    const value = Number(
+      typeof rawValue === 'string' ? rawValue.trim().replace(',', '.') : rawValue,
+    )
 
     if (rawValue === null || String(rawValue ?? '').trim() === '') {
       fieldErrors[field.key] = `${field.label} is required.`

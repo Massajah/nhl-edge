@@ -68,6 +68,8 @@ const adjustmentsSchema = new mongoose.Schema(
     awayRecentForm: { type: Number, default: 0 },
     homeRestFatigue: { type: Number, default: 0 },
     awayRestFatigue: { type: Number, default: 0 },
+    homeQuickRematch: { type: Number, default: 0 },
+    awayQuickRematch: { type: Number, default: 0 },
     homeMotivation: { type: Number, default: 0 },
     awayMotivation: { type: Number, default: 0 },
     homeManualAdjustment: { type: Number, default: 0 },
@@ -288,6 +290,10 @@ const betSchema = new mongoose.Schema(
       type: Number,
       default: null,
     },
+    quickRematchAdjustment: {
+      type: Number,
+      default: null,
+    },
     motivationAdjustment: {
       type: Number,
       default: null,
@@ -353,6 +359,10 @@ const betSchema = new mongoose.Schema(
     kellyRecommendation: {
       type: kellyRecommendationSchema,
       default: undefined,
+    },
+    gameContextSnapshot: {
+      type: mongoose.Schema.Types.Mixed,
+      default: null,
     },
   },
   {

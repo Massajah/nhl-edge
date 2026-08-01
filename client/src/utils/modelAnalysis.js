@@ -6,10 +6,106 @@ import {
   parseMarketOdds,
 } from './calculateGame.js'
 import { getTeamInjurySummary } from './injuries.js'
+import { applyGameContextToInputs } from './gameContext.js'
 import {
   getEffectiveHomeAdvantage,
   getTeamPowerRating,
 } from './powerRatings.js'
+
+export const PRELIMINARY_ANALYSIS_INPUT_STATUS = Object.freeze({
+  COMPLETE: 'COMPLETE',
+  UNAVAILABLE: 'UNAVAILABLE',
+  USES_DEFAULTS: 'USES_DEFAULTS',
+})
+
+const DEFAULTED_PRELIMINARY_INPUTS = Object.freeze([
+  'away.goalieAdjustment',
+  'away.restFatigue',
+  'away.quickRematchAdjustment',
+  'away.motivation',
+  'away.manualAdjustment',
+  'home.goalieAdjustment',
+  'home.restFatigue',
+  'home.quickRematchAdjustment',
+  'home.motivation',
+  'home.manualAdjustment',
+])
+
+const normalizeIdentifier = (value) =>
+  typeof value === 'string' ? value.trim().toUpperCase() : ''
+
+const toFiniteNumberOrNull = (value) => {
+  if (value === null || value === undefined || value === '') {
+    return null
+  }
+
+  const numberValue = Number(value)
+
+  return Number.isFinite(numberValue) ? numberValue : null
+}
+
+const getRatingTeamId = (rating = {}) =>
+  normalizeIdentifier(rating.teamId ?? rating.id ?? rating.abbreviation)
+
+const getSourcePowerRating = (powerRatings, teamId) => {
+  const normalizedTeamId = normalizeIdentifier(teamId)
+
+  if (!normalizedTeamId || !powerRatings) {
+    return null
+  }
+
+  if (Array.isArray(powerRatings)) {
+    return (
+      powerRatings.find(
+        (rating) => getRatingTeamId(rating) === normalizedTeamId,
+      ) ?? null
+    )
+  }
+
+  const directRating = powerRatings[normalizedTeamId]
+
+  if (directRating) {
+    return directRating
+  }
+
+  return (
+    Object.entries(powerRatings).find(
+      ([key, rating]) =>
+        normalizeIdentifier(key) === normalizedTeamId ||
+        getRatingTeamId(rating) === normalizedTeamId,
+    )?.[1] ?? null
+  )
+}
+
+const getMissingCoreData = ({ awayTeamId, homeTeamId, powerRatings }) => {
+  const missingCoreData = []
+  const teams = [
+    ['away', awayTeamId],
+    ['home', homeTeamId],
+  ]
+
+  teams.forEach(([side, teamId]) => {
+    const normalizedTeamId = normalizeIdentifier(teamId)
+
+    if (!normalizedTeamId) {
+      missingCoreData.push(`${side}.team`)
+      return
+    }
+
+    const rating = getSourcePowerRating(powerRatings, normalizedTeamId)
+
+    if (!rating) {
+      missingCoreData.push(`${side}.powerRating`)
+      return
+    }
+
+    if (toFiniteNumberOrNull(rating.baseRating) === null) {
+      missingCoreData.push(`${side}.baseRating`)
+    }
+  })
+
+  return missingCoreData
+}
 
 export const defaultGameInputs = {
   home: {
@@ -21,6 +117,7 @@ export const defaultGameInputs = {
     injuries: 0,
     goalieAdjustment: 0,
     restFatigue: 0,
+    quickRematchAdjustment: 0,
     motivation: 0,
     manualAdjustment: 0,
   },
@@ -32,6 +129,7 @@ export const defaultGameInputs = {
     injuries: 0,
     goalieAdjustment: 0,
     restFatigue: 0,
+    quickRematchAdjustment: 0,
     motivation: 0,
     manualAdjustment: 0,
   },
@@ -43,6 +141,7 @@ export const createInputsForTeams = (
   marketOdds = {},
   injurySummaries = {},
   baseHomeAdvantage = 0,
+  gameContext = null,
 ) => {
   const homeRating = getTeamPowerRating(powerRatings, teams.home)
   const awayRating = getTeamPowerRating(powerRatings, teams.away)
@@ -51,7 +150,7 @@ export const createInputsForTeams = (
   const homeMarketOdds = parseMarketOdds(marketOdds.home)
   const awayMarketOdds = parseMarketOdds(marketOdds.away)
 
-  return {
+  const inputs = {
     home: {
       ...defaultGameInputs.home,
       baseRating: homeRating.baseRating,
@@ -69,6 +168,8 @@ export const createInputsForTeams = (
       marketOdds: awayMarketOdds ?? defaultGameInputs.away.marketOdds,
     },
   }
+
+  return applyGameContextToInputs(inputs, gameContext)
 }
 
 export const applyTeamRatingsToInputs = (
@@ -77,13 +178,14 @@ export const applyTeamRatingsToInputs = (
   inputs,
   injurySummaries = {},
   baseHomeAdvantage = 0,
+  gameContext = null,
 ) => {
   const homeRating = getTeamPowerRating(powerRatings, teams.home)
   const awayRating = getTeamPowerRating(powerRatings, teams.away)
   const homeInjurySummary = getTeamInjurySummary(injurySummaries, teams.home)
   const awayInjurySummary = getTeamInjurySummary(injurySummaries, teams.away)
 
-  return {
+  const updatedInputs = {
     home: {
       ...inputs.home,
       baseRating: homeRating.baseRating,
@@ -99,6 +201,8 @@ export const applyTeamRatingsToInputs = (
       storedInjuryImpact: awayInjurySummary.totalImpact,
     },
   }
+
+  return applyGameContextToInputs(updatedInputs, gameContext)
 }
 
 const createMarketSide = ({ fairOdds, marketOdds, modelProbability }) => {
@@ -129,7 +233,28 @@ export const calculatePreliminaryAnalysis = ({
   marketOdds = {},
   powerRatings,
   injurySummaries = {},
+  gameContext = null,
 }) => {
+  const missingCoreData = getMissingCoreData({
+    awayTeamId,
+    homeTeamId,
+    powerRatings,
+  })
+
+  if (missingCoreData.length > 0) {
+    return {
+      available: false,
+      defaultedInputFields: [],
+      hasAnyMarketOdds: Boolean(
+        parseMarketOdds(marketOdds.away) || parseMarketOdds(marketOdds.home),
+      ),
+      inputStatus: PRELIMINARY_ANALYSIS_INPUT_STATUS.UNAVAILABLE,
+      missingCoreData,
+      status: PRELIMINARY_ANALYSIS_INPUT_STATUS.UNAVAILABLE,
+      usesUnknownInputs: false,
+    }
+  }
+
   const teams = {
     away: awayTeamId,
     home: homeTeamId,
@@ -140,6 +265,7 @@ export const calculatePreliminaryAnalysis = ({
     marketOdds,
     injurySummaries,
     baseHomeAdvantage,
+    gameContext,
   )
   const result = calculateGame(inputs.home, inputs.away)
   const homeMarket = createMarketSide({
@@ -160,14 +286,29 @@ export const calculatePreliminaryAnalysis = ({
     homeMarket.modelStatus === MODEL_STATUSES.BELOW_THRESHOLD ||
     awayMarket.modelStatus === MODEL_STATUSES.BELOW_THRESHOLD
 
+  const defaultedInputFields = gameContext
+    ? DEFAULTED_PRELIMINARY_INPUTS.filter(
+        (field) =>
+          !field.endsWith('.restFatigue') &&
+          !field.endsWith('.quickRematchAdjustment'),
+      )
+    : DEFAULTED_PRELIMINARY_INPUTS
+
   return {
+    available: true,
     awayFinalRating: result.awayFinalRating,
     awayMarket,
+    defaultedInputFields,
     hasAnyMarketOdds,
     hasPositiveValue,
     homeFinalRating: result.homeFinalRating,
     homeMarket,
+    inputStatus:
+      defaultedInputFields.length > 0
+        ? PRELIMINARY_ANALYSIS_INPUT_STATUS.USES_DEFAULTS
+        : PRELIMINARY_ANALYSIS_INPUT_STATUS.COMPLETE,
     inputs,
+    missingCoreData: [],
     status: !hasAnyMarketOdds
       ? ADD_MARKET_ODDS_STATUS
       : hasPositiveValue
@@ -175,5 +316,6 @@ export const calculatePreliminaryAnalysis = ({
         : hasBelowThreshold
           ? MODEL_STATUSES.BELOW_THRESHOLD
           : MODEL_STATUSES.NO_VALUE,
+    usesUnknownInputs: defaultedInputFields.length > 0,
   }
 }

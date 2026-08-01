@@ -6,6 +6,7 @@ import {
   normalizeModelStatus,
   parseMarketOdds,
 } from './calculateGame.js'
+import { createGameContextSnapshot } from './gameContext.js'
 
 export const SAVED_ANALYSES_STORAGE_KEY = 'nhl-edge-saved-analyses'
 
@@ -109,6 +110,7 @@ const normalizeAdjustments = (values = {}) => ({
   selectedGoalieName: toText(values.selectedGoalieName, ''),
   recentForm: toNumber(values.recentForm ?? values.restFatigue),
   restFatigue: toNumber(values.restFatigue ?? values.recentForm),
+  quickRematchAdjustment: toNumber(values.quickRematchAdjustment),
   motivation: toNumber(values.motivation),
   manualAdjustment: toNumber(values.manualAdjustment),
 })
@@ -192,7 +194,13 @@ export const calculateProfit = (analysis) => {
   return 0
 }
 
-export const createSavedAnalysis = ({ homeTeam, awayTeam, inputs, result }) => {
+export const createSavedAnalysis = ({
+  homeTeam,
+  awayTeam,
+  gameContextSnapshot = null,
+  inputs,
+  result,
+}) => {
   const analysis = {
     id: createId(),
     dateTime: new Date().toISOString(),
@@ -222,6 +230,7 @@ export const createSavedAnalysis = ({ homeTeam, awayTeam, inputs, result }) => {
       home: normalizeAdjustments(inputs.home),
       away: normalizeAdjustments(inputs.away),
     },
+    gameContextSnapshot: createGameContextSnapshot(gameContextSnapshot),
     result: 'pending',
     stake: DEFAULT_STAKE,
   }
@@ -254,6 +263,8 @@ const createAdjustmentsPayload = (inputs) => ({
   awayRecentForm: toNumber(inputs.away.restFatigue ?? inputs.away.recentForm),
   homeRestFatigue: toNumber(inputs.home.restFatigue ?? inputs.home.recentForm),
   awayRestFatigue: toNumber(inputs.away.restFatigue ?? inputs.away.recentForm),
+  homeQuickRematch: toNumber(inputs.home.quickRematchAdjustment),
+  awayQuickRematch: toNumber(inputs.away.quickRematchAdjustment),
   homeMotivation: toNumber(inputs.home.motivation),
   awayMotivation: toNumber(inputs.away.motivation),
   homeManualAdjustment: toNumber(inputs.home.manualAdjustment),
@@ -270,6 +281,7 @@ const createSelectedAdjustmentSnapshot = (values = {}) => {
     gameInjuryAdjustment,
     totalInjuryAdjustment: storedInjuryImpact + gameInjuryAdjustment,
     restFatigueAdjustment: toNumber(values.restFatigue ?? values.recentForm),
+    quickRematchAdjustment: toNumber(values.quickRematchAdjustment),
     motivationAdjustment: toNumber(values.motivation),
     manualAdjustment: toNumber(values.manualAdjustment),
   }
@@ -338,6 +350,7 @@ export const createBetPayloadFromGameAnalysis = ({
   awayTeam,
   gameId = '',
   homeTeam,
+  gameContextSnapshot = null,
   inputs,
   kellyRecommendation = null,
   notes = '',
@@ -349,6 +362,7 @@ export const createBetPayloadFromGameAnalysis = ({
 }) => {
   const savedAnalysis = createSavedAnalysis({
     awayTeam,
+    gameContextSnapshot,
     homeTeam,
     inputs,
     result,
@@ -393,6 +407,7 @@ export const createBetPayloadFromGameAnalysis = ({
     ratingDifference: result.ratingDifference,
     ...selectedAdjustmentSnapshot,
     ...createSelectedGoalieSnapshot(selectedInputs, selectedGoalieStats),
+    gameContextSnapshot: createGameContextSnapshot(gameContextSnapshot),
     stake: normalizeStake(stake),
     stakeType: 'units',
     sportsbook: '',
@@ -449,6 +464,7 @@ export const normalizeSavedAnalysis = (analysis = {}, index = 0) => {
       home: normalizeAdjustments(analysis.adjustments?.home),
       away: normalizeAdjustments(analysis.adjustments?.away),
     },
+    gameContextSnapshot: createGameContextSnapshot(analysis.gameContextSnapshot),
     result: normalizeResult(analysis.result),
     stake: normalizeStake(analysis.stake),
   }
@@ -563,6 +579,7 @@ export const createBetPayloadFromSavedAnalysis = (analysis) => {
     result: normalized.result,
     profit: calculateProfit(normalized),
     notes: '',
+    gameContextSnapshot: normalized.gameContextSnapshot,
     adjustments: {
       homeAdvantage: normalized.adjustments.home.homeAdvantage,
       homeInjuries: normalized.adjustments.home.injuries,
@@ -573,6 +590,8 @@ export const createBetPayloadFromSavedAnalysis = (analysis) => {
       awayRecentForm: normalized.adjustments.away.recentForm,
       homeRestFatigue: normalized.adjustments.home.restFatigue,
       awayRestFatigue: normalized.adjustments.away.restFatigue,
+      homeQuickRematch: normalized.adjustments.home.quickRematchAdjustment,
+      awayQuickRematch: normalized.adjustments.away.quickRematchAdjustment,
       homeMotivation: normalized.adjustments.home.motivation,
       awayMotivation: normalized.adjustments.away.motivation,
       homeManualAdjustment: normalized.adjustments.home.manualAdjustment,
@@ -695,6 +714,11 @@ export const normalizeBet = (bet = {}) => {
         bet.adjustments?.[`${selectedAdjustmentPrefix}RestFatigue`] ??
           bet.adjustments?.[`${selectedAdjustmentPrefix}RecentForm`],
       ),
+    quickRematchAdjustment:
+      toNullableNumber(bet.quickRematchAdjustment) ??
+      toNullableNumber(
+        bet.adjustments?.[`${selectedAdjustmentPrefix}QuickRematch`],
+      ),
     motivationAdjustment:
       toNullableNumber(bet.motivationAdjustment) ??
       toNullableNumber(bet.adjustments?.[`${selectedAdjustmentPrefix}Motivation`]),
@@ -724,6 +748,7 @@ export const normalizeBet = (bet = {}) => {
     kellyRecommendation: normalizeKellyRecommendationSnapshot(
       bet.kellyRecommendation,
     ),
+    gameContextSnapshot: createGameContextSnapshot(bet.gameContextSnapshot),
     adjustments: {
       homeAdvantage: toNumber(bet.adjustments?.homeAdvantage),
       homeStoredInjuryImpact: toNumber(bet.adjustments?.homeStoredInjuryImpact),
@@ -748,6 +773,8 @@ export const normalizeBet = (bet = {}) => {
       awayRestFatigue: toNumber(
         bet.adjustments?.awayRestFatigue ?? bet.adjustments?.awayRecentForm,
       ),
+      homeQuickRematch: toNumber(bet.adjustments?.homeQuickRematch),
+      awayQuickRematch: toNumber(bet.adjustments?.awayQuickRematch),
       homeMotivation: toNumber(bet.adjustments?.homeMotivation),
       awayMotivation: toNumber(bet.adjustments?.awayMotivation),
       homeManualAdjustment: toNumber(bet.adjustments?.homeManualAdjustment),

@@ -220,6 +220,8 @@ const normalizeAdjustments = (adjustments = {}) => ({
   awayRestFatigue: toNumber(
     adjustments.awayRestFatigue ?? adjustments.awayRecentForm,
   ),
+  homeQuickRematch: toNumber(adjustments.homeQuickRematch),
+  awayQuickRematch: toNumber(adjustments.awayQuickRematch),
   homeMotivation: toNumber(adjustments.homeMotivation),
   awayMotivation: toNumber(adjustments.awayMotivation),
   homeManualAdjustment: toNumber(adjustments.homeManualAdjustment),
@@ -333,6 +335,20 @@ const normalizeKellyRecommendationSnapshot = (snapshot = null) => {
       'kellyRecommendation.roundingIncrement',
     ),
   }
+}
+
+const normalizeGameContextSnapshot = (snapshot = null) => {
+  if (snapshot === null || snapshot === '' || snapshot === undefined) {
+    return null
+  }
+
+  if (Array.isArray(snapshot) || typeof snapshot !== 'object') {
+    throw new BetsError('gameContextSnapshot must be an object.', 400, {
+      field: 'gameContextSnapshot',
+    })
+  }
+
+  return JSON.parse(JSON.stringify(snapshot))
 }
 
 const calculateProfit = ({ marketOdds, result, stake }) => {
@@ -454,6 +470,10 @@ const normalizeCreatePayload = (payload = {}) => {
       payload.restFatigueAdjustment,
       'restFatigueAdjustment',
     ),
+    quickRematchAdjustment: toOptionalNumber(
+      payload.quickRematchAdjustment,
+      'quickRematchAdjustment',
+    ),
     motivationAdjustment: toOptionalNumber(
       payload.motivationAdjustment,
       'motivationAdjustment',
@@ -484,6 +504,9 @@ const normalizeCreatePayload = (payload = {}) => {
     result,
     notes: toText(payload.notes),
     adjustments: normalizeAdjustments(payload.adjustments),
+    gameContextSnapshot: normalizeGameContextSnapshot(
+      payload.gameContextSnapshot,
+    ),
     kellyRecommendation: normalizeKellyRecommendationSnapshot(
       payload.kellyRecommendation,
     ),

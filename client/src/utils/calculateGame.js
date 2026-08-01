@@ -181,6 +181,7 @@ export function calculateGame(home, away) {
     homeInjuryAdjustment +
     toNumber(home.goalieAdjustment) +
     toNumber(home.restFatigue ?? home.recentForm) +
+    toNumber(home.quickRematchAdjustment) +
     toNumber(home.motivation) +
     toNumber(home.manualAdjustment)
 
@@ -189,6 +190,7 @@ export function calculateGame(home, away) {
     awayInjuryAdjustment +
     toNumber(away.goalieAdjustment) +
     toNumber(away.restFatigue ?? away.recentForm) +
+    toNumber(away.quickRematchAdjustment) +
     toNumber(away.motivation) +
     toNumber(away.manualAdjustment)
 

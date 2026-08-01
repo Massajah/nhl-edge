@@ -23,6 +23,11 @@ import {
   updateRatingEngineSettings,
 } from '../services/ratingEngineSettingsApi.js'
 import {
+  getQuickRematchSettings,
+  resetQuickRematchSettings,
+  updateQuickRematchSettings,
+} from '../services/quickRematchSettingsApi.js'
+import {
   DEFAULT_RATING_ENGINE_SETTINGS,
   RATING_ENGINE_SETTING_FIELDS,
   createRatingEngineSettingsDraft,
@@ -45,6 +50,13 @@ import {
   shouldShowCustomKellyFraction,
 } from '../utils/bettingSettings.js'
 import {
+  DEFAULT_QUICK_REMATCH_SETTINGS,
+  SCHEDULE_ADJUSTMENT_SETTING_KEYS,
+  createQuickRematchSettingsDraft,
+  normalizeQuickRematchSettings,
+  parseQuickRematchSettingsDraft,
+} from '../utils/quickRematchSettings.js'
+import {
   BANKROLL_DEFAULT_CURRENCY,
   formatBankrollCurrency,
 } from '../utils/bankroll.js'
@@ -57,6 +69,73 @@ const providerLabels = {
 
 const getProviderLabel = (provider) =>
   providerLabels[provider] ?? 'Email/password'
+
+const RATING_ENGINE_MODEL_FIELD_KEYS = Object.freeze([
+  'homeAdvantage',
+  'kFactor',
+  'regulationMultiplier',
+  'overtimeMultiplier',
+  'shootoutMultiplier',
+])
+
+const RATING_ENGINE_UPDATE_FIELDS = Object.freeze(
+  RATING_ENGINE_SETTING_FIELDS.filter((field) => field.key !== 'homeAdvantage'),
+)
+
+const HOME_ADVANTAGE_FIELD = RATING_ENGINE_SETTING_FIELDS.find(
+  (field) => field.key === 'homeAdvantage',
+)
+
+const REST_FATIGUE_RULES = Object.freeze([
+  {
+    adjustmentKey: 'wellRestedAdjustment',
+    enabledKey: 'wellRestedEnabled',
+    helper: 'Two or more rest days before the current game.',
+    label: 'Well Rested',
+  },
+  {
+    adjustmentKey: 'threeInFourAdjustment',
+    enabledKey: 'threeInFourEnabled',
+    helper: 'Third game inside the active four-day schedule window.',
+    label: '3 Games in 4 Days',
+  },
+  {
+    adjustmentKey: 'backToBackAdjustment',
+    enabledKey: 'backToBackEnabled',
+    helper:
+      'Consecutive-day games where both games are home games, or both games are away against the same home team.',
+    label: 'Back-to-Back',
+  },
+  {
+    adjustmentKey: 'backToBackTravelAdjustment',
+    enabledKey: 'backToBackTravelEnabled',
+    helper:
+      'All other known consecutive-day transitions, including home to away, away to home, and away to away against different home teams.',
+    label: 'Back-to-Back + Travel',
+  },
+])
+
+// Current complete set of global automatic model point adjustments exposed here.
+const GLOBAL_AUTOMATIC_MODEL_ADJUSTMENTS = Object.freeze([
+  'Base Home Advantage',
+  'Well Rested',
+  '3 Games in 4 Days',
+  'Back-to-Back',
+  'Back-to-Back + Travel',
+  'Quick Rematch',
+])
+
+const formatSignedValue = (value) => {
+  const numberValue = Number(
+    typeof value === 'string' ? value.trim().replace(',', '.') : value,
+  )
+
+  if (!Number.isFinite(numberValue)) {
+    return ''
+  }
+
+  return `${numberValue >= 0 ? '+' : ''}${numberValue.toFixed(2)}`
+}
 
 function Settings({ onRatingEngineSettingsChanged }) {
   const { user } = useAuth()
@@ -85,6 +164,22 @@ function Settings({ onRatingEngineSettingsChanged }) {
   )
   const [draftBettingSettings, setDraftBettingSettings] = useState(() =>
     createBettingSettingsDraft(DEFAULT_BETTING_SETTINGS),
+  )
+  const [quickRematchStatus, setQuickRematchStatus] = useState('loading')
+  const [quickRematchSaveStatus, setQuickRematchSaveStatus] =
+    useState('idle')
+  const [quickRematchResetStatus, setQuickRematchResetStatus] =
+    useState('idle')
+  const [quickRematchError, setQuickRematchError] = useState('')
+  const [quickRematchMessage, setQuickRematchMessage] = useState('')
+  const [quickRematchFieldErrors, setQuickRematchFieldErrors] = useState({})
+  const [quickRematchUsingDefaults, setQuickRematchUsingDefaults] =
+    useState(true)
+  const [savedQuickRematchSettings, setSavedQuickRematchSettings] = useState(
+    () => normalizeQuickRematchSettings(DEFAULT_QUICK_REMATCH_SETTINGS),
+  )
+  const [draftQuickRematchSettings, setDraftQuickRematchSettings] = useState(
+    () => createQuickRematchSettingsDraft(DEFAULT_QUICK_REMATCH_SETTINGS),
   )
   const [bankrollSummary, setBankrollSummary] = useState(null)
   const [bankrollStatus, setBankrollStatus] = useState('loading')
@@ -121,6 +216,45 @@ function Settings({ onRatingEngineSettingsChanged }) {
     }
 
     loadSettings()
+
+    return () => {
+      isCurrent = false
+    }
+  }, [])
+
+  useEffect(() => {
+    let isCurrent = true
+
+    const loadQuickRematchSettings = async () => {
+      setQuickRematchStatus('loading')
+      setQuickRematchError('')
+
+      try {
+        const result = await getQuickRematchSettings()
+
+        if (!isCurrent) {
+          return
+        }
+
+        const nextSettings = normalizeQuickRematchSettings(result.settings)
+
+        setSavedQuickRematchSettings(nextSettings)
+        setDraftQuickRematchSettings(
+          createQuickRematchSettingsDraft(nextSettings),
+        )
+        setQuickRematchUsingDefaults(Boolean(result.usingDefaults))
+        setQuickRematchStatus('success')
+      } catch (error) {
+        if (!isCurrent) {
+          return
+        }
+
+        setQuickRematchStatus('error')
+        setQuickRematchError(error.message)
+      }
+    }
+
+    loadQuickRematchSettings()
 
     return () => {
       isCurrent = false
@@ -206,13 +340,17 @@ function Settings({ onRatingEngineSettingsChanged }) {
     () => parseBettingSettingsDraft(draftBettingSettings),
     [draftBettingSettings],
   )
+  const parsedQuickRematchDraft = useMemo(
+    () => parseQuickRematchSettingsDraft(draftQuickRematchSettings),
+    [draftQuickRematchSettings],
+  )
   const hasUnsavedChanges = useMemo(() => {
     if (!parsedDraft.isValid) {
       return true
     }
 
-    return RATING_ENGINE_SETTING_FIELDS.some(
-      (field) => parsedDraft.settings[field.key] !== savedSettings[field.key],
+    return RATING_ENGINE_MODEL_FIELD_KEYS.some(
+      (field) => parsedDraft.settings[field] !== savedSettings[field],
     )
   }, [parsedDraft, savedSettings])
   const hasUnsavedBettingChanges = useMemo(() => {
@@ -225,6 +363,19 @@ function Settings({ onRatingEngineSettingsChanged }) {
         parsedBettingDraft.settings[field] !== savedBettingSettings[field],
     )
   }, [parsedBettingDraft, savedBettingSettings])
+  const hasUnsavedQuickRematchChanges = useMemo(
+    () => {
+      if (!parsedQuickRematchDraft.isValid) {
+        return true
+      }
+
+      return SCHEDULE_ADJUSTMENT_SETTING_KEYS.some(
+        (field) =>
+          parsedQuickRematchDraft[field] !== savedQuickRematchSettings[field],
+      )
+    },
+    [parsedQuickRematchDraft, savedQuickRematchSettings],
+  )
   const isPending =
     settingsStatus === 'loading' ||
     saveStatus === 'saving' ||
@@ -233,6 +384,10 @@ function Settings({ onRatingEngineSettingsChanged }) {
     bettingStatus === 'loading' ||
     bettingSaveStatus === 'saving' ||
     bettingResetStatus === 'saving'
+  const isQuickRematchPending =
+    quickRematchStatus === 'loading' ||
+    quickRematchSaveStatus === 'saving' ||
+    quickRematchResetStatus === 'saving'
   const bankrollCurrency =
     bankrollSummary?.currency || BANKROLL_DEFAULT_CURRENCY
   const isBankrollInitialized = Boolean(bankrollSummary?.initialized)
@@ -287,6 +442,20 @@ function Settings({ onRatingEngineSettingsChanged }) {
     setBettingSaveStatus('idle')
     setBettingMessage('')
     setBettingError('')
+  }
+
+  const handleQuickRematchSettingsChange = (field, value) => {
+    setDraftQuickRematchSettings((currentSettings) => ({
+      ...currentSettings,
+      [field]: value,
+    }))
+    setQuickRematchFieldErrors((currentErrors) => ({
+      ...currentErrors,
+      [field]: '',
+    }))
+    setQuickRematchSaveStatus('idle')
+    setQuickRematchMessage('')
+    setQuickRematchError('')
   }
 
   const handleSaveSettings = async (event) => {
@@ -437,8 +606,196 @@ function Settings({ onRatingEngineSettingsChanged }) {
     }
   }
 
+  const handleSaveQuickRematchSettings = async (event) => {
+    event.preventDefault()
+
+    if (isQuickRematchPending) {
+      return
+    }
+
+    if (!parsedQuickRematchDraft.isValid) {
+      setQuickRematchFieldErrors(parsedQuickRematchDraft.fieldErrors)
+      setQuickRematchSaveStatus('error')
+      setQuickRematchMessage('Fix invalid model adjustments before saving.')
+      return
+    }
+
+    if (!hasUnsavedQuickRematchChanges) {
+      return
+    }
+
+    setQuickRematchSaveStatus('saving')
+    setQuickRematchMessage('')
+    setQuickRematchError('')
+    setQuickRematchFieldErrors({})
+
+    try {
+      const result = await updateQuickRematchSettings(
+        parsedQuickRematchDraft.settings,
+      )
+      const nextSettings = normalizeQuickRematchSettings(result.settings)
+
+      setSavedQuickRematchSettings(nextSettings)
+      setDraftQuickRematchSettings(
+        createQuickRematchSettingsDraft(nextSettings),
+      )
+      setQuickRematchUsingDefaults(false)
+      setQuickRematchSaveStatus('success')
+      setQuickRematchMessage('Model adjustments saved.')
+    } catch (error) {
+      setQuickRematchFieldErrors(formatApiFieldErrors(error.details))
+      setQuickRematchSaveStatus('error')
+      setQuickRematchMessage(error.message)
+    }
+  }
+
+  const handleResetQuickRematchSettings = async () => {
+    const confirmed =
+      typeof window === 'undefined' ||
+      window.confirm('Reset Model Adjustments to defaults?')
+
+    if (!confirmed || isQuickRematchPending) {
+      return
+    }
+
+    setQuickRematchResetStatus('saving')
+    setQuickRematchSaveStatus('idle')
+    setQuickRematchMessage('')
+    setQuickRematchError('')
+    setQuickRematchFieldErrors({})
+
+    try {
+      const result = await resetQuickRematchSettings()
+      const nextSettings = normalizeQuickRematchSettings(result.settings)
+
+      setSavedQuickRematchSettings(nextSettings)
+      setDraftQuickRematchSettings(
+        createQuickRematchSettingsDraft(nextSettings),
+      )
+      setQuickRematchUsingDefaults(Boolean(result.usingDefaults))
+      setQuickRematchResetStatus('success')
+      setQuickRematchSaveStatus('success')
+      setQuickRematchMessage('Model adjustments reset to defaults.')
+    } catch (error) {
+      setQuickRematchResetStatus('idle')
+      setQuickRematchSaveStatus('error')
+      setQuickRematchMessage(error.message)
+    }
+  }
+
+  const ratingEngineFormId = 'settings-rating-engine-form'
+  const engineDisplayErrors = {
+    ...parsedDraft.fieldErrors,
+    ...fieldErrors,
+  }
+  const modelAdjustmentDisplayErrors = {
+    ...parsedQuickRematchDraft.fieldErrors,
+    ...quickRematchFieldErrors,
+  }
+  const showRatingEngineForm = settingsStatus !== 'error'
+  const showModelAdjustmentForm = quickRematchStatus !== 'error'
+
+  const renderRatingEngineField = (
+    field,
+    {
+      className = 'field settings-engine-field',
+      describedBy,
+      formId = ratingEngineFormId,
+      helper,
+    } = {},
+  ) => {
+    const errorMessage = engineDisplayErrors[field.key]
+    const helperId = helper ? `engine-setting-${field.key}-helper` : undefined
+    const errorId = errorMessage ? `engine-setting-${field.key}-error` : undefined
+
+    return (
+      <label
+        className={className}
+        htmlFor={`engine-setting-${field.key}`}
+        key={field.key}
+      >
+        <span>{field.label}</span>
+        <input
+          id={`engine-setting-${field.key}`}
+          form={formId}
+          type="text"
+          min={field.min}
+          max={field.max}
+          step={field.step}
+          value={draftSettings[field.key] ?? ''}
+          inputMode="decimal"
+          aria-invalid={Boolean(errorMessage)}
+          aria-describedby={[describedBy, helperId, errorId]
+            .filter(Boolean)
+            .join(' ') || undefined}
+          disabled={isPending}
+          onChange={(event) =>
+            handleSettingsChange(field.key, event.target.value)
+          }
+        />
+        {helper ? <small id={helperId}>{helper}</small> : null}
+        <small
+          className={errorMessage ? 'field-error' : 'field-error-placeholder'}
+          id={errorId}
+        >
+          {errorMessage || ' '}
+        </small>
+      </label>
+    )
+  }
+
+  const renderScheduleAdjustmentInput = ({
+    adjustmentKey,
+    disabled,
+    inputId,
+    label,
+    max,
+    min,
+    visibleLabel = false,
+  }) => {
+    const errorMessage = modelAdjustmentDisplayErrors[adjustmentKey]
+
+    return (
+      <label className="settings-adjustment-input" htmlFor={inputId}>
+        <span className={visibleLabel ? 'settings-adjustment-label' : 'sr-only'}>
+          {label}
+        </span>
+        <input
+          id={inputId}
+          type="text"
+          min={min}
+          max={max}
+          step="0.05"
+          value={draftQuickRematchSettings[adjustmentKey]}
+          inputMode="decimal"
+          aria-invalid={Boolean(errorMessage)}
+          aria-describedby={`${inputId}-status`}
+          disabled={disabled}
+          onChange={(event) =>
+            handleQuickRematchSettingsChange(adjustmentKey, event.target.value)
+          }
+        />
+        <small
+          className={errorMessage ? 'field-error' : 'field-error-placeholder'}
+          id={`${inputId}-status`}
+        >
+          {errorMessage || formatSignedValue(draftQuickRematchSettings[adjustmentKey])}
+        </small>
+      </label>
+    )
+  }
+
   return (
     <section className="settings-page" aria-label="Settings">
+      <header className="settings-page-header">
+        <p className="eyebrow">Settings</p>
+        <h1>Settings</h1>
+        <p>
+          Manage account details, staking rules, automatic model adjustments,
+          and rating-engine behavior.
+        </p>
+      </header>
+
       <div className="settings-panel">
         <div className="panel-header">
           <div>
@@ -540,6 +897,11 @@ function Settings({ onRatingEngineSettingsChanged }) {
             noValidate
             onSubmit={handleSaveBettingSettings}
           >
+            <div className="settings-subsection-heading">
+              <h3>Kelly &amp; Stake Rules</h3>
+              <p>Global stake recommendation limits and Kelly sizing.</p>
+            </div>
+
             <div className="settings-betting-grid">
               <label
                 className="field settings-betting-field"
@@ -755,6 +1117,11 @@ function Settings({ onRatingEngineSettingsChanged }) {
               </label>
             </div>
 
+            <div className="settings-subsection-heading">
+              <h3>Bankroll Reference</h3>
+              <p>Choose which bankroll balance future stake sizing references.</p>
+            </div>
+
             <div className="settings-bankroll-status">
               <div>
                 <WalletCards aria-hidden="true" size={18} strokeWidth={2} />
@@ -820,6 +1187,11 @@ function Settings({ onRatingEngineSettingsChanged }) {
             ) : null}
 
             <div className="settings-form-actions">
+              <span className="settings-dirty-state">
+                {hasUnsavedBettingChanges
+                  ? 'Unsaved betting changes'
+                  : 'No betting changes'}
+              </span>
               <button
                 className="save-ratings-button"
                 type="submit"
@@ -838,9 +1210,7 @@ function Settings({ onRatingEngineSettingsChanged }) {
                 <span>
                   {bettingSaveStatus === 'saving'
                     ? 'Saving...'
-                    : hasUnsavedBettingChanges
-                      ? 'Save Betting Settings'
-                      : 'Saved'}
+                    : 'Save Betting Settings'}
                 </span>
               </button>
 
@@ -869,6 +1239,380 @@ function Settings({ onRatingEngineSettingsChanged }) {
             </div>
           </form>
         ) : null}
+      </div>
+
+      <div
+        className="settings-panel settings-model-adjustments-panel"
+        aria-labelledby="settings-model-adjustments-heading"
+      >
+        <div className="section-heading">
+          <div>
+            <p className="eyebrow">Model Configuration</p>
+            <h2 id="settings-model-adjustments-heading">Model Adjustments</h2>
+          </div>
+          <span>
+            {quickRematchUsingDefaults ? 'Defaults active' : 'Custom settings'}
+          </span>
+        </div>
+
+        <div className="settings-info-note">
+          <Gauge aria-hidden="true" size={20} strokeWidth={2} />
+          <p>
+            Configure global automatic rating adjustments used by Dashboard and
+            Game Analyzer. Team-specific and game-specific values are maintained
+            elsewhere.
+          </p>
+        </div>
+
+        <div className="settings-adjustment-catalog" aria-label="Global automatic model point adjustments">
+          {GLOBAL_AUTOMATIC_MODEL_ADJUSTMENTS.map((adjustment) => (
+            <span key={adjustment}>{adjustment}</span>
+          ))}
+        </div>
+
+        {settingsStatus === 'loading' ? (
+          <div className="settings-loading-state" role="status">
+            <LoaderCircle
+              className="button-spinner"
+              aria-hidden="true"
+              size={18}
+              strokeWidth={2.2}
+            />
+            <span>Loading home advantage settings...</span>
+          </div>
+        ) : null}
+
+        {quickRematchStatus === 'loading' ? (
+          <div className="settings-loading-state" role="status">
+            <LoaderCircle
+              className="button-spinner"
+              aria-hidden="true"
+              size={18}
+              strokeWidth={2.2}
+            />
+            <span>Loading model adjustment settings...</span>
+          </div>
+        ) : null}
+
+        {settingsStatus === 'error' ? (
+          <p className="form-status error" role="alert">
+            {settingsError}
+          </p>
+        ) : null}
+
+        {quickRematchStatus === 'error' ? (
+          <p className="form-status error" role="alert">
+            {quickRematchError}
+          </p>
+        ) : null}
+
+        <div className="settings-model-grid">
+          <article className="settings-rule-card settings-home-advantage-card">
+            <div className="settings-rule-card-heading">
+              <div>
+                <h3>Home Advantage</h3>
+                <p>Global base points before team-specific adjustment.</p>
+              </div>
+              <span>Rating Engine setting</span>
+            </div>
+
+            {HOME_ADVANTAGE_FIELD && showRatingEngineForm ? (
+              renderRatingEngineField(HOME_ADVANTAGE_FIELD, {
+                className: 'field settings-compact-number-field',
+                helper:
+                  'Added to the home team before team-specific Home Adjustment is applied.',
+              })
+            ) : null}
+
+            <div className="settings-formula-note">
+              <strong>Effective home advantage =</strong>
+              <span>Base Home Advantage + Team Home Adjustment</span>
+            </div>
+            <p className="settings-card-note">
+              Base Home Advantage is global. Team Home Adjustment remains on the
+              Power Ratings page and is intentionally absent from Settings.
+            </p>
+            <p className="settings-card-save-note">
+              Save ownership: use Save Rating Engine in the Power Rating Engine
+              section.
+            </p>
+          </article>
+
+          {showModelAdjustmentForm ? (
+          <form
+            className="settings-model-adjustments-form"
+            noValidate
+            onSubmit={handleSaveQuickRematchSettings}
+          >
+            <article className="settings-rule-card settings-rest-fatigue-card">
+              <div className="settings-rule-card-heading">
+                <div>
+                  <h3>Rest &amp; Fatigue</h3>
+                  <p>Zero or one rest/fatigue rule is applied.</p>
+                </div>
+                <span>Exclusive</span>
+              </div>
+
+              <label className="toggle-field settings-master-toggle">
+                <input
+                  type="checkbox"
+                  checked={draftQuickRematchSettings.restFatigueEnabled}
+                  disabled={isQuickRematchPending}
+                  onChange={(event) =>
+                    handleQuickRematchSettingsChange(
+                      'restFatigueEnabled',
+                      event.target.checked,
+                    )
+                  }
+                />
+                <span>Enable Rest &amp; Fatigue Adjustments</span>
+              </label>
+
+              <div className="settings-rule-table" role="table" aria-label="Rest and fatigue rules">
+                <div className="settings-rule-table-header" role="row">
+                  <span role="columnheader">Rule</span>
+                  <span role="columnheader">Enabled</span>
+                  <span role="columnheader">Rating adjustment</span>
+                </div>
+
+                {REST_FATIGUE_RULES.map((rule) => {
+                  const ruleEnabled = Boolean(
+                    draftQuickRematchSettings[rule.enabledKey],
+                  )
+                  const disabled =
+                    isQuickRematchPending ||
+                    !draftQuickRematchSettings.restFatigueEnabled ||
+                    !ruleEnabled
+                  const inputId = `model-adjustment-${rule.adjustmentKey}`
+
+                  return (
+                    <div className="settings-rule-row" role="row" key={rule.adjustmentKey}>
+                      <div className="settings-rule-label" role="cell">
+                        <strong>{rule.label}</strong>
+                        <small>{rule.helper}</small>
+                      </div>
+                      <label className="toggle-field settings-rule-toggle" role="cell">
+                        <input
+                          type="checkbox"
+                          checked={ruleEnabled}
+                          disabled={
+                            isQuickRematchPending ||
+                            !draftQuickRematchSettings.restFatigueEnabled
+                          }
+                          onChange={(event) =>
+                            handleQuickRematchSettingsChange(
+                              rule.enabledKey,
+                              event.target.checked,
+                            )
+                          }
+                        />
+                        <span>Enabled</span>
+                      </label>
+                      <div role="cell">
+                        {renderScheduleAdjustmentInput({
+                          adjustmentKey: rule.adjustmentKey,
+                          disabled,
+                          inputId,
+                          label: `${rule.label} Rating Adjustment`,
+                          max:
+                            rule.adjustmentKey === 'wellRestedAdjustment'
+                              ? 1
+                              : 0,
+                          min:
+                            rule.adjustmentKey === 'wellRestedAdjustment'
+                              ? 0
+                              : -3,
+                        })}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+
+              <div className="settings-priority-note">
+                <strong>Priority</strong>
+                <span>
+                  Back-to-Back + Travel &gt; Back-to-Back &gt; 3 Games in 4 Days &gt; Well Rested
+                </span>
+              </div>
+
+              <details className="settings-compact-details">
+                <summary>Back-to-Back meanings</summary>
+                <p>
+                  Back-to-Back: Consecutive-day games where both games are home
+                  games, or both games are away against the same home team.
+                </p>
+                <p>
+                  Back-to-Back + Travel: All other known consecutive-day
+                  transitions, including home to away, away to home, and away
+                  to away against different home teams.
+                </p>
+              </details>
+            </article>
+
+            <article className="settings-rule-card settings-quick-rematch-card">
+              <div className="settings-rule-card-heading">
+                <div>
+                  <h3>Quick Rematch</h3>
+                  <p>Independent and additive to the selected rest/fatigue rule.</p>
+                </div>
+                <span>Additive</span>
+              </div>
+
+              <div className="settings-quick-fields">
+                <label className="toggle-field settings-master-toggle">
+                  <input
+                    type="checkbox"
+                    checked={draftQuickRematchSettings.quickRematchEnabled}
+                    disabled={isQuickRematchPending}
+                    onChange={(event) =>
+                      handleQuickRematchSettingsChange(
+                        'quickRematchEnabled',
+                        event.target.checked,
+                      )
+                    }
+                  />
+                  <span>Enable Quick Rematch</span>
+                </label>
+
+                <label
+                  className="field settings-compact-number-field"
+                  htmlFor="quick-rematch-maximum-days"
+                >
+                  <span>Maximum Days</span>
+                  <input
+                    id="quick-rematch-maximum-days"
+                    type="text"
+                    min="1"
+                    max="14"
+                    step="1"
+                    value={draftQuickRematchSettings.quickRematchMaximumDays}
+                    inputMode="numeric"
+                    aria-invalid={Boolean(
+                      modelAdjustmentDisplayErrors.quickRematchMaximumDays,
+                    )}
+                    aria-describedby="quick-rematch-maximum-days-status"
+                    disabled={
+                      isQuickRematchPending ||
+                      !draftQuickRematchSettings.quickRematchEnabled
+                    }
+                    onChange={(event) =>
+                      handleQuickRematchSettingsChange(
+                        'quickRematchMaximumDays',
+                        event.target.value,
+                      )
+                    }
+                  />
+                  <small
+                    className={
+                      modelAdjustmentDisplayErrors.quickRematchMaximumDays
+                        ? 'field-error'
+                        : 'field-error-placeholder'
+                    }
+                    id="quick-rematch-maximum-days-status"
+                  >
+                    {modelAdjustmentDisplayErrors.quickRematchMaximumDays ||
+                      '1 to 14 days'}
+                  </small>
+                </label>
+
+                {renderScheduleAdjustmentInput({
+                  adjustmentKey: 'quickRematchLoserAdjustment',
+                  disabled:
+                    isQuickRematchPending ||
+                    !draftQuickRematchSettings.quickRematchEnabled,
+                  inputId: 'quick-rematch-loser-adjustment',
+                  label: 'Previous Loser Adjustment',
+                  max: 1,
+                  min: 0,
+                  visibleLabel: true,
+                })}
+              </div>
+
+              <p className="settings-card-note">
+                Applies a rating bonus to the loser of the previous
+                head-to-head meeting when the teams meet again within the
+                configured time window.
+              </p>
+              <p className="settings-card-note">
+                Regulation, overtime, and shootout losses are treated equally.
+              </p>
+
+              <div className="settings-context-example" aria-label="Context adjustment example">
+                <span>Back-to-Back + Travel</span>
+                <strong>-1.25</strong>
+                <span>Quick Rematch</span>
+                <strong>+0.25</strong>
+                <span>Total context adjustment</span>
+                <strong>-1.00</strong>
+              </div>
+            </article>
+
+            {quickRematchMessage ? (
+              <p
+                className={`form-status ${quickRematchSaveStatus}`}
+                role="status"
+              >
+                {quickRematchMessage}
+              </p>
+            ) : null}
+
+            <div className="settings-form-actions">
+              <span className="settings-dirty-state">
+                {hasUnsavedQuickRematchChanges
+                  ? 'Unsaved model-adjustment changes'
+                  : 'No model-adjustment changes'}
+              </span>
+              <button
+                className="save-ratings-button"
+                type="submit"
+                disabled={
+                  isQuickRematchPending || !hasUnsavedQuickRematchChanges
+                }
+              >
+                {quickRematchSaveStatus === 'saving' ? (
+                  <LoaderCircle
+                    className="button-spinner"
+                    aria-hidden="true"
+                    size={17}
+                    strokeWidth={2.2}
+                  />
+                ) : (
+                  <Save aria-hidden="true" size={17} strokeWidth={2.2} />
+                )}
+                <span>
+                  {quickRematchSaveStatus === 'saving'
+                    ? 'Saving...'
+                    : 'Save Model Adjustments'}
+                </span>
+              </button>
+
+              <button
+                className="reset-button"
+                type="button"
+                disabled={isQuickRematchPending}
+                onClick={handleResetQuickRematchSettings}
+              >
+                {quickRematchResetStatus === 'saving' ? (
+                  <LoaderCircle
+                    className="button-spinner"
+                    aria-hidden="true"
+                    size={17}
+                    strokeWidth={2.2}
+                  />
+                ) : (
+                  <RotateCcw aria-hidden="true" size={17} strokeWidth={2.2} />
+                )}
+                <span>
+                  {quickRematchResetStatus === 'saving'
+                    ? 'Resetting...'
+                    : 'Reset to Defaults'}
+                </span>
+              </button>
+            </div>
+          </form>
+          ) : null}
+        </div>
       </div>
 
       <div className="settings-panel settings-engine-panel">
@@ -908,55 +1652,49 @@ function Settings({ onRatingEngineSettingsChanged }) {
           </p>
         ) : null}
 
-        {settingsStatus === 'success' ? (
+        {showRatingEngineForm ? (
           <form
             className="settings-engine-form"
+            id={ratingEngineFormId}
             noValidate
             onSubmit={handleSaveSettings}
           >
-            <div className="settings-engine-grid">
-              {RATING_ENGINE_SETTING_FIELDS.map((field) => {
-                const errorMessage =
-                  fieldErrors[field.key] || parsedDraft.fieldErrors[field.key]
-                const showError = Boolean(fieldErrors[field.key])
+            <div className="settings-engine-sections">
+              <section className="settings-engine-subsection" aria-labelledby="rating-update-sensitivity-heading">
+                <div className="settings-rule-card-heading">
+                  <div>
+                    <h3 id="rating-update-sensitivity-heading">Rating Update Sensitivity</h3>
+                    <p>K Factor controls how strongly each completed game changes Power Ratings.</p>
+                  </div>
+                </div>
+                <div className="settings-engine-grid">
+                  {RATING_ENGINE_UPDATE_FIELDS.filter(
+                    (field) => field.key === 'kFactor',
+                  ).map((field) =>
+                    renderRatingEngineField(field, {
+                      helper:
+                        'Higher values make ratings react faster to each game.',
+                    }),
+                  )}
+                </div>
+              </section>
 
-                return (
-                  <label
-                    className="field settings-engine-field"
-                    htmlFor={`engine-setting-${field.key}`}
-                    key={field.key}
-                  >
-                    <span>{field.label}</span>
-                    <input
-                      id={`engine-setting-${field.key}`}
-                      type="number"
-                      min={field.min}
-                      max={field.max}
-                      step={field.step}
-                      value={draftSettings[field.key] ?? ''}
-                      inputMode="decimal"
-                      aria-invalid={showError}
-                      aria-describedby={
-                        errorMessage
-                          ? `engine-setting-${field.key}-error`
-                          : undefined
-                      }
-                      disabled={isPending}
-                      onChange={(event) =>
-                        handleSettingsChange(field.key, event.target.value)
-                      }
-                    />
-                    {showError ? (
-                      <small
-                        className="field-error"
-                        id={`engine-setting-${field.key}-error`}
-                      >
-                        {errorMessage}
-                      </small>
-                    ) : null}
-                  </label>
-                )
-              })}
+              <section className="settings-engine-subsection" aria-labelledby="result-weighting-heading">
+                <div className="settings-rule-card-heading">
+                  <div>
+                    <h3 id="result-weighting-heading">Result Multipliers</h3>
+                    <p>
+                      Result multipliers reduce or preserve rating movement
+                      based on how the game was decided.
+                    </p>
+                  </div>
+                </div>
+                <div className="settings-engine-grid">
+                  {RATING_ENGINE_UPDATE_FIELDS.filter(
+                    (field) => field.key !== 'kFactor',
+                  ).map((field) => renderRatingEngineField(field))}
+                </div>
+              </section>
             </div>
 
             {settingsMessage ? (
@@ -966,6 +1704,11 @@ function Settings({ onRatingEngineSettingsChanged }) {
             ) : null}
 
             <div className="settings-form-actions">
+              <span className="settings-dirty-state">
+                {hasUnsavedChanges
+                  ? 'Unsaved rating-engine changes'
+                  : 'No rating-engine changes'}
+              </span>
               <button
                 className="save-ratings-button"
                 type="submit"
@@ -984,9 +1727,7 @@ function Settings({ onRatingEngineSettingsChanged }) {
                 <span>
                   {saveStatus === 'saving'
                     ? 'Saving...'
-                    : hasUnsavedChanges
-                      ? 'Save Settings'
-                      : 'Saved'}
+                    : 'Save Rating Engine'}
                 </span>
               </button>
 

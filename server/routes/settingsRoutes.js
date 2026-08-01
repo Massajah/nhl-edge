@@ -15,5 +15,11 @@ router.post(
   '/rating-engine/reset',
   settingsController.resetRatingEngineSettings,
 )
+router.get('/quick-rematch', settingsController.getQuickRematchSettings)
+router.put('/quick-rematch', settingsController.updateQuickRematchSettings)
+router.post(
+  '/quick-rematch/reset',
+  settingsController.resetQuickRematchSettings,
+)
 
 module.exports = router

@@ -6,7 +6,10 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { createServer } from 'vite'
 
 let Dashboard
+let GameAnalyzer
+let calculateGameUtils
 let dashboardUtils
+let modelAnalysisUtils
 let powerRatingUtils
 let vite
 
@@ -266,7 +269,11 @@ before(async () => {
   })
 
   Dashboard = (await vite.ssrLoadModule('/src/components/Dashboard.jsx')).default
+  GameAnalyzer = (await vite.ssrLoadModule('/src/components/GameAnalyzer.jsx'))
+    .default
+  calculateGameUtils = await vite.ssrLoadModule('/src/utils/calculateGame.js')
   dashboardUtils = await vite.ssrLoadModule('/src/utils/dashboard.js')
+  modelAnalysisUtils = await vite.ssrLoadModule('/src/utils/modelAnalysis.js')
   powerRatingUtils = await vite.ssrLoadModule('/src/utils/powerRatings.js')
 })
 
@@ -276,6 +283,7 @@ after(async () => {
 
 test('dashboard helpers keep status priority and candidate rules centralized', () => {
   const analysis = {
+    available: true,
     awayMarket: {
       edge: -0.14,
       expectedValue: -20,
@@ -332,6 +340,7 @@ test('dashboard helpers keep status priority and candidate rules centralized', (
   })
   const needsOdds = dashboardUtils.getDashboardGameStatus({
     analysis: {
+      available: true,
       awayMarket: {
         marketOdds: null,
         modelProbability: 0.48,
@@ -355,10 +364,254 @@ test('dashboard helpers keep status priority and candidate rules centralized', (
   assert.equal(saved.status, dashboardUtils.DASHBOARD_GAME_STATUSES.BET_SAVED)
   assert.equal(
     potential.status,
-    dashboardUtils.DASHBOARD_GAME_STATUSES.POTENTIAL_VALUE,
+    dashboardUtils.DASHBOARD_GAME_STATUSES.WORTH_REVIEWING,
   )
   assert.equal(started.status, dashboardUtils.DASHBOARD_GAME_STATUSES.GAME_STARTED)
-  assert.equal(needsOdds.status, dashboardUtils.DASHBOARD_GAME_STATUSES.NEEDS_ODDS)
+  assert.equal(needsOdds.status, dashboardUtils.DASHBOARD_GAME_STATUSES.ADD_ODDS)
+})
+
+test('dashboard helper classifies no odds, one-sided value, no value and final games', () => {
+  const game = createGame({ gameId: 'classification-game' })
+  const noOdds = dashboardUtils.getDashboardGameStatus({
+    analysis: {
+      available: true,
+      awayMarket: {
+        marketOdds: null,
+        modelProbability: 0.48,
+      },
+      homeMarket: {
+        marketOdds: null,
+        modelProbability: 0.52,
+      },
+    },
+    bankrollSummary,
+    bettingSettings,
+    game,
+    savedBets: [],
+  })
+  const oneSidedReview = dashboardUtils.getDashboardGameStatus({
+    analysis: {
+      available: true,
+      awayMarket: {
+        edge: 0.01,
+        expectedValue: 2,
+        marketOdds: 2,
+        modelProbability: 0.51,
+      },
+      homeMarket: {
+        marketOdds: null,
+        modelProbability: 0.49,
+      },
+    },
+    bankrollSummary,
+    bettingSettings,
+    game,
+    savedBets: [],
+  })
+  const noValue = dashboardUtils.getDashboardGameStatus({
+    analysis: {
+      available: true,
+      awayMarket: {
+        edge: -0.2,
+        expectedValue: -30,
+        marketOdds: 1.2,
+        modelProbability: 0.63,
+      },
+      homeMarket: {
+        marketOdds: null,
+        modelProbability: 0.37,
+      },
+    },
+    bankrollSummary,
+    bettingSettings,
+    game,
+    savedBets: [],
+  })
+  const final = dashboardUtils.getDashboardGameStatus({
+    analysis: {
+      available: true,
+      awayMarket: {
+        edge: 0.08,
+        expectedValue: 16,
+        marketOdds: 2.1,
+        modelProbability: 0.55,
+      },
+      homeMarket: {
+        edge: -0.08,
+        expectedValue: -16,
+        marketOdds: 1.7,
+        modelProbability: 0.45,
+      },
+    },
+    bankrollSummary,
+    bettingSettings,
+    game: {
+      ...game,
+      gameState: 'FINAL',
+      status: 'Final',
+    },
+    savedBets: [],
+  })
+
+  assert.equal(noOdds.status, dashboardUtils.DASHBOARD_GAME_STATUSES.ADD_ODDS)
+  assert.equal(
+    oneSidedReview.status,
+    dashboardUtils.DASHBOARD_GAME_STATUSES.WORTH_REVIEWING,
+  )
+  assert.equal(oneSidedReview.evaluatedSideCount, 1)
+  assert.equal(oneSidedReview.valueSide.side, 'away')
+  assert.match(oneSidedReview.statusReason, /Below 2\.00 pp minimum/)
+  assert.equal(
+    noValue.status,
+    dashboardUtils.DASHBOARD_GAME_STATUSES.NO_CURRENT_VALUE,
+  )
+  assert.equal(noValue.evaluatedSideCount, 1)
+  assert.equal(final.status, dashboardUtils.DASHBOARD_GAME_STATUSES.FINAL)
+  assert.doesNotMatch(
+    JSON.stringify([noOdds, oneSidedReview, noValue, final]),
+    /NaN|Infinity/,
+  )
+})
+
+test('preliminary analysis reuses the Analyzer calculation service', () => {
+  const marketOdds = {
+    away: '4.50',
+    home: '1.35',
+  }
+  const teams = {
+    away: 'TOR',
+    home: 'BOS',
+  }
+  const analysis = modelAnalysisUtils.calculatePreliminaryAnalysis({
+    awayTeamId: teams.away,
+    baseHomeAdvantage: 1,
+    homeTeamId: teams.home,
+    injurySummaries: {
+      BOS: {
+        totalImpact: -0.5,
+      },
+      TOR: {
+        totalImpact: -1,
+      },
+    },
+    marketOdds,
+    powerRatings: createRatings(),
+  })
+  const analyzerInputs = modelAnalysisUtils.createInputsForTeams(
+    createRatings(),
+    teams,
+    marketOdds,
+    {
+      BOS: {
+        totalImpact: -0.5,
+      },
+      TOR: {
+        totalImpact: -1,
+      },
+    },
+    1,
+  )
+  const analyzerResult = calculateGameUtils.calculateGame(
+    analyzerInputs.home,
+    analyzerInputs.away,
+  )
+
+  assert.equal(analysis.available, true)
+  assert.equal(analysis.usesUnknownInputs, true)
+  assert.equal(
+    analysis.inputStatus,
+    modelAnalysisUtils.PRELIMINARY_ANALYSIS_INPUT_STATUS.USES_DEFAULTS,
+  )
+  assert.equal(analysis.inputs.home.marketOdds, analyzerInputs.home.marketOdds)
+  assert.equal(analysis.inputs.away.marketOdds, analyzerInputs.away.marketOdds)
+  assert.equal(analysis.homeMarket.modelProbability, analyzerResult.homeWinProbability)
+  assert.equal(analysis.awayMarket.modelProbability, analyzerResult.awayWinProbability)
+})
+
+test('preliminary analysis reports missing core model data without defaults', () => {
+  const analysis = modelAnalysisUtils.calculatePreliminaryAnalysis({
+    awayTeamId: 'TOR',
+    homeTeamId: 'BOS',
+    marketOdds: {
+      away: '2.10',
+      home: '1.90',
+    },
+    powerRatings: {
+      BOS: {
+        baseRating: 52,
+        teamId: 'BOS',
+      },
+    },
+  })
+  const status = dashboardUtils.getDashboardGameStatus({
+    analysis,
+    bankrollSummary,
+    bettingSettings,
+    game: createGame({ gameId: 'missing-core' }),
+    savedBets: [],
+  })
+
+  assert.equal(analysis.available, false)
+  assert.deepEqual(analysis.missingCoreData, ['away.powerRating'])
+  assert.equal(
+    status.status,
+    dashboardUtils.DASHBOARD_GAME_STATUSES.PRELIMINARY_ANALYSIS_UNAVAILABLE,
+  )
+})
+
+test('value side selection uses edge, expected value, then away-home order', () => {
+  const edgeWinner = dashboardUtils.getDashboardValueSide([
+    {
+      edge: 0.02,
+      expectedValue: 6,
+      hasPositiveEdge: true,
+      hasValidOdds: true,
+      side: 'away',
+    },
+    {
+      edge: 0.04,
+      expectedValue: 5,
+      hasPositiveEdge: true,
+      hasValidOdds: true,
+      side: 'home',
+    },
+  ])
+  const evWinner = dashboardUtils.getDashboardValueSide([
+    {
+      edge: 0.02,
+      expectedValue: 4,
+      hasPositiveEdge: true,
+      hasValidOdds: true,
+      side: 'away',
+    },
+    {
+      edge: 0.02,
+      expectedValue: 7,
+      hasPositiveEdge: true,
+      hasValidOdds: true,
+      side: 'home',
+    },
+  ])
+  const stableWinner = dashboardUtils.getDashboardValueSide([
+    {
+      edge: 0.02,
+      expectedValue: 4,
+      hasPositiveEdge: true,
+      hasValidOdds: true,
+      side: 'away',
+    },
+    {
+      edge: 0.02,
+      expectedValue: 4,
+      hasPositiveEdge: true,
+      hasValidOdds: true,
+      side: 'home',
+    },
+  ])
+
+  assert.equal(edgeWinner.side, 'home')
+  assert.equal(evWinner.side, 'home')
+  assert.equal(stableWinner.side, 'away')
 })
 
 test('dashboard summaries count open exposure, game activity and last-night bets', () => {
@@ -424,7 +677,7 @@ test('Dashboard places activity metadata inside the games section', () => {
   )
   assert.match(html, /<strong>3<\/strong><span>Games<\/span>/)
   assert.match(html, /<strong>3<\/strong><span>Analyzed<\/span>/)
-  assert.match(html, /<strong>1<\/strong><span>Candidates<\/span>/)
+  assert.match(html, /<strong>1<\/strong><span>Bet Candidates<\/span>/)
   assert.match(html, /<strong>1<\/strong><span>Bets saved<\/span>/)
   assertNoInvalidNumbers(html)
 })
@@ -447,15 +700,147 @@ test('Dashboard renders bankroll-not-initialized state without fabricated balanc
   assertNoInvalidNumbers(html)
 })
 
-test('Dashboard card render separates model lean from betting value', () => {
+test('Dashboard card render removes model lean and shows value side', () => {
   const html = renderDashboard()
 
   assert.match(html, /class="schedule-card candidate"/)
-  assert.match(html, /Bet candidate/)
-  assert.match(html, /Model lean[\s\S]*Boston Bruins[\s\S]*win probability/)
-  assert.match(html, /Best value[\s\S]*Toronto Maple Leafs \+/)
+  assert.match(html, /Bet Candidate/)
+  assert.doesNotMatch(html, /Model lean|Model Lean|Highest EV|Best value/)
+  assert.match(html, /Value Side[\s\S]*Toronto Maple Leafs/)
+  assert.match(html, /Edge[\s\S]*\+[0-9]+\.[0-9]{2} pp/)
+  assert.match(html, /Kelly[\s\S]*(?:€|EUR)/)
   assert.match(html, /class="schedule-card neutral"/)
   assert.match(html, /No current value/)
+  assertNoInvalidNumbers(html)
+})
+
+test('Dashboard renders Add Odds without a value side', () => {
+  const html = renderDashboard({
+    initialBets: [],
+    initialMarketOdds: {},
+    initialPreviousSchedule: {
+      date: '2026-01-14',
+      games: [],
+    },
+    initialSchedule: {
+      date: '2026-01-15',
+      games: [todayGames()[0]],
+    },
+  })
+
+  assert.match(html, /class="schedule-card needs-odds"/)
+  assert.match(html, /Add odds/)
+  assert.match(html, /Preliminary probabilities are ready\./)
+  assert.match(html, /Enter market odds to evaluate betting value\./)
+  assert.doesNotMatch(html, /Value Side/)
+  assertNoInvalidNumbers(html)
+})
+
+test('Dashboard renders one-sided no-value odds neutrally', () => {
+  const html = renderDashboard({
+    initialBets: [],
+    initialMarketOdds: {
+      'game-candidate': {
+        away: '1.20',
+        home: '',
+      },
+    },
+    initialPreviousSchedule: {
+      date: '2026-01-14',
+      games: [],
+    },
+    initialSchedule: {
+      date: '2026-01-15',
+      games: [todayGames()[0]],
+    },
+  })
+
+  assert.match(html, /class="schedule-card neutral"/)
+  assert.match(html, /No current value/)
+  assert.match(html, /No positive edge at the entered odds\./)
+  assert.match(html, /Only one side evaluated\./)
+  assert.doesNotMatch(html, /Value Side/)
+  assertNoInvalidNumbers(html)
+})
+
+test('Dashboard renders below-minimum value as Worth Reviewing without Kelly amount', () => {
+  const html = renderDashboard({
+    initialBets: [],
+    initialBettingSettings: {
+      ...bettingSettings,
+      minimumEdgePercent: 10,
+    },
+    initialPreviousSchedule: {
+      date: '2026-01-14',
+      games: [],
+    },
+    initialSchedule: {
+      date: '2026-01-15',
+      games: [todayGames()[0]],
+    },
+  })
+
+  assert.match(html, /class="schedule-card attention"/)
+  assert.match(html, /Worth reviewing/)
+  assert.match(html, /Value Side[\s\S]*Toronto Maple Leafs/)
+  assert.match(html, /Below 10\.00 pp minimum/)
+  assert.doesNotMatch(html, /Kelly[\s\S]*(?:€|EUR)/)
+  assertNoInvalidNumbers(html)
+})
+
+test('Dashboard renders preliminary unavailable state without stale value labels', () => {
+  const html = renderDashboard({
+    initialBets: [],
+    initialMarketOdds: {
+      'game-candidate': {
+        away: '4.50',
+        home: '1.35',
+      },
+    },
+    initialPreviousSchedule: {
+      date: '2026-01-14',
+      games: [],
+    },
+    initialSchedule: {
+      date: '2026-01-15',
+      games: [todayGames()[0]],
+    },
+    powerRatings: {
+      BOS: {
+        baseRating: 56,
+        teamId: 'BOS',
+      },
+    },
+  })
+
+  assert.match(html, /Preliminary analysis unavailable/)
+  assert.match(html, /Missing core model data/)
+  assert.doesNotMatch(html, /Value Side|Add odds/)
+  assertNoInvalidNumbers(html)
+})
+
+test('Dashboard validates invalid entered market odds safely', () => {
+  const html = renderDashboard({
+    initialBets: [],
+    initialMarketOdds: {
+      'game-candidate': {
+        away: '1.00',
+        home: '',
+      },
+    },
+    initialPreviousSchedule: {
+      date: '2026-01-14',
+      games: [],
+    },
+    initialSchedule: {
+      date: '2026-01-15',
+      games: [todayGames()[0]],
+    },
+  })
+
+  assert.match(html, /Add odds/)
+  assert.match(html, /Market odds must be greater than 1\./)
+  assert.doesNotMatch(html, /Value Side/)
   assertNoInvalidNumbers(html)
 })
 
@@ -487,7 +872,7 @@ test('saved bets have display priority and render stake plus odds', () => {
   const html = renderDashboard()
 
   assert.match(html, /class="schedule-card saved has-saved-bet"/)
-  assert.match(html, /Bet saved/)
+  assert.match(html, /Bet Saved/)
   assert.match(html, /New York Rangers/)
   assert.match(html, /@ 2\.80/)
   assert.match(html, /View Bet/)
@@ -541,7 +926,7 @@ test('completed selected-day games render one Final status and contextual action
   })
 
   assert.equal(countMatches(html, />Final</g), 1)
-  assert.match(html, /Bet saved/)
+  assert.match(html, /Bet Saved/)
   assert.match(html, /View Analysis/)
   assert.match(html, /View Bet/)
   assert.doesNotMatch(html, /<span class="dashboard-card-status final">Final/)
@@ -715,5 +1100,78 @@ test('partial Previous Day failure does not hide today games', () => {
   assert.match(html, /class="dashboard-today-games-grid"/)
   assert.match(html, /Toronto Maple Leafs/)
   assert.match(html, /Analyze Game/)
+  assertNoInvalidNumbers(html)
+})
+
+test('GameAnalyzer separates detected rest conditions from applied modifiers', () => {
+  const html = renderToStaticMarkup(
+    React.createElement(GameAnalyzer, {
+      baseHomeAdvantage: 0,
+      injurySummaries: {},
+      injurySummaryStatus: 'success',
+      onNavigate: () => {},
+      onRetryInjuries: () => {},
+      onRetryPowerRatings: () => {},
+      onRetryRatingEngineSettings: () => {},
+      powerRatings: createRatings(),
+      powerRatingsStatus: 'success',
+      prefillMatchup: {
+        away: 'LAK',
+        gameContext: {
+          awayContext: {
+            adjustmentBreakdown: [],
+            automaticRestFatigueAdjustment: 0,
+            conditions: ['well_rested', '4_games_in_6_days'],
+            effectiveRestFatigueAdjustment: 0,
+            quickRematch: {
+              reason: 'No previous head-to-head meeting.',
+            },
+            restDays: 2,
+            restFatigueCondition: 'fourInSix',
+            totalGameContextAdjustment: 0,
+          },
+          awayTeam: {
+            abbreviation: 'LAK',
+            name: 'Los Angeles Kings',
+            teamId: 'LAK',
+          },
+          gameId: '2025021044',
+          homeContext: {
+            adjustmentBreakdown: [
+              {
+                adjustment: 0,
+                condition: 'normal',
+              },
+            ],
+            quickRematch: {
+              reason: 'No previous head-to-head meeting.',
+            },
+            restFatigueCondition: 'normal',
+          },
+          homeTeam: {
+            abbreviation: 'NYI',
+            name: 'New York Islanders',
+            teamId: 'NYI',
+          },
+          scheduledStart: '2026-03-13T23:30:00.000Z',
+        },
+        gameId: '2025021044',
+        home: 'NYI',
+        marketOdds: {
+          away: '2.05',
+          home: '1.85',
+        },
+        scheduledStart: '2026-03-13T23:30:00.000Z',
+      },
+      ratingEngineSettingsStatus: 'success',
+    }),
+  )
+
+  assert.match(html, /Well Rested[\s\S]*adjustment disabled/)
+  assert.match(html, /4 Games in 6 Days[\s\S]*info only/)
+  assert.match(html, /No applied modifiers/)
+  assert.match(html, /<dt>Rest Days<\/dt><dd>2<\/dd>/)
+  assert.match(html, /<dt>Rest\/Fatigue<\/dt><dd>\+0\.00<\/dd>/)
+  assert.doesNotMatch(html, /4 Games in 6 Days[\s\S]*-0\.50/)
   assertNoInvalidNumbers(html)
 })

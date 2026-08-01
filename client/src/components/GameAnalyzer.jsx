@@ -7,6 +7,10 @@ import { NHL_TEAMS } from '../data/teams.js'
 import { getBankrollSummary } from '../services/bankrollApi.js'
 import { createBet, fetchBets } from '../services/betsApi.js'
 import { getBettingSettings } from '../services/bettingSettingsApi.js'
+import {
+  fetchGameContexts,
+  updateGameContextOverrides,
+} from '../services/gameContextApi.js'
 import { parseBankrollMoneyInput } from '../utils/bankroll.js'
 import {
   fetchTeamGoalieSummaries,
@@ -22,6 +26,13 @@ import {
   createKellyStakeRecommendation,
   formatStakeInputValue,
 } from '../utils/kellyStaking.js'
+import {
+  applyGameContextToInputs,
+  formatRestFatigueConditionLabel,
+  formatSignedGameContextAdjustment,
+  getGameContextForSide,
+  normalizeGameContext,
+} from '../utils/gameContext.js'
 import {
   applyTeamRatingsToInputs,
   createInputsForTeams,
@@ -47,6 +58,7 @@ const adjustmentLimits = {
   injuries: { max: 20, min: -20 },
   manualAdjustment: { max: 2, min: -2 },
   motivation: { max: 2, min: -2 },
+  quickRematchAdjustment: { max: 3, min: -3 },
   restFatigue: { max: 3, min: -3 },
 }
 
@@ -87,6 +99,117 @@ const formatSavedTime = (dateTime) =>
     minute: '2-digit',
   }).format(new Date(dateTime))
 
+const createGameContextDraft = (gameContext) => {
+  const normalizedContext = normalizeGameContext(gameContext)
+  const awayContext = getGameContextForSide(normalizedContext, 'away')
+  const homeContext = getGameContextForSide(normalizedContext, 'home')
+
+  return {
+    awayContext: {
+      manualQuickRematchAdjustment: String(
+        awayContext.manualQuickRematchAdjustment,
+      ),
+      manualRestFatigueAdjustment: String(
+        awayContext.manualRestFatigueAdjustment,
+      ),
+      quickRematchOverrideEnabled: awayContext.quickRematchOverrideEnabled,
+      restFatigueOverrideEnabled: awayContext.restFatigueOverrideEnabled,
+    },
+    homeContext: {
+      manualQuickRematchAdjustment: String(
+        homeContext.manualQuickRematchAdjustment,
+      ),
+      manualRestFatigueAdjustment: String(
+        homeContext.manualRestFatigueAdjustment,
+      ),
+      quickRematchOverrideEnabled: homeContext.quickRematchOverrideEnabled,
+      restFatigueOverrideEnabled: homeContext.restFatigueOverrideEnabled,
+    },
+  }
+}
+
+const parseContextDraftAdjustment = (value) => {
+  const numberValue = Number(value)
+
+  return Number.isFinite(numberValue)
+    ? clamp(numberValue, { max: 3, min: -3 })
+    : 0
+}
+
+const createGameContextOverridePayload = (draft) => ({
+  awayContext: {
+    manualQuickRematchAdjustment: parseContextDraftAdjustment(
+      draft.awayContext.manualQuickRematchAdjustment,
+    ),
+    manualRestFatigueAdjustment: parseContextDraftAdjustment(
+      draft.awayContext.manualRestFatigueAdjustment,
+    ),
+    quickRematchOverrideEnabled:
+      draft.awayContext.quickRematchOverrideEnabled,
+    restFatigueOverrideEnabled: draft.awayContext.restFatigueOverrideEnabled,
+  },
+  homeContext: {
+    manualQuickRematchAdjustment: parseContextDraftAdjustment(
+      draft.homeContext.manualQuickRematchAdjustment,
+    ),
+    manualRestFatigueAdjustment: parseContextDraftAdjustment(
+      draft.homeContext.manualRestFatigueAdjustment,
+    ),
+    quickRematchOverrideEnabled:
+      draft.homeContext.quickRematchOverrideEnabled,
+    restFatigueOverrideEnabled: draft.homeContext.restFatigueOverrideEnabled,
+  },
+})
+
+const formatRestDays = (value) =>
+  Number.isFinite(Number(value)) ? String(Number(value)) : '--'
+
+const formatContextDate = (dateTime) => {
+  const date = new Date(dateTime)
+
+  if (Number.isNaN(date.getTime())) {
+    return ''
+  }
+
+  return new Intl.DateTimeFormat(undefined, {
+    day: 'numeric',
+    month: 'short',
+  }).format(date)
+}
+
+const isWellRestedCondition = (condition) =>
+  ['wellRested', 'well_rested'].includes(condition)
+
+const isFourInSixCondition = (condition) =>
+  ['fourInSix', 'four_in_six', '4_games_in_6_days'].includes(condition)
+
+const hasAppliedCondition = (condition, appliedConditionIds) => {
+  if (appliedConditionIds.has(condition)) {
+    return true
+  }
+
+  if (isWellRestedCondition(condition)) {
+    return [...appliedConditionIds].some(isWellRestedCondition)
+  }
+
+  return false
+}
+
+const getDetectedScheduleNote = (condition, appliedConditionIds) => {
+  if (isFourInSixCondition(condition)) {
+    return 'info only'
+  }
+
+  if (
+    isWellRestedCondition(condition) &&
+    !hasAppliedCondition(condition, appliedConditionIds)
+  ) {
+    return 'adjustment disabled'
+  }
+
+  return ''
+}
+
 function GameAnalyzer({
   baseHomeAdvantage = 0,
   injurySummaries,
@@ -103,6 +226,7 @@ function GameAnalyzer({
   ratingEngineSettingsError,
   ratingEngineSettingsStatus,
 }) {
+  const initialGameContext = normalizeGameContext(prefillMatchup?.gameContext)
   const [matchup, setMatchup] = useState(() => {
     const initialTeams = normalizeSelectedTeams(prefillMatchup ?? defaultTeams)
 
@@ -114,9 +238,19 @@ function GameAnalyzer({
         prefillMatchup?.marketOdds,
         injurySummaries,
         baseHomeAdvantage,
+        initialGameContext,
       ),
     }
   })
+  const [gameContext, setGameContext] = useState(initialGameContext)
+  const [gameContextDraft, setGameContextDraft] = useState(() =>
+    createGameContextDraft(initialGameContext),
+  )
+  const [gameContextStatus, setGameContextStatus] = useState(
+    initialGameContext ? 'success' : 'idle',
+  )
+  const [gameContextSaveStatus, setGameContextSaveStatus] = useState('idle')
+  const [gameContextMessage, setGameContextMessage] = useState('')
   const [goalieStatsByPlayerId, setGoalieStatsByPlayerId] = useState({})
   const [goalieStatusByTeam, setGoalieStatusByTeam] = useState({})
   const [goalieErrorByTeam, setGoalieErrorByTeam] = useState({})
@@ -140,6 +274,45 @@ function GameAnalyzer({
 
   const homeTeam = findTeam(teams.home)
   const awayTeam = findTeam(teams.away)
+  const isUsingPrefilledGameTeams =
+    Boolean(prefillMatchup?.gameId) &&
+    teams.away === prefillMatchup.away &&
+    teams.home === prefillMatchup.home
+  const contextRequestGame = useMemo(() => {
+    if (!isUsingPrefilledGameTeams) {
+      return null
+    }
+
+    if (prefillMatchup?.game) {
+      return prefillMatchup.game
+    }
+
+    if (!prefillMatchup?.gameId || !prefillMatchup?.scheduledStart) {
+      return null
+    }
+
+    return {
+      awayTeam: {
+        abbreviation: awayTeam.abbreviation,
+        name: awayTeam.name,
+      },
+      gameId: prefillMatchup.gameId,
+      gameState: 'FUT',
+      homeTeam: {
+        abbreviation: homeTeam.abbreviation,
+        name: homeTeam.name,
+      },
+      startTimeUTC: prefillMatchup.scheduledStart,
+      status: 'Scheduled',
+    }
+  }, [
+    awayTeam.abbreviation,
+    awayTeam.name,
+    homeTeam.abbreviation,
+    homeTeam.name,
+    isUsingPrefilledGameTeams,
+    prefillMatchup,
+  ])
 
   const result = useMemo(
     () => calculateGame(inputs.home, inputs.away),
@@ -227,6 +400,58 @@ function GameAnalyzer({
   const reviewDisabledReason = hasReviewableSide
     ? ''
     : 'Add valid market odds greater than 1 for at least one side.'
+
+  useEffect(() => {
+    let isCurrent = true
+
+    const loadGameContext = async () => {
+      if (!contextRequestGame) {
+        setGameContext(null)
+        setGameContextDraft(createGameContextDraft(null))
+        setGameContextStatus('idle')
+        setGameContextMessage('')
+        return
+      }
+
+      setGameContextStatus('loading')
+      setGameContextMessage('')
+
+      try {
+        const result = await fetchGameContexts([contextRequestGame])
+        const nextContext = result.contexts[0] ?? null
+
+        if (!isCurrent) {
+          return
+        }
+
+        setGameContext(nextContext)
+        setGameContextDraft(createGameContextDraft(nextContext))
+        setGameContextStatus(nextContext ? 'success' : 'idle')
+
+        if (nextContext) {
+          setMatchup((currentMatchup) => ({
+            ...currentMatchup,
+            inputs: applyGameContextToInputs(currentMatchup.inputs, nextContext),
+          }))
+        }
+      } catch (error) {
+        if (!isCurrent) {
+          return
+        }
+
+        setGameContext(null)
+        setGameContextDraft(createGameContextDraft(null))
+        setGameContextStatus('error')
+        setGameContextMessage(error.message)
+      }
+    }
+
+    loadGameContext()
+
+    return () => {
+      isCurrent = false
+    }
+  }, [contextRequestGame])
 
   const openBetReview = () => {
     if (!hasReviewableSide) {
@@ -453,6 +678,11 @@ function GameAnalyzer({
     setSaveStatus('idle')
     setSaveMessage('')
     setIsBetReviewOpen(false)
+    setGameContext(null)
+    setGameContextDraft(createGameContextDraft(null))
+    setGameContextStatus('idle')
+    setGameContextSaveStatus('idle')
+    setGameContextMessage('')
 
     setMatchup((currentMatchup) => {
       const currentTeams = currentMatchup.teams
@@ -541,6 +771,80 @@ function GameAnalyzer({
   const handleMarketOddsChange = (side, value) =>
     handleInputChange(side, 'marketOdds', value)
 
+  const handleGameContextDraftChange = (side, field, value) => {
+    const sideKey = side === 'away' ? 'awayContext' : 'homeContext'
+
+    setGameContextDraft((currentDraft) => ({
+      ...currentDraft,
+      [sideKey]: {
+        ...currentDraft[sideKey],
+        [field]: value,
+      },
+    }))
+    setGameContextSaveStatus('idle')
+    setGameContextMessage('')
+    setSaveStatus('idle')
+    setSaveMessage('')
+  }
+
+  const refreshGameContext = async () => {
+    if (!contextRequestGame) {
+      return null
+    }
+
+    const result = await fetchGameContexts([contextRequestGame])
+    const nextContext = result.contexts[0] ?? null
+
+    setGameContext(nextContext)
+    setGameContextDraft(createGameContextDraft(nextContext))
+    setGameContextStatus(nextContext ? 'success' : 'idle')
+
+    if (nextContext) {
+      setMatchup((currentMatchup) => ({
+        ...currentMatchup,
+        inputs: applyGameContextToInputs(currentMatchup.inputs, nextContext),
+      }))
+    }
+
+    return nextContext
+  }
+
+  const handleRefreshGameContext = async () => {
+    setGameContextStatus('loading')
+    setGameContextMessage('')
+
+    try {
+      await refreshGameContext()
+    } catch (error) {
+      setGameContext(null)
+      setGameContextDraft(createGameContextDraft(null))
+      setGameContextStatus('error')
+      setGameContextMessage(error.message)
+    }
+  }
+
+  const handleSaveGameContextOverrides = async () => {
+    if (!contextRequestGame?.gameId) {
+      return
+    }
+
+    setGameContextSaveStatus('saving')
+    setGameContextMessage('')
+
+    try {
+      await updateGameContextOverrides(
+        contextRequestGame.gameId,
+        createGameContextOverridePayload(gameContextDraft),
+      )
+      await refreshGameContext()
+      setGameContextSaveStatus('success')
+      setGameContextMessage('Game context overrides saved.')
+    } catch (error) {
+      setGameContextSaveStatus('error')
+      setGameContextMessage(error.message)
+    }
+  }
+
   const handleUseRecommendedStake = () => {
     if (
       !selectedStakeRecommendation.eligible ||
@@ -587,6 +891,7 @@ function GameAnalyzer({
         gameId: prefillMatchup?.gameId ?? '',
         homeTeam,
         awayTeam,
+        gameContextSnapshot: gameContext,
         inputs,
         result,
         scheduledStart: prefillMatchup?.scheduledStart ?? null,
@@ -737,6 +1042,20 @@ function GameAnalyzer({
               home: () => loadTeamGoalies(homeTeam, { force: true }),
             }}
           />
+
+          <GameContextPanel
+            awayTeam={awayTeam}
+            contextRequestGame={contextRequestGame}
+            draft={gameContextDraft}
+            gameContext={gameContext}
+            homeTeam={homeTeam}
+            saveMessage={gameContextMessage}
+            saveStatus={gameContextSaveStatus}
+            status={gameContextStatus}
+            onChange={handleGameContextDraftChange}
+            onRefresh={handleRefreshGameContext}
+            onSave={handleSaveGameContextOverrides}
+          />
         </div>
 
         <ResultCard
@@ -813,6 +1132,240 @@ function MatchupTeamCard({ baseRating, effectiveRating, label, team }) {
           <span>Effective</span>
           <strong>{formatRating(effectiveRating)}</strong>
         </div>
+      </div>
+    </article>
+  )
+}
+
+function GameContextPanel({
+  awayTeam,
+  contextRequestGame,
+  draft,
+  gameContext,
+  homeTeam,
+  saveMessage,
+  saveStatus,
+  status,
+  onChange,
+  onRefresh,
+  onSave,
+}) {
+  if (!contextRequestGame && status !== 'error') {
+    return null
+  }
+
+  const isLoading = status === 'loading'
+  const isSaving = saveStatus === 'saving'
+
+  return (
+    <section className="game-context-panel" aria-label="Game Context">
+      <div className="section-heading">
+        <div>
+          <p className="eyebrow">Game Context</p>
+          <h2>Schedule Adjustments</h2>
+        </div>
+        <span>{isLoading ? 'Loading' : 'User scoped'}</span>
+      </div>
+
+      {status === 'error' ? (
+        <p className="form-status error" role="alert">
+          {saveMessage || 'Game context unavailable.'}
+        </p>
+      ) : null}
+
+      {gameContext ? (
+        <div className="game-context-grid">
+          <GameContextTeamCard
+            context={getGameContextForSide(gameContext, 'away')}
+            draft={draft.awayContext}
+            label="Away"
+            side="away"
+            team={awayTeam}
+            onChange={onChange}
+          />
+          <GameContextTeamCard
+            context={getGameContextForSide(gameContext, 'home')}
+            draft={draft.homeContext}
+            label="Home"
+            side="home"
+            team={homeTeam}
+            onChange={onChange}
+          />
+        </div>
+      ) : isLoading ? (
+        <div className="game-context-loading" role="status">
+          Loading game context...
+        </div>
+      ) : null}
+
+      {contextRequestGame ? (
+        <div className="game-context-actions">
+          {saveMessage ? (
+            <span className={`save-analysis-status ${saveStatus}`}>
+              {saveMessage}
+            </span>
+          ) : null}
+          <button type="button" disabled={isSaving} onClick={onRefresh}>
+            Refresh
+          </button>
+          <button
+            className="save-ratings-button"
+            type="button"
+            disabled={isLoading || isSaving}
+            onClick={onSave}
+          >
+            {isSaving ? 'Saving...' : 'Save Context Overrides'}
+          </button>
+        </div>
+      ) : null}
+    </section>
+  )
+}
+
+function GameContextTeamCard({ context, draft, label, side, team, onChange }) {
+  const quickRematchNote = context.quickRematch.eligible
+    ? `Previous loss ${formatContextDate(
+        context.quickRematch.previousGameDate,
+      )}`
+    : context.quickRematch.reason
+  const restFatigueBreakdown = context.adjustmentBreakdown.filter(
+    (item) => (item.category ?? 'restFatigue') === 'restFatigue',
+  )
+  const appliedConditionIds = new Set(
+    restFatigueBreakdown.map((item) => item.condition),
+  )
+  const detectedConditions =
+    context.conditions.length > 0
+      ? context.conditions
+      : [context.restFatigueCondition]
+
+  return (
+    <article className="game-context-team-card">
+      <div className="game-context-card-header">
+        <span>{label}</span>
+        <strong>{team.name}</strong>
+        <em>
+          {formatSignedGameContextAdjustment(
+            context.totalGameContextAdjustment,
+          )}
+        </em>
+      </div>
+
+      <dl className="game-context-metrics">
+        <div>
+          <dt>Rest Days</dt>
+          <dd>{formatRestDays(context.restDays)}</dd>
+        </div>
+        <div>
+          <dt>Schedule</dt>
+          <dd className="game-context-detected">
+            {detectedConditions.map((condition) => {
+              const note = getDetectedScheduleNote(condition, appliedConditionIds)
+
+              return (
+                <span key={condition}>
+                  <em>{formatRestFatigueConditionLabel(condition)}</em>
+                  {note ? <small>{note}</small> : null}
+                </span>
+              )
+            })}
+          </dd>
+        </div>
+        <div>
+          <dt>Applied</dt>
+          <dd className="game-context-breakdown">
+            {restFatigueBreakdown.length > 0 ? (
+              restFatigueBreakdown.map((item) => (
+                <span key={item.condition}>
+                  <em>{formatRestFatigueConditionLabel(item.condition)}</em>
+                  <strong>
+                    {formatSignedGameContextAdjustment(item.adjustment)}
+                  </strong>
+                </span>
+              ))
+            ) : (
+              <span>
+                <em>No applied modifiers</em>
+              </span>
+            )}
+          </dd>
+        </div>
+        <div>
+          <dt>Rest/Fatigue</dt>
+          <dd>
+            {formatSignedGameContextAdjustment(
+              context.effectiveRestFatigueAdjustment,
+            )}
+          </dd>
+        </div>
+        <div>
+          <dt>Quick Rematch</dt>
+          <dd>
+            {formatSignedGameContextAdjustment(
+              context.effectiveQuickRematchAdjustment,
+            )}
+          </dd>
+        </div>
+      </dl>
+
+      {quickRematchNote ? (
+        <small className="game-context-note">{quickRematchNote}</small>
+      ) : null}
+
+      <div className="game-context-controls">
+        <label className="toggle-field">
+          <input
+            type="checkbox"
+            checked={draft.restFatigueOverrideEnabled}
+            onChange={(event) =>
+              onChange(
+                side,
+                'restFatigueOverrideEnabled',
+                event.target.checked,
+              )
+            }
+          />
+          <span>Override Rest/Fatigue</span>
+        </label>
+        <input
+          aria-label={`${team.name} rest and fatigue override`}
+          type="number"
+          min="-3"
+          max="3"
+          step="0.05"
+          value={draft.manualRestFatigueAdjustment}
+          disabled={!draft.restFatigueOverrideEnabled}
+          onChange={(event) =>
+            onChange(side, 'manualRestFatigueAdjustment', event.target.value)
+          }
+        />
+
+        <label className="toggle-field">
+          <input
+            type="checkbox"
+            checked={draft.quickRematchOverrideEnabled}
+            onChange={(event) =>
+              onChange(
+                side,
+                'quickRematchOverrideEnabled',
+                event.target.checked,
+              )
+            }
+          />
+          <span>Override Quick Rematch</span>
+        </label>
+        <input
+          aria-label={`${team.name} quick rematch override`}
+          type="number"
+          min="-3"
+          max="3"
+          step="0.05"
+          value={draft.manualQuickRematchAdjustment}
+          disabled={!draft.quickRematchOverrideEnabled}
+          onChange={(event) =>
+            onChange(side, 'manualQuickRematchAdjustment', event.target.value)
+          }
+        />
       </div>
     </article>
   )
