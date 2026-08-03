@@ -13,6 +13,12 @@ import {
 import { useAuth } from '../context/AuthContext.jsx'
 import { getBankrollSummary } from '../services/bankrollApi.js'
 import {
+  fetchBookmakerPreferences,
+  fetchMarketOddsStatus,
+  updateBookmakerPreferences,
+} from '../services/marketOddsApi.js'
+import { getMarketOddsStatusLabel } from '../utils/marketOdds.js'
+import {
   getBettingSettings,
   resetBettingSettings,
   updateBettingSettings,
@@ -137,7 +143,11 @@ const formatSignedValue = (value) => {
   return `${numberValue >= 0 ? '+' : ''}${numberValue.toFixed(2)}`
 }
 
-function Settings({ onRatingEngineSettingsChanged }) {
+function Settings({
+  initialBookmakerPreferences = null,
+  initialMarketOddsStatus = null,
+  onRatingEngineSettingsChanged,
+}) {
   const { user } = useAuth()
   const [settingsStatus, setSettingsStatus] = useState('loading')
   const [saveStatus, setSaveStatus] = useState('idle')
@@ -184,6 +194,41 @@ function Settings({ onRatingEngineSettingsChanged }) {
   const [bankrollSummary, setBankrollSummary] = useState(null)
   const [bankrollStatus, setBankrollStatus] = useState('loading')
   const [bankrollError, setBankrollError] = useState('')
+  const [marketDataStatus, setMarketDataStatus] = useState(
+    initialMarketOddsStatus ? 'success' : 'loading',
+  )
+  const [marketData, setMarketData] = useState(
+    initialMarketOddsStatus ?? {
+      configuration: {
+        cacheTtlMs: 10 * 60 * 1000,
+        configured: null,
+        market: 'Moneyline',
+        provider: 'The Odds API',
+        region: 'EU',
+        sport: 'NHL',
+      },
+      lastSuccessfulFetch: null,
+      quota: null,
+      status: 'unavailable',
+    },
+  )
+  const [bookmakerPreferencesStatus, setBookmakerPreferencesStatus] = useState(
+    initialBookmakerPreferences ? 'success' : 'loading',
+  )
+  const [bookmakerPreferences, setBookmakerPreferences] = useState(
+    initialBookmakerPreferences ?? {
+      availableBookmakers: [],
+      disabledBookmakerKeys: [],
+      enabledBookmakerKeys: [],
+      fallbackApplied: false,
+      warning: null,
+    },
+  )
+  const [draftEnabledBookmakerKeys, setDraftEnabledBookmakerKeys] = useState(
+    initialBookmakerPreferences?.enabledBookmakerKeys ?? [],
+  )
+  const [bookmakerPreferencesMessage, setBookmakerPreferencesMessage] =
+    useState(initialBookmakerPreferences?.warning ?? '')
 
   useEffect(() => {
     let isCurrent = true
@@ -216,6 +261,51 @@ function Settings({ onRatingEngineSettingsChanged }) {
     }
 
     loadSettings()
+
+    return () => {
+      isCurrent = false
+    }
+  }, [])
+
+  useEffect(() => {
+    let isCurrent = true
+
+    fetchBookmakerPreferences()
+      .then(({ preferences }) => {
+        if (isCurrent) {
+          setBookmakerPreferences(preferences)
+          setDraftEnabledBookmakerKeys(preferences.enabledBookmakerKeys)
+          setBookmakerPreferencesStatus('success')
+          setBookmakerPreferencesMessage(preferences.warning ?? '')
+        }
+      })
+      .catch((error) => {
+        if (isCurrent) {
+          setBookmakerPreferencesStatus('error')
+          setBookmakerPreferencesMessage(error.message)
+        }
+      })
+
+    return () => {
+      isCurrent = false
+    }
+  }, [])
+
+  useEffect(() => {
+    let isCurrent = true
+
+    fetchMarketOddsStatus()
+      .then((result) => {
+        if (isCurrent) {
+          setMarketData(result)
+          setMarketDataStatus('success')
+        }
+      })
+      .catch(() => {
+        if (isCurrent) {
+          setMarketDataStatus('error')
+        }
+      })
 
     return () => {
       isCurrent = false
@@ -336,6 +426,43 @@ function Settings({ onRatingEngineSettingsChanged }) {
     () => parseRatingEngineSettingsDraft(draftSettings),
     [draftSettings],
   )
+
+  const handleBookmakerPreferenceChange = (bookmakerKey, enabled) => {
+    setDraftEnabledBookmakerKeys((currentKeys) => {
+      const nextKeys = new Set(currentKeys)
+
+      if (enabled) {
+        nextKeys.add(bookmakerKey)
+      } else {
+        nextKeys.delete(bookmakerKey)
+      }
+
+      return [...nextKeys]
+    })
+    setBookmakerPreferencesMessage('')
+  }
+
+  const handleSaveBookmakerPreferences = async (event) => {
+    event.preventDefault()
+    setBookmakerPreferencesStatus('saving')
+    setBookmakerPreferencesMessage('')
+
+    try {
+      const { preferences } = await updateBookmakerPreferences(
+        draftEnabledBookmakerKeys,
+      )
+
+      setBookmakerPreferences(preferences)
+      setDraftEnabledBookmakerKeys(preferences.enabledBookmakerKeys)
+      setBookmakerPreferencesStatus('success')
+      setBookmakerPreferencesMessage(
+        preferences.warning || 'Preferred bookmakers saved.',
+      )
+    } catch (error) {
+      setBookmakerPreferencesStatus('error')
+      setBookmakerPreferencesMessage(error.message)
+    }
+  }
   const parsedBettingDraft = useMemo(
     () => parseBettingSettingsDraft(draftBettingSettings),
     [draftBettingSettings],
@@ -842,6 +969,132 @@ function Settings({ onRatingEngineSettingsChanged }) {
             <strong>{getProviderLabel(user?.authProvider)}</strong>
           </div>
         </div>
+      </div>
+
+      <div className="settings-panel settings-market-data-panel">
+        <div className="section-heading">
+          <div>
+            <p className="eyebrow">External data</p>
+            <h2>Market Odds</h2>
+          </div>
+          <span>Market data</span>
+        </div>
+
+        <dl className="market-data-status-grid">
+          <div><dt>Provider</dt><dd>{marketData.configuration.provider}</dd></div>
+          <div>
+            <dt>Configuration</dt>
+            <dd>
+              {marketData.configuration.configured === null
+                ? 'Checking'
+                : marketData.configuration.configured
+                  ? 'Connected'
+                  : 'Not configured'}
+            </dd>
+          </div>
+          <div><dt>Sport</dt><dd>{marketData.configuration.sport}</dd></div>
+          <div><dt>Region</dt><dd>{marketData.configuration.region}</dd></div>
+          <div><dt>Market</dt><dd>{marketData.configuration.market}</dd></div>
+          <div>
+            <dt>Cache TTL</dt>
+            <dd>{Math.round(marketData.configuration.cacheTtlMs / 60000)} min</dd>
+          </div>
+          <div><dt>Credits Remaining</dt><dd>{marketData.quota?.remaining ?? '--'}</dd></div>
+          <div><dt>Credits Used</dt><dd>{marketData.quota?.used ?? '--'}</dd></div>
+          <div><dt>Last Request Cost</dt><dd>{marketData.quota?.lastCost ?? '--'}</dd></div>
+          <div>
+            <dt>Last Successful Fetch</dt>
+            <dd>
+              {marketData.lastSuccessfulFetch
+                ? new Date(marketData.lastSuccessfulFetch).toLocaleString()
+                : 'Not yet'}
+            </dd>
+          </div>
+          <div>
+            <dt>Current Status</dt>
+            <dd>{getMarketOddsStatusLabel(marketData.status, marketDataStatus)}</dd>
+          </div>
+        </dl>
+
+        <form
+          className="preferred-bookmakers-section"
+          onSubmit={handleSaveBookmakerPreferences}
+        >
+          <div>
+            <p className="eyebrow">External Data</p>
+            <h3>Preferred Bookmakers</h3>
+            <p>
+              Only enabled bookmakers can supply best available odds to the
+              Dashboard, Analyzer, EV, Kelly, and saved bets.
+            </p>
+          </div>
+
+          {bookmakerPreferencesStatus === 'loading' ? (
+            <p role="status">Loading...</p>
+          ) : null}
+
+          {bookmakerPreferences.availableBookmakers.length === 0 &&
+          bookmakerPreferencesStatus !== 'loading' ? (
+            <p className="empty-state">
+              Bookmakers will appear after market odds have been loaded.
+            </p>
+          ) : (
+            <div className="preferred-bookmaker-list">
+              {bookmakerPreferences.availableBookmakers.map((bookmaker) => (
+                <label key={bookmaker.bookmakerKey}>
+                  <input
+                    checked={draftEnabledBookmakerKeys.includes(
+                      bookmaker.bookmakerKey,
+                    )}
+                    disabled={bookmakerPreferencesStatus === 'saving'}
+                    type="checkbox"
+                    onChange={(event) =>
+                      handleBookmakerPreferenceChange(
+                        bookmaker.bookmakerKey,
+                        event.target.checked,
+                      )
+                    }
+                  />
+                  <span>{bookmaker.bookmakerTitle}</span>
+                </label>
+              ))}
+            </div>
+          )}
+
+          {bookmakerPreferencesMessage ? (
+            <p
+              className={`form-status ${
+                bookmakerPreferences.fallbackApplied ||
+                bookmakerPreferencesStatus === 'error'
+                  ? 'error'
+                  : 'success'
+              }`}
+              role={
+                bookmakerPreferences.fallbackApplied ||
+                bookmakerPreferencesStatus === 'error'
+                  ? 'alert'
+                  : 'status'
+              }
+            >
+              {bookmakerPreferencesMessage}
+            </p>
+          ) : null}
+
+          {bookmakerPreferences.availableBookmakers.length > 0 ? (
+            <button
+              className="save-ratings-button"
+              disabled={bookmakerPreferencesStatus === 'saving'}
+              type="submit"
+            >
+              <Save aria-hidden="true" size={17} strokeWidth={2.2} />
+              <span>
+                {bookmakerPreferencesStatus === 'saving'
+                  ? 'Saving...'
+                  : 'Save Preferred Bookmakers'}
+              </span>
+            </button>
+          ) : null}
+        </form>
       </div>
 
       <div
@@ -1628,8 +1881,8 @@ function Settings({ onRatingEngineSettingsChanged }) {
           <Gauge aria-hidden="true" size={20} strokeWidth={2} />
           <p>
             Configure the global parameters used when completed NHL games update
-            your Power Ratings. Changes affect future live updates only;
-            already processed games are not recalculated, and Rating Lab remains
+            your Power Ratings. Changes affect future rating updates only.
+            Previously processed games are not recalculated. Rating Lab remains
             a separate simulation environment.
           </p>
         </div>

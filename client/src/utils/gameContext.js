@@ -118,6 +118,8 @@ const sumAdjustmentBreakdown = (adjustmentBreakdown, category) =>
       .toFixed(2),
   )
 
+const hasNonZeroAdjustment = (value) => Math.abs(toNumber(value)) >= 0.005
+
 const humanizeCondition = (condition) =>
   toText(condition, 'normal')
     .replace(/^(\d+)_games_in_(\d+)_days$/, '$1 Games in $2 Days')
@@ -349,6 +351,192 @@ export const getGameContextForSide = (gameContext, side) => {
     : normalizedContext.homeContext
 }
 
+export const getTeamGameContextAdjustmentPreview = (
+  context,
+  draft = {},
+) => {
+  const normalizedContext = normalizeTeamGameContext(context)
+  const restFatigueOverrideEnabled = Boolean(
+    draft.restFatigueOverrideEnabled ??
+      normalizedContext.restFatigueOverrideEnabled,
+  )
+  const quickRematchOverrideEnabled = Boolean(
+    draft.quickRematchOverrideEnabled ??
+      normalizedContext.quickRematchOverrideEnabled,
+  )
+  const manualRestFatigueAdjustment = toNumber(
+    draft.manualRestFatigueAdjustment,
+    normalizedContext.manualRestFatigueAdjustment,
+  )
+  const manualQuickRematchAdjustment = toNumber(
+    draft.manualQuickRematchAdjustment,
+    normalizedContext.manualQuickRematchAdjustment,
+  )
+  const effectiveRestFatigueAdjustment = restFatigueOverrideEnabled
+    ? manualRestFatigueAdjustment
+    : normalizedContext.automaticRestFatigueAdjustment
+  const effectiveQuickRematchAdjustment = quickRematchOverrideEnabled
+    ? manualQuickRematchAdjustment
+    : normalizedContext.automaticQuickRematchAdjustment
+
+  return {
+    automaticQuickRematchAdjustment:
+      normalizedContext.automaticQuickRematchAdjustment,
+    automaticRestFatigueAdjustment:
+      normalizedContext.automaticRestFatigueAdjustment,
+    effectiveQuickRematchAdjustment,
+    effectiveRestFatigueAdjustment,
+    manualQuickRematchAdjustment,
+    manualRestFatigueAdjustment,
+    quickRematchOverrideEnabled,
+    restFatigueOverrideEnabled,
+    totalGameContextAdjustment: Number(
+      (
+        effectiveRestFatigueAdjustment + effectiveQuickRematchAdjustment
+      ).toFixed(2),
+    ),
+  }
+}
+
+export const getTeamGameContextPresentation = (context, draft = {}) => {
+  const normalizedContext = normalizeTeamGameContext(context)
+  const preview = getTeamGameContextAdjustmentPreview(
+    normalizedContext,
+    draft,
+  )
+  const automaticRestAdjustments = normalizedContext.adjustmentBreakdown.filter(
+    (item) =>
+      item.category === 'restFatigue' &&
+      hasNonZeroAdjustment(item.adjustment),
+  )
+  const automaticQuickRematchAdjustments =
+    normalizedContext.adjustmentBreakdown.filter(
+      (item) =>
+        item.category === 'quickRematch' &&
+        hasNonZeroAdjustment(item.adjustment),
+    )
+  const detectedConditions = [
+    ...(normalizedContext.conditions.length > 0
+      ? normalizedContext.conditions
+      : [normalizedContext.restFatigueCondition]),
+  ]
+    .filter((condition) => condition && condition !== 'normal')
+    .filter((condition, index, conditions) => conditions.indexOf(condition) === index)
+  const detectedFacts = detectedConditions.map((condition) => {
+    const isInformational = condition === '4_games_in_6_days'
+    const isDisabledWellRested =
+      condition === 'well_rested' && automaticRestAdjustments.length === 0
+
+    return {
+      condition,
+      key: condition,
+      label: formatRestFatigueConditionLabel(condition),
+      note: isInformational
+        ? 'informational'
+        : isDisabledWellRested
+          ? 'adjustment disabled'
+          : '',
+    }
+  })
+
+  if (normalizedContext.quickRematch.eligible) {
+    detectedFacts.push({
+      condition: 'quick_rematch',
+      key: 'quick_rematch',
+      label: 'Quick Rematch eligible',
+      note:
+        automaticQuickRematchAdjustments.length === 0 &&
+        !preview.quickRematchOverrideEnabled
+          ? 'adjustment disabled'
+          : '',
+    })
+  }
+
+  const appliedAdjustments = []
+
+  if (preview.restFatigueOverrideEnabled) {
+    appliedAdjustments.push({
+      adjustment: preview.effectiveRestFatigueAdjustment,
+      category: 'restFatigueOverride',
+      condition: 'manual_rest_fatigue_override',
+      key: 'manual_rest_fatigue_override',
+      label: 'Manual Rest/Fatigue override',
+    })
+  } else {
+    automaticRestAdjustments.forEach((item) => {
+      appliedAdjustments.push({
+        ...item,
+        key: `rest-${item.condition}`,
+        label: formatRestFatigueConditionLabel(item.condition),
+      })
+    })
+  }
+
+  if (preview.quickRematchOverrideEnabled) {
+    appliedAdjustments.push({
+      adjustment: preview.effectiveQuickRematchAdjustment,
+      category: 'quickRematchOverride',
+      condition: 'manual_quick_rematch_override',
+      key: 'manual_quick_rematch_override',
+      label: 'Manual Quick Rematch override',
+    })
+  } else {
+    automaticQuickRematchAdjustments.forEach((item) => {
+      appliedAdjustments.push({
+        ...item,
+        key: 'quick-rematch',
+        label: 'Quick Rematch',
+      })
+    })
+  }
+
+  return {
+    appliedAdjustments,
+    detectedFacts,
+    hasActiveOverride:
+      preview.restFatigueOverrideEnabled ||
+      preview.quickRematchOverrideEnabled,
+    preview,
+  }
+}
+
+const COMPACT_REST_FATIGUE_LABELS = Object.freeze({
+  '3_games_in_4_days': '3-in-4',
+  back_to_back: 'B2B',
+  back_to_back_travel: 'B2B + Travel',
+  well_rested: 'Well Rested',
+})
+
+export const getCompactGameContextAdjustmentLabel = (context) => {
+  const presentation = getTeamGameContextPresentation(context)
+  const restAdjustment = presentation.appliedAdjustments.find((item) =>
+    ['restFatigue', 'restFatigueOverride'].includes(item.category),
+  )
+  const quickRematchAdjustment = presentation.appliedAdjustments.find((item) =>
+    ['quickRematch', 'quickRematchOverride'].includes(item.category),
+  )
+  const labels = []
+
+  if (restAdjustment) {
+    labels.push(
+      restAdjustment.category === 'restFatigueOverride'
+        ? 'Manual Rest'
+        : COMPACT_REST_FATIGUE_LABELS[restAdjustment.condition] ??
+            restAdjustment.label,
+    )
+  }
+
+  if (quickRematchAdjustment) {
+    labels.push(
+      quickRematchAdjustment.category === 'quickRematchOverride'
+        ? 'Manual Rematch'
+        : 'Quick Rematch',
+    )
+  }
+
+  return labels.join(' + ')
+}
+
 export const applyGameContextToInputs = (inputs, gameContext) => {
   if (!gameContext) {
     return inputs
@@ -371,6 +559,40 @@ export const applyGameContextToInputs = (inputs, gameContext) => {
   }
 }
 
+export const applyGameContextDraftToInputs = (
+  inputs,
+  gameContext,
+  draft = {},
+) => {
+  if (!gameContext) {
+    return inputs
+  }
+
+  const awayContext = getGameContextForSide(gameContext, 'away')
+  const homeContext = getGameContextForSide(gameContext, 'home')
+  const awayPreview = getTeamGameContextAdjustmentPreview(
+    awayContext,
+    draft.awayContext,
+  )
+  const homePreview = getTeamGameContextAdjustmentPreview(
+    homeContext,
+    draft.homeContext,
+  )
+
+  return {
+    away: {
+      ...inputs.away,
+      quickRematchAdjustment: awayPreview.effectiveQuickRematchAdjustment,
+      restFatigue: awayPreview.effectiveRestFatigueAdjustment,
+    },
+    home: {
+      ...inputs.home,
+      quickRematchAdjustment: homePreview.effectiveQuickRematchAdjustment,
+      restFatigue: homePreview.effectiveRestFatigueAdjustment,
+    },
+  }
+}
+
 export const createGameContextSnapshot = (gameContext) => {
   const normalizedContext = normalizeGameContext(gameContext)
 
@@ -388,4 +610,4 @@ export const formatSignedGameContextAdjustment = (value) => {
 }
 
 export const hasNonZeroGameContextAdjustment = (context) =>
-  Math.abs(toNumber(context?.totalGameContextAdjustment)) >= 0.005
+  hasNonZeroAdjustment(context?.totalGameContextAdjustment)

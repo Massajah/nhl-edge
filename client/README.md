@@ -1,5 +1,52 @@
 # NHL Edge Frontend
 
+## Market Odds Phase 1
+
+Authenticated Dashboard loads request current NHL moneyline odds from the NHL
+Edge server after the schedule is available. Odds are requested once for the
+selected date on initial load, again for a different selected date, and with a
+bounded forced-refresh hint when the user selects `Refresh`. There is no
+background polling and no request per game card.
+
+Phase 1 uses The Odds API's EU region and decimal `h2h` prices. Dashboard cards
+show the best valid away and home price with its bookmaker; the two best prices
+may come from different bookmakers. Existing preliminary analysis then reuses
+the same EV, probability-edge, Bet Candidate, and Kelly calculation paths.
+One-sided responses calculate only the available side.
+
+Manual Dashboard odds remain fully supported and take priority over provider
+values. Analyzer receives the displayed Dashboard values and provider metadata,
+does not silently overwrite edits, and offers `Use Latest Market Odds` as an
+explicit action when a provider snapshot is available. Saved bets preserve the
+odds actually used plus their source; an edited provider value is stored with
+source `Manual` and no provider provenance. Later refreshes do not mutate saved
+historical snapshots.
+
+The compact Dashboard status reports loading, provider/cache freshness,
+configuration, availability, quota exhaustion, and low-credit warnings when
+quota metadata exists. Settings includes a read-only Market Odds status card.
+The provider API key is server-only and must never be added to client `.env`
+files or any `VITE_` variable.
+
+## Market Odds Phase 2A
+
+Settings now includes `External Data` → `Preferred Bookmakers`. It lists the
+bookmakers observed in the latest provider response, defaults all of them to
+enabled, and saves the selection for the authenticated user. Attempting to
+disable every bookmaker restores all selections and shows an explanation.
+
+Dashboard and Analyzer calculate best home and away prices only from enabled
+bookmakers. `View Market Odds` and `View All Bookmakers` expose the complete
+bookmaker table, including disabled rows, and can sort by home odds, away odds,
+or bookmaker. Analyzer identifies the current price source and provider update
+time. Provider event IDs, timestamps, selected bookmaker, and selected odds are
+preserved when a provider-backed bet is saved; editing an odds input changes
+the source to `Manual`.
+
+Current limitations: no market consensus, de-vig, historical/opening odds,
+line movement, live updates, spreads, totals, props, polling, or betting
+automation.
+
 ## Manual Power Rating Updates
 
 Authenticated users can manually update persisted Power Ratings from the Power
@@ -18,22 +65,46 @@ Manual updates are idempotent. Completed NHL regular-season games that already
 have `ProcessedRatingGame` audit records for the current user are reported as
 already processed and are not recalculated. New eligible games are processed
 chronologically using the user's current production Power Rating Engine
-settings. Rating Lab stays independent.
+settings. Changes affect future rating updates only. Previously processed games
+are not recalculated. Rating Lab stays independent.
 
 If one or more games are processed, the page refreshes the Power Ratings list
 and summary cards without a full browser reload. The update result also shows
 games found, already processed, processed, skipped, errors, and compact
 per-game rating changes when available.
 
+## Automatic Dashboard Power Rating Updates
+
+Dashboard runs an authenticated automatic Power Rating check on initial load and
+when the user selects `Refresh`. It does not run merely because the selected
+schedule date changes. The check runs alongside normal Dashboard data loading,
+uses the same backend update workflow as the manual action, and refreshes the
+shared Power Ratings state when new games are processed so preliminary
+Dashboard analysis recalculates without a page reload.
+
+Automatic updates only process newly completed eligible NHL regular-season
+games. If update history already exists, the backend starts from the latest
+processed game date with a small overlap and relies on idempotency to avoid
+duplicate movement. If there is no processed-game audit baseline, Dashboard
+shows `Power Rating initialization required` and links to the existing manual
+update workflow instead of replaying an entire season automatically.
+
+The compact Dashboard status row can show checking, updated, up to date,
+partial, unavailable, or initialization-required states. Manual updates remain
+available for initialization, historical ranges, recovery, testing, and detailed
+processed-game inspection. Cron jobs, polling, WebSockets, full-season
+recalculation, and automatic replay after setting changes are intentionally
+deferred.
+
 ## Power Rating Update History
 
 Authenticated users can inspect persisted update audit records from
 `Power Ratings` by switching from `Team Ratings` to `Update History`.
 
-Update History shows user-specific `ProcessedRatingGame` records created by the
-manual update workflow. Records are immutable audit entries: changing current
-Power Rating Engine settings does not alter prior snapshots, and the history
-view does not edit, delete, roll back, or reprocess games.
+Update History shows user-specific `ProcessedRatingGame` records created by
+manual and automatic update workflows. Records are immutable audit entries:
+changing current Power Rating Engine settings does not alter prior snapshots,
+and the history view does not edit, delete, roll back, or reprocess games.
 
 Supported filters:
 
@@ -47,7 +118,11 @@ The default History view selects the current NHL season. Season labels use
 hockey-season formatting such as `2026–27`; raw IDs such as `20262027` are not
 shown in the UI. Selecting a named season fills `Date From` and `Date To` with
 that regular-season range and leaves the date inputs visible but disabled so the
-represented range is clear.
+represented range is clear. The official regular-season end date is preserved
+in season metadata, while History derives `Date To` by adding one local calendar
+day. This includes late games that appear on the following date in the user's
+timezone; for 2025–26, the official end remains `2026-04-16`, while `Date To`
+is shown and filtered as `2026-04-17`.
 
 `All seasons` removes date filtering while preserving Team and Result Type.
 `Custom date range` enables `Date From` and `Date To` and keeps the existing

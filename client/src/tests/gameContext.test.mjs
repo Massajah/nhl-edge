@@ -2,9 +2,13 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { calculateGame } from '../utils/calculateGame.js'
 import {
+  applyGameContextDraftToInputs,
   applyGameContextToInputs,
   createGameContextSnapshot,
   formatRestFatigueConditionLabel,
+  getCompactGameContextAdjustmentLabel,
+  getTeamGameContextAdjustmentPreview,
+  getTeamGameContextPresentation,
   normalizeGameContext,
 } from '../utils/gameContext.js'
 import {
@@ -449,4 +453,156 @@ test('client normalization removes stale four-in-six applied modifiers', () => {
   assert.equal(awayContext.automaticRestFatigueAdjustment, 0)
   assert.equal(awayContext.automaticQuickRematchAdjustment, 0.25)
   assert.equal(awayContext.totalGameContextAdjustment, 0.25)
+})
+
+test('detected facts stay separate from normalized applied adjustments', () => {
+  const context = normalizeGameContext({
+    awayContext: {
+      adjustmentBreakdown: [
+        {
+          adjustment: -0.75,
+          condition: 'back_to_back',
+        },
+        {
+          adjustment: -0.5,
+          condition: '4_games_in_6_days',
+        },
+      ],
+      conditions: [
+        '3_games_in_4_days',
+        'back_to_back',
+        '4_games_in_6_days',
+      ],
+      restFatigueCondition: 'back_to_back',
+    },
+    awayTeam: {
+      abbreviation: 'TOR',
+      name: 'Toronto Maple Leafs',
+      teamId: 'TOR',
+    },
+    homeContext: {},
+    homeTeam: {
+      abbreviation: 'BOS',
+      name: 'Boston Bruins',
+      teamId: 'BOS',
+    },
+  })
+  const presentation = getTeamGameContextPresentation(context.awayContext)
+
+  assert.deepEqual(
+    presentation.detectedFacts.map((fact) => fact.label),
+    ['3 Games in 4 Days', 'Back-to-Back', '4 Games in 6 Days'],
+  )
+  assert.equal(presentation.detectedFacts[2].note, 'informational')
+  assert.deepEqual(
+    presentation.appliedAdjustments.map((item) => item.label),
+    ['Back-to-Back'],
+  )
+  assert.equal(presentation.preview.totalGameContextAdjustment, -0.75)
+})
+
+test('disabled Well Rested and zero Quick Rematch never become applied rows', () => {
+  const presentation = getTeamGameContextPresentation({
+    adjustmentBreakdown: [],
+    conditions: ['well_rested', '4_games_in_6_days'],
+    quickRematch: {
+      eligible: false,
+    },
+    restFatigueCondition: 'well_rested',
+  })
+
+  assert.deepEqual(
+    presentation.detectedFacts.map(({ label, note }) => ({ label, note })),
+    [
+      { label: 'Well Rested', note: 'adjustment disabled' },
+      { label: '4 Games in 6 Days', note: 'informational' },
+    ],
+  )
+  assert.deepEqual(presentation.appliedAdjustments, [])
+  assert.equal(presentation.preview.totalGameContextAdjustment, 0)
+})
+
+test('Quick Rematch renders only when eligible or effectively applied', () => {
+  const appliedPresentation = getTeamGameContextPresentation({
+    adjustmentBreakdown: [
+      {
+        adjustment: 0.25,
+        category: 'quickRematch',
+        condition: 'quick_rematch',
+      },
+    ],
+    quickRematch: {
+      eligible: true,
+    },
+  })
+  const neutralPresentation = getTeamGameContextPresentation({
+    adjustmentBreakdown: [],
+    quickRematch: {
+      eligible: false,
+    },
+  })
+
+  assert.equal(
+    appliedPresentation.detectedFacts.some(
+      (fact) => fact.label === 'Quick Rematch eligible',
+    ),
+    true,
+  )
+  assert.equal(appliedPresentation.appliedAdjustments[0].label, 'Quick Rematch')
+  assert.deepEqual(neutralPresentation.detectedFacts, [])
+  assert.deepEqual(neutralPresentation.appliedAdjustments, [])
+})
+
+test('manual override preview updates totals and disabling restores automatic values', () => {
+  const normalizedContext = normalizeGameContext(gameContext)
+  const automaticContext = normalizedContext.awayContext
+  const enabledDraft = {
+    manualQuickRematchAdjustment: 0.25,
+    manualRestFatigueAdjustment: -1,
+    quickRematchOverrideEnabled: false,
+    restFatigueOverrideEnabled: true,
+  }
+  const disabledDraft = {
+    ...enabledDraft,
+    restFatigueOverrideEnabled: false,
+  }
+  const enabledPreview = getTeamGameContextAdjustmentPreview(
+    automaticContext,
+    enabledDraft,
+  )
+  const disabledPreview = getTeamGameContextAdjustmentPreview(
+    automaticContext,
+    disabledDraft,
+  )
+  const previewInputs = applyGameContextDraftToInputs(
+    {
+      away: {},
+      home: {},
+    },
+    normalizedContext,
+    {
+      awayContext: enabledDraft,
+      homeContext: {},
+    },
+  )
+  const presentation = getTeamGameContextPresentation(
+    automaticContext,
+    enabledDraft,
+  )
+
+  assert.equal(enabledPreview.effectiveRestFatigueAdjustment, -1)
+  assert.equal(enabledPreview.totalGameContextAdjustment, -0.75)
+  assert.equal(disabledPreview.effectiveRestFatigueAdjustment, -1.25)
+  assert.equal(disabledPreview.totalGameContextAdjustment, -1)
+  assert.equal(previewInputs.away.restFatigue, -1)
+  assert.equal(previewInputs.away.quickRematchAdjustment, 0.25)
+  assert.equal(presentation.hasActiveOverride, true)
+  assert.equal(
+    presentation.appliedAdjustments[0].label,
+    'Manual Rest/Fatigue override',
+  )
+  assert.equal(
+    getCompactGameContextAdjustmentLabel(automaticContext),
+    'B2B + Travel + Quick Rematch',
+  )
 })

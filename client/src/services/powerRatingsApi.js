@@ -1,6 +1,8 @@
 import { apiRequest } from './apiClient.js'
 import {
+  buildAutomaticPowerRatingUpdateRequestBody,
   buildPowerRatingUpdateRequestBody,
+  normalizeAutomaticPowerRatingUpdateResult,
   normalizePowerRatingUpdateResult,
 } from '../utils/powerRatingUpdates.js'
 import {
@@ -14,6 +16,8 @@ const requestPowerRatings = async (path, options = {}) => {
     fallbackMessage: 'Unable to load power ratings.',
   })
 }
+
+let automaticPowerRatingUpdateRequest = null
 
 export const fetchPowerRatings = async () => {
   const data = await requestPowerRatings('/api/power-ratings')
@@ -45,6 +49,28 @@ export const updatePowerRatings = async (range) => {
   })
 
   return normalizePowerRatingUpdateResult(data)
+}
+
+export const autoUpdatePowerRatings = async (options = {}) => {
+  if (automaticPowerRatingUpdateRequest) {
+    return automaticPowerRatingUpdateRequest
+  }
+
+  automaticPowerRatingUpdateRequest = requestPowerRatings(
+    '/api/power-ratings/auto-update',
+    {
+      body: JSON.stringify(
+        buildAutomaticPowerRatingUpdateRequestBody(options),
+      ),
+      method: 'POST',
+    },
+  )
+    .then(normalizeAutomaticPowerRatingUpdateResult)
+    .finally(() => {
+      automaticPowerRatingUpdateRequest = null
+    })
+
+  return automaticPowerRatingUpdateRequest
 }
 
 export const getPowerRatingHistory = async (params = {}) => {

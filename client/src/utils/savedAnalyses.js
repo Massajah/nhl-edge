@@ -353,6 +353,7 @@ export const createBetPayloadFromGameAnalysis = ({
   gameContextSnapshot = null,
   inputs,
   kellyRecommendation = null,
+  marketOddsMetadata = null,
   notes = '',
   result,
   scheduledStart = null,
@@ -379,6 +380,13 @@ export const createBetPayloadFromGameAnalysis = ({
   const modelStatus = getModelStatus(expectedValue)
   const selectedAdjustmentSnapshot =
     createSelectedAdjustmentSnapshot(selectedInputs)
+  const selectedOddsMetadata = marketOddsMetadata?.[selectedMarket] ?? null
+  const marketOddsSource = ['manual_override', 'provider'].includes(
+    selectedOddsMetadata?.source,
+  )
+    ? selectedOddsMetadata.source
+    : 'manual'
+  const isProviderOdds = marketOddsSource === 'provider'
 
   return {
     gameId,
@@ -394,6 +402,26 @@ export const createBetPayloadFromGameAnalysis = ({
     modelProbability: savedAnalysis[`${selectedMarket}WinProbability`],
     fairOdds: savedAnalysis[`${selectedMarket}FairOdds`],
     marketOdds,
+    marketOddsSource,
+    providerName: isProviderOdds
+      ? toText(selectedOddsMetadata.providerName, 'The Odds API')
+      : null,
+    providerEventId: isProviderOdds
+      ? toText(selectedOddsMetadata.providerEventId, '') || null
+      : null,
+    bookmakerKey: isProviderOdds
+      ? toText(selectedOddsMetadata.bookmakerKey, '') || null
+      : null,
+    bookmakerTitle: isProviderOdds
+      ? toText(selectedOddsMetadata.bookmakerTitle, '') || null
+      : null,
+    providerFetchedAt: isProviderOdds
+      ? selectedOddsMetadata.providerFetchedAt ?? null
+      : null,
+    bookmakerLastUpdate: isProviderOdds
+      ? selectedOddsMetadata.bookmakerLastUpdate ?? null
+      : null,
+    offeredOdds: marketOdds,
     impliedMarketProbability: calculateImpliedProbability(marketOdds),
     probabilityEdge: savedAnalysis[`${selectedMarket}Edge`],
     expectedValue,
@@ -687,6 +715,18 @@ export const normalizeBet = (bet = {}) => {
     modelProbability: toNullableNumber(bet.modelProbability),
     fairOdds: toNullableOdds(bet.fairOdds),
     marketOdds,
+    marketOddsSource: ['manual', 'manual_override', 'provider'].includes(
+      bet.marketOddsSource,
+    )
+      ? bet.marketOddsSource
+      : 'manual',
+    providerName: toText(bet.providerName, '') || null,
+    providerEventId: toText(bet.providerEventId, '') || null,
+    bookmakerKey: toText(bet.bookmakerKey, '') || null,
+    bookmakerTitle: toText(bet.bookmakerTitle, '') || null,
+    providerFetchedAt: bet.providerFetchedAt ?? null,
+    bookmakerLastUpdate: bet.bookmakerLastUpdate ?? null,
+    offeredOdds: toNullableOdds(bet.offeredOdds) ?? marketOdds,
     impliedMarketProbability:
       toNullableNumber(bet.impliedMarketProbability) ??
       calculateImpliedProbability(marketOdds),

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Activity,
   ClipboardList,
@@ -23,6 +23,7 @@ import { useAuth } from "./context/AuthContext.jsx";
 import { NHL_TEAMS } from "./data/teams.js";
 import { fetchTeamInjurySummary } from "./services/injuriesApi.js";
 import {
+  autoUpdatePowerRatings,
   fetchPowerRatings,
   seedPowerRatings,
   updatePowerRating,
@@ -42,6 +43,7 @@ import {
   normalizePowerRatings,
 } from "./utils/powerRatings.js";
 import { normalizeInjurySummary } from "./utils/injuries.js";
+import { createLatestRequestTracker } from "./utils/requestTracker.js";
 import "./App.css";
 
 const pages = [
@@ -143,7 +145,7 @@ function AuthenticatedApp({ authUser, onLogout }) {
   const [powerRatingsStatus, setPowerRatingsStatus] = useState("loading");
   const [powerRatingsError, setPowerRatingsError] = useState("");
   const [powerRatingsCount, setPowerRatingsCount] = useState(0);
-  const [powerRatingsVersion, setPowerRatingsVersion] = useState(0);
+  const [, setPowerRatingsVersion] = useState(0);
   const [migrationAvailable, setMigrationAvailable] = useState(false);
   const [migrationStatus, setMigrationStatus] = useState("idle");
   const [migrationMessage, setMigrationMessage] = useState("");
@@ -152,7 +154,7 @@ function AuthenticatedApp({ authUser, onLogout }) {
   );
   const [injurySummaryStatus, setInjurySummaryStatus] = useState("loading");
   const [injurySummaryError, setInjurySummaryError] = useState("");
-  const [injurySummaryVersion, setInjurySummaryVersion] = useState(0);
+  const [, setInjurySummaryVersion] = useState(0);
   const [ratingEngineSettings, setRatingEngineSettings] = useState(() =>
     normalizeRatingEngineSettings(DEFAULT_RATING_ENGINE_SETTINGS),
   );
@@ -160,8 +162,11 @@ function AuthenticatedApp({ authUser, onLogout }) {
     useState("loading");
   const [ratingEngineSettingsError, setRatingEngineSettingsError] =
     useState("");
-  const [ratingEngineSettingsVersion, setRatingEngineSettingsVersion] =
+  const [, setRatingEngineSettingsVersion] =
     useState(0);
+  const [powerRatingsUpdatePanelRequest, setPowerRatingsUpdatePanelRequest] =
+    useState(0);
+  const powerRatingsRequestTrackerRef = useRef(createLatestRequestTracker());
 
   const allPages = [...pages, ...utilityPages];
   const currentPage =
@@ -284,6 +289,8 @@ function AuthenticatedApp({ authUser, onLogout }) {
 
   const loadMongoPowerRatings = useCallback(
     async ({ seedIfMissing = false } = {}) => {
+      const request = powerRatingsRequestTrackerRef.current.start();
+
       setPowerRatingsStatus("loading");
       setPowerRatingsError("");
 
@@ -295,12 +302,22 @@ function AuthenticatedApp({ authUser, onLogout }) {
           ratingDocuments = seedResult.ratings ?? (await fetchPowerRatings());
         }
 
+        if (!request.isLatest()) {
+          return null;
+        }
+
         applyPowerRatingDocuments(ratingDocuments);
         setPowerRatingsStatus(ratingDocuments.length > 0 ? "success" : "empty");
+        return normalizePowerRatings(ratingDocuments);
       } catch (error) {
+        if (!request.isLatest()) {
+          return null;
+        }
+
         setPowerRatingsStatus("error");
         setPowerRatingsError(error.message);
         setMigrationAvailable(false);
+        return null;
       }
     },
     [applyPowerRatingDocuments],
@@ -314,6 +331,8 @@ function AuthenticatedApp({ authUser, onLogout }) {
     let isCurrent = true;
 
     const loadInitialPowerRatings = async () => {
+      const request = powerRatingsRequestTrackerRef.current.start();
+
       try {
         let ratingDocuments = await fetchPowerRatings();
 
@@ -322,14 +341,14 @@ function AuthenticatedApp({ authUser, onLogout }) {
           ratingDocuments = seedResult.ratings ?? (await fetchPowerRatings());
         }
 
-        if (!isCurrent) {
+        if (!isCurrent || !request.isLatest()) {
           return;
         }
 
         applyPowerRatingDocuments(ratingDocuments);
         setPowerRatingsStatus(ratingDocuments.length > 0 ? "success" : "empty");
       } catch (error) {
-        if (!isCurrent) {
+        if (!isCurrent || !request.isLatest()) {
           return;
         }
 
@@ -472,14 +491,24 @@ function AuthenticatedApp({ authUser, onLogout }) {
       const result = await updatePowerRatings(range);
 
       if (result.gamesProcessed > 0) {
+        const request = powerRatingsRequestTrackerRef.current.start();
+
         try {
           const ratingDocuments = await fetchPowerRatings();
+
+          if (!request.isLatest()) {
+            return result;
+          }
 
           applyPowerRatingDocuments(ratingDocuments);
           setPowerRatingsStatus(
             ratingDocuments.length > 0 ? "success" : "empty",
           );
         } catch (error) {
+          if (!request.isLatest()) {
+            return result;
+          }
+
           return {
             ...result,
             refreshError: error.message,
@@ -491,6 +520,43 @@ function AuthenticatedApp({ authUser, onLogout }) {
     },
     [applyPowerRatingDocuments],
   );
+
+  const handleAutomaticPowerRatingUpdate = useCallback(async () => {
+    const result = await autoUpdatePowerRatings();
+
+    if (result.gamesProcessed > 0) {
+      const request = powerRatingsRequestTrackerRef.current.start();
+
+      try {
+        const ratingDocuments = await fetchPowerRatings();
+
+        if (!request.isLatest()) {
+          return result;
+        }
+
+        applyPowerRatingDocuments(ratingDocuments);
+        setPowerRatingsStatus(
+          ratingDocuments.length > 0 ? "success" : "empty",
+        );
+      } catch (error) {
+        if (!request.isLatest()) {
+          return result;
+        }
+
+        return {
+          ...result,
+          refreshError: error.message,
+        };
+      }
+    }
+
+    return result;
+  }, [applyPowerRatingDocuments]);
+
+  const handleOpenManualPowerRatingUpdate = useCallback(() => {
+    setPowerRatingsUpdatePanelRequest((currentRequest) => currentRequest + 1);
+    navigateToPage("ratings");
+  }, [navigateToPage]);
 
   const handleImportLocalRatings = useCallback(async () => {
     const confirmed =
@@ -590,8 +656,10 @@ function AuthenticatedApp({ authUser, onLogout }) {
           injurySummaries={injurySummaries}
           injurySummaryError={injurySummaryError}
           injurySummaryStatus={injurySummaryStatus}
+          onAutoUpdatePowerRatings={handleAutomaticPowerRatingUpdate}
           onAnalyzeGame={handleAnalyzeGame}
           onNavigate={navigateToPage}
+          onOpenManualPowerRatingUpdate={handleOpenManualPowerRatingUpdate}
           onRetryInjuries={retryInjurySummaries}
           onRetryPowerRatings={retryPowerRatings}
           onRetryRatingEngineSettings={retryRatingEngineSettings}
@@ -603,7 +671,7 @@ function AuthenticatedApp({ authUser, onLogout }) {
         />
       ) : activePage === "analyzer" ? (
         <GameAnalyzer
-          key={`${analyzerPrefill?.id ?? "manual-analyzer"}-${powerRatingsStatus}-${powerRatingsVersion}-${injurySummaryStatus}-${injurySummaryVersion}-${ratingEngineSettingsStatus}-${ratingEngineSettingsVersion}`}
+          key={analyzerPrefill?.id ?? "manual-analyzer"}
           baseHomeAdvantage={ratingEngineSettings.homeAdvantage}
           injurySummaries={injurySummaries}
           injurySummaryError={injurySummaryError}
@@ -641,6 +709,7 @@ function AuthenticatedApp({ authUser, onLogout }) {
           onReset={handleResetPowerRatings}
           onSave={handleSavePowerRatings}
           onUpdatePowerRatings={handleUpdatePowerRatings}
+          openUpdatePanelRequest={powerRatingsUpdatePanelRequest}
         />
       ) : activePage === "rating-lab" ? (
         <RatingLab />

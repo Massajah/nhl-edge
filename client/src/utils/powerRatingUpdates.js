@@ -9,6 +9,13 @@ const DAY_MS = 24 * 60 * 60 * 1000
 export const POWER_RATING_UPDATE_RANGE_DAYS = 7
 export const MAX_POWER_RATING_UPDATE_RANGE_DAYS = 31
 export const PROCESSED_GAMES_PREVIEW_LIMIT = 8
+export const AUTOMATIC_POWER_RATING_UPDATE_STATUSES = Object.freeze({
+  PARTIAL: 'partial',
+  REQUIRES_INITIALIZATION: 'requires_initialization',
+  UNAVAILABLE: 'unavailable',
+  UPDATED: 'updated',
+  UP_TO_DATE: 'up_to_date',
+})
 
 const isPlainObject = (value) =>
   value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -178,6 +185,22 @@ export const buildPowerRatingUpdateRequestBody = (range = {}) => {
   }
 }
 
+export const buildAutomaticPowerRatingUpdateRequestBody = ({
+  throughDate,
+} = {}) => {
+  if (throughDate === undefined || throughDate === null || throughDate === '') {
+    return {}
+  }
+
+  if (typeof throughDate !== 'string' || !DATE_PATTERN.test(throughDate)) {
+    throw new Error('throughDate must use YYYY-MM-DD.')
+  }
+
+  return {
+    throughDate,
+  }
+}
+
 const normalizePowerRatingUpdateError = (error = {}) => ({
   code: typeof error.code === 'string' ? error.code : '',
   gameId:
@@ -214,6 +237,61 @@ const normalizeProcessedGame = (game = {}) => ({
   homeRatingChange: toOptionalNumber(game.homeRatingChange),
 })
 
+const normalizeEngineSettingsSnapshot = (settings = {}) => {
+  if (!isPlainObject(settings)) {
+    return null
+  }
+
+  return {
+    homeAdvantage: toOptionalNumber(settings.homeAdvantage),
+    kFactor: toOptionalNumber(settings.kFactor),
+    modelVersion:
+      typeof settings.modelVersion === 'string' ? settings.modelVersion : '',
+    overtimeMultiplier: toOptionalNumber(settings.overtimeMultiplier),
+    regulationMultiplier: toOptionalNumber(settings.regulationMultiplier),
+    shootoutMultiplier: toOptionalNumber(settings.shootoutMultiplier),
+  }
+}
+
+const normalizeLatestProcessedGame = (game = {}) => {
+  if (!isPlainObject(game)) {
+    return null
+  }
+
+  return {
+    awayScore: toOptionalNumber(game.awayScore),
+    awayTeam: normalizeTeamAbbreviation(
+      game.awayTeam ?? game.awayTeamAbbreviation,
+    ),
+    gameDate: normalizeDateString(game.gameDate),
+    gameId:
+      game.gameId === null || game.gameId === undefined
+        ? null
+        : String(game.gameId),
+    homeScore: toOptionalNumber(game.homeScore),
+    homeTeam: normalizeTeamAbbreviation(
+      game.homeTeam ?? game.homeTeamAbbreviation,
+    ),
+    processedAt:
+      typeof game.processedAt === 'string' && game.processedAt.trim()
+        ? game.processedAt.trim()
+        : '',
+    result: typeof game.result === 'string' ? game.result : '',
+    resultType: typeof game.resultType === 'string' ? game.resultType : '',
+    settingsSnapshot: normalizeEngineSettingsSnapshot(
+      game.settingsSnapshot ?? game.engineSettingsSnapshot,
+    ),
+  }
+}
+
+const normalizeAutomaticPowerRatingDateRange = (dateRange) =>
+  isPlainObject(dateRange)
+    ? {
+        from: normalizeDateString(dateRange.from),
+        to: normalizeDateString(dateRange.to),
+      }
+    : null
+
 export const normalizePowerRatingUpdateResult = (data = {}) => {
   if (!isPlainObject(data)) {
     throw new Error('Power Rating update response was malformed.')
@@ -248,6 +326,47 @@ export const normalizePowerRatingUpdateResult = (data = {}) => {
     gamesSkipped: toSummaryCount(data.gamesSkipped, 'gamesSkipped'),
     errors: data.errors.map(normalizePowerRatingUpdateError),
     processedGames: data.processedGames.map(normalizeProcessedGame),
+  }
+}
+
+export const normalizeAutomaticPowerRatingUpdateResult = (data = {}) => {
+  if (!isPlainObject(data)) {
+    throw new Error('Automatic Power Rating update response was malformed.')
+  }
+
+  const statuses = Object.values(AUTOMATIC_POWER_RATING_UPDATE_STATUSES)
+
+  if (!statuses.includes(data.status)) {
+    throw new Error('Automatic Power Rating update response was malformed.')
+  }
+
+  if (!Array.isArray(data.errors) || !Array.isArray(data.processedGames)) {
+    throw new Error('Automatic Power Rating update response was malformed.')
+  }
+
+  return {
+    dateRange: normalizeAutomaticPowerRatingDateRange(data.dateRange),
+    errors: data.errors.map(normalizePowerRatingUpdateError),
+    gamesAlreadyProcessed: toSummaryCount(
+      data.gamesAlreadyProcessed,
+      'gamesAlreadyProcessed',
+    ),
+    gamesFound: toSummaryCount(data.gamesFound, 'gamesFound'),
+    gamesProcessed: toSummaryCount(data.gamesProcessed, 'gamesProcessed'),
+    gamesSkipped: toSummaryCount(data.gamesSkipped, 'gamesSkipped'),
+    latestProcessedGame: normalizeLatestProcessedGame(
+      data.latestProcessedGame,
+    ),
+    message:
+      typeof data.message === 'string' && data.message.trim()
+        ? data.message.trim()
+        : '',
+    processedGames: data.processedGames.map(normalizeProcessedGame),
+    ratingSettingsUsed: normalizeEngineSettingsSnapshot(
+      data.ratingSettingsUsed,
+    ),
+    status: data.status,
+    success: Boolean(data.success),
   }
 }
 

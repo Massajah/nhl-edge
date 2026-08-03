@@ -17,6 +17,16 @@ Required environment variables:
 - `GOOGLE_CLIENT_ID`
 - `CLIENT_ORIGIN`, comma-separated for multiple frontend origins
 
+Market odds use one additional server-only secret:
+
+```dotenv
+THE_ODDS_API_KEY=
+```
+
+Copy `server/.env.example` for the optional safe defaults. Never put the key in
+a `VITE_` variable or client environment file; the React application only calls
+the authenticated NHL Edge endpoint.
+
 `CLIENT_URL` is still accepted as a fallback for the previous local setup, but
 new environments should use `CLIENT_ORIGIN`.
 
@@ -34,6 +44,71 @@ Protected user-specific routes:
 - `POST /api/power-ratings/update`
 - `/api/settings/betting`
 - `/api/settings/rating-engine`
+- `GET /api/settings/bookmakers`
+- `PUT /api/settings/bookmakers`
+- `GET /api/market-odds/nhl?date=YYYY-MM-DD&refresh=true|false`
+- `GET /api/market-odds/status`
+
+## Market Odds Phase 1
+
+The authenticated market-odds endpoint uses The Odds API v4 for current NHL
+moneyline (`h2h`) prices in the EU region, returned as decimal odds. One
+provider request covers a buffered selected-date window and is matched to the
+NHL schedule by canonical home/away team identity plus a three-hour commence
+time tolerance. Home and away order is never reversed silently.
+
+Normalized matched events preserve each complete bookmaker row and select the
+highest valid decimal price independently for the home and away sides. Prices
+are not averaged, de-vigged, or treated as consensus probabilities. Started or
+final games do not receive a current pre-match snapshot.
+
+Public provider data is cached in server memory for 10 minutes by sport,
+region, market, odds format, and commence-time window. Identical in-flight
+requests share one Promise across users. A forced Dashboard refresh is limited
+to one provider attempt per identical window every 30 seconds, and valid cache
+data is preferred when credits are low or the provider rate-limits a request.
+The server tracks only the safe `used`, `remaining`, `lastCost`, and
+`observedAt` quota fields. Missing configuration, timeouts, malformed responses,
+rate limits, and exhausted quota return structured states without breaking the
+schedule or manual-odds workflow. A valid cached snapshot remains usable after
+quota exhaustion.
+
+The following optional variables override defaults:
+
+```dotenv
+THE_ODDS_API_BASE_URL=https://api.the-odds-api.com
+THE_ODDS_API_SPORT=icehockey_nhl
+THE_ODDS_API_REGION=eu
+THE_ODDS_API_MARKET=h2h
+THE_ODDS_API_ODDS_FORMAT=decimal
+MARKET_ODDS_CACHE_TTL_MS=600000
+MARKET_ODDS_LOW_CREDIT_THRESHOLD=25
+MARKET_ODDS_MIN_REFRESH_INTERVAL_MS=30000
+```
+
+Development request/cache/credit summaries are emitted only when
+`NHL_EDGE_API_DEBUG=true`; request URLs and API keys are never logged.
+
+## Market Odds Phase 2A
+
+Bookmaker preferences are stored per authenticated user. The settings API
+returns the bookmaker keys and display names observed in the latest provider
+response, with every bookmaker enabled by default. New bookmakers are also
+enabled by default. The update endpoint accepts only `enabledBookmakerKeys`;
+it never accepts a client-supplied `userId`. If a user attempts to disable
+every available bookmaker, the server restores all bookmakers and returns a
+warning.
+
+Preferences are applied after the shared provider response is read from cache,
+so changing them does not make another provider request or create a per-user
+provider cache. Best home and away prices are recalculated independently from
+enabled bookmakers only. The authenticated market-odds response also preserves
+every normalized bookmaker row for transparent display and marks disabled rows
+without allowing them to influence EV, Kelly, or saved snapshots.
+
+Phase 2A intentionally has no market consensus, de-vig, historical/opening
+odds, line movement, live updates, spreads, totals, props, polling, WebSockets,
+or automatic bet placement.
 
 Public NHL data routes:
 
@@ -47,10 +122,10 @@ Public NHL data routes:
 - `/api/teams/:teamAbbreviation/stats`
 - `/api/players/:playerId/goalie-stats`
 
-## Manual Power Rating Updates
+## Power Rating Updates
 
 Authenticated users can apply completed NHL regular-season games to their
-persisted current Power Ratings with:
+persisted current Power Ratings manually with:
 
 ```bash
 curl -X POST http://localhost:5000/api/power-ratings/update \
@@ -76,6 +151,36 @@ rating update service.
 
 Production update engine settings are centralized in
 `services/ratingEngineSettingsService.js`.
+
+Dashboard can also ask the server to process newly completed games with:
+
+```bash
+curl -X POST http://localhost:5000/api/power-ratings/auto-update \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{}'
+```
+
+The automatic endpoint accepts an optional `throughDate` in `YYYY-MM-DD`
+format. It does not accept `userId`; all ratings, settings, and audit records
+are scoped from the authenticated token. When the user already has
+`ProcessedRatingGame` history, the service finds the latest processed game
+date, backs up by a small overlap, and calls the same chronological update
+workflow used by the manual endpoint. Already processed games are skipped by
+the existing `userId + gameId` uniqueness rule.
+
+If the user has no processed-game audit baseline, automatic updates return
+`status: "requires_initialization"` instead of replaying an arbitrary season on
+Dashboard load. The user should run the existing manual update/replay workflow
+to choose an initial processing point. Full-season recalculation, cron jobs,
+background workers, polling, and automatic replay after setting changes are
+intentionally deferred.
+
+Automatic responses include `status` (`updated`, `up_to_date`, `partial`,
+`requires_initialization`, or `unavailable`), counts, per-game errors, the
+latest processed game when known, and the Rating Engine settings snapshot used
+for newly processed games. Concurrent automatic requests share a user-scoped
+in-flight update lock; one user's update does not block another user's update.
 
 ## Power Rating Update History
 
@@ -126,9 +231,10 @@ queries always scope by the authenticated `userId`; clients cannot request or
 override another user's audit records. Results sort by newest `processedAt`,
 then newest `gameDate`, then newest `gameId`.
 
-History records are audit snapshots. Changing current Power Rating Engine
-settings affects only future manual updates and does not rewrite prior
-`ProcessedRatingGame` records. Older audit records may not contain every
+History records are audit snapshots. Changes affect future rating updates only.
+Previously processed games are not recalculated, and changing current Power
+Rating Engine settings does not rewrite prior `ProcessedRatingGame` records.
+Older audit records may not contain every
 current field; unavailable legacy values are returned as `null` and records are
 not automatically migrated.
 
@@ -278,10 +384,11 @@ probability estimates they use, and model probabilities may be uncertain.
 
 ## Rating Engine Settings
 
-Power Rating Engine settings are user-specific and control future live rating
-updates only. Changing them does not recalculate already processed games, does
-not alter existing `ProcessedRatingGame` snapshots, and does not change Rating
-Lab replay defaults or simulation behavior.
+Power Rating Engine settings are user-specific. Changes affect future rating
+updates only. Previously processed games are not recalculated. Changing settings
+does not alter existing
+`ProcessedRatingGame` snapshots, Rating History, saved bets, historical
+analyses, or Rating Lab replay defaults and simulation behavior.
 
 `homeAdvantage` in these settings is the global Base Home Advantage. Team Power
 Ratings expose `homeAdjustment`, a team-specific adjustment that defaults to

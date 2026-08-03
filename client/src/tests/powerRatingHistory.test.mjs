@@ -194,6 +194,8 @@ test('getPowerRatingHistorySeasons uses centralized authenticated request', asyn
 
     assert.equal(result.currentSeasonId, '20262027')
     assert.equal(result.seasons[0].label, '2026\u201327')
+    assert.equal(result.seasons[1].endDate, '2026-04-16')
+    assert.equal(result.seasons[1].historyFilterEndDate, '2026-04-17')
   } finally {
     apiClient.clearAuthToken()
     globalThis.fetch = originalFetch
@@ -220,11 +222,11 @@ test('current season is the default history filter when metadata is available', 
 
   assert.equal(defaultFilters.season, '20262027')
   assert.equal(dateFields.from, '2026-10-01')
-  assert.equal(dateFields.to, '2027-04-30')
+  assert.equal(dateFields.to, '2027-05-01')
   assert.equal(dateFields.disabled, true)
 })
 
-test('selecting a named season sets dates and disables date inputs', () => {
+test('selecting a named season preserves its official end and buffers Date To', () => {
   const metadata =
     historyUtils.normalizePowerRatingHistorySeasonsResponse(seasonResponse)
   const filters = historyUtils.applyPowerRatingHistorySeasonSelection(
@@ -244,8 +246,79 @@ test('selecting a named season sets dates and disables date inputs', () => {
   assert.equal(filters.team, 'CAR')
   assert.equal(filters.resultType, 'OVERTIME')
   assert.equal(dateFields.from, '2025-10-07')
-  assert.equal(dateFields.to, '2026-04-16')
+  assert.equal(dateFields.to, '2026-04-17')
   assert.equal(dateFields.disabled, true)
+  assert.equal(dateFields.selectedSeason.endDate, '2026-04-16')
+  assert.equal(
+    dateFields.selectedSeason.historyFilterEndDate,
+    '2026-04-17',
+  )
+})
+
+test('season preset includes the buffered local date and excludes later dates', () => {
+  const metadata =
+    historyUtils.normalizePowerRatingHistorySeasonsResponse(seasonResponse)
+  const resolvedFilters = historyUtils.resolvePowerRatingHistoryFilters(
+    { season: '20252026' },
+    metadata,
+  )
+  const auditRecords = [
+    { gameDate: '2026-04-16', id: 'official-final-date' },
+    { gameDate: '2026-04-17', id: 'local-buffered-date' },
+    { gameDate: '2026-04-18', id: 'after-buffer' },
+  ]
+  const includedIds = auditRecords
+    .filter(
+      (record) =>
+        record.gameDate >= resolvedFilters.from &&
+        record.gameDate <= resolvedFilters.to,
+    )
+    .map((record) => record.id)
+
+  assert.deepEqual(includedIds, [
+    'official-final-date',
+    'local-buffered-date',
+  ])
+})
+
+test('season switching updates both preset dates', () => {
+  const metadata =
+    historyUtils.normalizePowerRatingHistorySeasonsResponse(seasonResponse)
+  const previousSeasonFilters =
+    historyUtils.applyPowerRatingHistorySeasonSelection(
+      {},
+      '20252026',
+      metadata,
+    )
+  const currentSeasonFilters =
+    historyUtils.applyPowerRatingHistorySeasonSelection(
+      previousSeasonFilters,
+      '20262027',
+      metadata,
+    )
+
+  assert.equal(previousSeasonFilters.from, '2025-10-07')
+  assert.equal(previousSeasonFilters.to, '2026-04-17')
+  assert.equal(currentSeasonFilters.from, '2026-10-01')
+  assert.equal(currentSeasonFilters.to, '2027-05-01')
+})
+
+test('history end-date buffer uses calendar arithmetic across DST', () => {
+  assert.equal(
+    historyUtils.getPowerRatingHistoryFilterEndDate('2026-10-25'),
+    '2026-10-26',
+  )
+})
+
+test('season normalization applies the buffer once', () => {
+  const normalizedOnce =
+    historyUtils.normalizePowerRatingHistorySeasonsResponse(seasonResponse)
+  const normalizedTwice =
+    historyUtils.normalizePowerRatingHistorySeasonsResponse(normalizedOnce)
+
+  assert.equal(normalizedOnce.seasons[1].endDate, '2026-04-16')
+  assert.equal(normalizedOnce.seasons[1].historyFilterEndDate, '2026-04-17')
+  assert.deepEqual(normalizedTwice, normalizedOnce)
 })
 
 test('custom date range enables date inputs and all seasons clears dates', () => {
@@ -271,6 +344,24 @@ test('custom date range enables date inputs and all seasons clears dates', () =>
     historyUtils.getPowerRatingHistoryDateFields(customFilters, metadata)
       .disabled,
     false,
+  )
+  assert.equal(customFilters.from, '2025-10-07')
+  assert.equal(customFilters.to, '2026-04-17')
+
+  const editedCustomFilters = {
+    ...customFilters,
+    from: '2026-02-01',
+    to: '2026-03-31',
+  }
+
+  assert.deepEqual(
+    historyUtils.resolvePowerRatingHistoryFilters(editedCustomFilters, metadata),
+    {
+      from: '2026-02-01',
+      resultType: '',
+      team: '',
+      to: '2026-03-31',
+    },
   )
   assert.deepEqual(
     historyUtils.resolvePowerRatingHistoryFilters(allFilters, metadata),
@@ -299,7 +390,7 @@ test('season-derived query strings preserve season dates during pagination', () 
 
   assert.equal(
     queryString,
-    '?page=3&limit=25&from=2025-10-07&to=2026-04-16&team=BOS&resultType=REGULATION',
+    '?page=3&limit=25&from=2025-10-07&to=2026-04-17&team=BOS&resultType=REGULATION',
   )
 })
 
@@ -338,6 +429,15 @@ test('clear filters can reset back to the current season', () => {
     team: '',
     to: '',
   })
+  assert.deepEqual(
+    historyUtils.getPowerRatingHistoryDateFields(clearedFilters, metadata),
+    {
+      disabled: true,
+      from: '2026-10-01',
+      selectedSeason: metadata.seasons[0],
+      to: '2027-05-01',
+    },
+  )
 })
 
 test('history formatting uses two decimals, signs, and safe fallbacks', () => {

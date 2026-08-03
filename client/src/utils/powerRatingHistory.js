@@ -40,6 +40,38 @@ const normalizeOptionalDate = (value) =>
     ? value.trim()
     : ''
 
+export const getPowerRatingHistoryFilterEndDate = (officialEndDate) => {
+  const normalizedEndDate = normalizeOptionalDate(officialEndDate)
+
+  if (!normalizedEndDate) {
+    return ''
+  }
+
+  const [year, month, day] = normalizedEndDate.split('-').map(Number)
+  const bufferedEndDate = new Date(Date.UTC(year, month - 1, day))
+
+  if (
+    bufferedEndDate.getUTCFullYear() !== year ||
+    bufferedEndDate.getUTCMonth() !== month - 1 ||
+    bufferedEndDate.getUTCDate() !== day
+  ) {
+    return ''
+  }
+
+  // Late games on the official NHL final schedule date can appear on the
+  // following date in the user's local timezone.
+  bufferedEndDate.setUTCDate(bufferedEndDate.getUTCDate() + 1)
+
+  const bufferedYear = bufferedEndDate.getUTCFullYear()
+  const bufferedMonth = String(bufferedEndDate.getUTCMonth() + 1).padStart(
+    2,
+    '0',
+  )
+  const bufferedDay = String(bufferedEndDate.getUTCDate()).padStart(2, '0')
+
+  return `${bufferedYear}-${bufferedMonth}-${bufferedDay}`
+}
+
 const hasValue = (value) =>
   value !== null && value !== undefined && String(value).trim() !== ''
 
@@ -173,16 +205,21 @@ const normalizeHistorySummary = (summary = {}) => ({
   totalRatingMovement: toOptionalNumber(summary.totalRatingMovement),
 })
 
-const normalizeHistorySeason = (season = {}) => ({
-  endDate: normalizeOptionalDate(season.endDate),
-  id:
-    season.id === null || season.id === undefined || season.id === ''
-      ? ''
-      : String(season.id),
-  isCurrent: Boolean(season.isCurrent),
-  label: typeof season.label === 'string' ? season.label : '',
-  startDate: normalizeOptionalDate(season.startDate),
-})
+const normalizeHistorySeason = (season = {}) => {
+  const endDate = normalizeOptionalDate(season.endDate)
+
+  return {
+    endDate,
+    historyFilterEndDate: getPowerRatingHistoryFilterEndDate(endDate),
+    id:
+      season.id === null || season.id === undefined || season.id === ''
+        ? ''
+        : String(season.id),
+    isCurrent: Boolean(season.isCurrent),
+    label: typeof season.label === 'string' ? season.label : '',
+    startDate: normalizeOptionalDate(season.startDate),
+  }
+}
 
 export const normalizePowerRatingHistorySeasonsResponse = (data = {}) => {
   if (!isPlainObject(data) || !Array.isArray(data.seasons)) {
@@ -249,7 +286,7 @@ export const getPowerRatingHistoryDateFields = (
       disabled: true,
       from: selectedSeason.startDate,
       selectedSeason,
-      to: selectedSeason.endDate,
+      to: selectedSeason.historyFilterEndDate,
     }
   }
 
@@ -326,7 +363,7 @@ export const applyPowerRatingHistorySeasonSelection = (
     ...filters,
     from: selectedSeason?.startDate ?? '',
     season: seasonValue,
-    to: selectedSeason?.endDate ?? '',
+    to: selectedSeason?.historyFilterEndDate ?? '',
   }
 }
 

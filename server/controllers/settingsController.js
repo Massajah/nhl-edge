@@ -1,6 +1,35 @@
 const ratingEngineSettingsService = require('../services/ratingEngineSettingsService')
 const bettingSettingsService = require('../services/bettingSettingsService')
 const quickRematchSettingsService = require('../services/quickRematchSettingsService')
+const bookmakerPreferencesService = require('../services/bookmakerPreferencesService')
+const { marketOddsService } = require('../services/marketOddsService')
+
+const getBookmakerPreferences = async (request, response, next) => {
+  try {
+    const result = await bookmakerPreferencesService.getBookmakerPreferences(
+      request.user.id,
+      marketOddsService.getStatus().availableBookmakers,
+    )
+
+    response.json(result)
+  } catch (error) {
+    next(error)
+  }
+}
+
+const updateBookmakerPreferences = async (request, response, next) => {
+  try {
+    const result = await bookmakerPreferencesService.updateBookmakerPreferences(
+      request.user.id,
+      request.body,
+      marketOddsService.getStatus().availableBookmakers,
+    )
+
+    response.json(result)
+  } catch (error) {
+    next(error)
+  }
+}
 
 const getBettingSettings = async (request, response, next) => {
   try {
@@ -115,12 +144,14 @@ const resetQuickRematchSettings = async (request, response, next) => {
 
 module.exports = {
   getBettingSettings,
+  getBookmakerPreferences,
   getQuickRematchSettings,
   getRatingEngineSettings,
   resetBettingSettings,
   resetQuickRematchSettings,
   resetRatingEngineSettings,
   updateBettingSettings,
+  updateBookmakerPreferences,
   updateQuickRematchSettings,
   updateRatingEngineSettings,
 }

@@ -221,6 +221,40 @@ const marketOdds = {
   },
 }
 
+const automaticUpdateResult = (overrides = {}) => ({
+  dateRange: {
+    from: '2026-01-14',
+    to: '2026-01-15',
+  },
+  errors: [],
+  gamesAlreadyProcessed: 1,
+  gamesFound: 2,
+  gamesProcessed: 1,
+  gamesSkipped: 0,
+  latestProcessedGame: {
+    awayScore: 2,
+    awayTeam: 'TOR',
+    gameDate: '2026-01-15',
+    gameId: 'auto-game',
+    homeScore: 3,
+    homeTeam: 'BOS',
+    result: 'TOR 2-3 BOS',
+    resultType: 'REGULATION',
+  },
+  processedGames: [],
+  ratingSettingsUsed: {
+    homeAdvantage: 4,
+    kFactor: 1.2,
+    modelVersion: 'power-rating-v1',
+    overtimeMultiplier: 0.7,
+    regulationMultiplier: 1,
+    shootoutMultiplier: 0.5,
+  },
+  status: 'updated',
+  success: true,
+  ...overrides,
+})
+
 const renderDashboard = (props = {}) =>
   renderToStaticMarkup(
     React.createElement(Dashboard, {
@@ -248,6 +282,42 @@ const renderDashboard = (props = {}) =>
       powerRatingsStatus: 'success',
       ratingEngineSettingsStatus: 'success',
       todayDateValue: '2026-01-15',
+      ...props,
+    }),
+  )
+
+const renderGameAnalyzer = (gameContext, props = {}) =>
+  renderToStaticMarkup(
+    React.createElement(GameAnalyzer, {
+      baseHomeAdvantage: 0,
+      injurySummaries: {},
+      injurySummaryStatus: 'success',
+      onNavigate: () => {},
+      onRetryInjuries: () => {},
+      onRetryPowerRatings: () => {},
+      onRetryRatingEngineSettings: () => {},
+      powerRatings: createRatings(),
+      powerRatingsStatus: 'success',
+      prefillMatchup: {
+        away: 'LAK',
+        game: {
+          awayTeam: team('LAK', 'Los Angeles Kings'),
+          gameId: '2025021044',
+          gameState: gameContext.gameState ?? 'FUT',
+          homeTeam: team('NYI', 'New York Islanders'),
+          startTimeUTC: '2026-03-13T23:30:00.000Z',
+          status: gameContext.status ?? 'Scheduled',
+        },
+        gameContext,
+        gameId: '2025021044',
+        home: 'NYI',
+        marketOdds: {
+          away: '2.05',
+          home: '1.85',
+        },
+        scheduledStart: '2026-03-13T23:30:00.000Z',
+      },
+      ratingEngineSettingsStatus: 'success',
       ...props,
     }),
   )
@@ -682,6 +752,116 @@ test('Dashboard places activity metadata inside the games section', () => {
   assertNoInvalidNumbers(html)
 })
 
+test('Dashboard renders compact automatic Power Rating update states', () => {
+  const checkingHtml = renderDashboard({
+    initialAutomaticRatingUpdateStatus: 'checking',
+  })
+  const updatedHtml = renderDashboard({
+    initialAutomaticRatingUpdateResult: automaticUpdateResult(),
+  })
+  const upToDateHtml = renderDashboard({
+    initialAutomaticRatingUpdateResult: automaticUpdateResult({
+      gamesAlreadyProcessed: 2,
+      gamesProcessed: 0,
+      status: 'up_to_date',
+    }),
+  })
+  const partialHtml = renderDashboard({
+    initialAutomaticRatingUpdateResult: automaticUpdateResult({
+      errors: [
+        {
+          code: 'MISSING_RATING',
+          gameId: 'partial-game',
+          reason: 'Missing Power Rating for NJD.',
+        },
+      ],
+      gamesProcessed: 1,
+      gamesSkipped: 1,
+      status: 'partial',
+      success: false,
+    }),
+  })
+  const unavailableHtml = renderDashboard({
+    initialAutomaticRatingUpdateResult: automaticUpdateResult({
+      errors: [
+        {
+          code: 'AUTO_UPDATE_UNAVAILABLE',
+          gameId: null,
+          reason: 'Schedule unavailable.',
+        },
+      ],
+      gamesFound: 0,
+      gamesProcessed: 0,
+      gamesSkipped: 1,
+      status: 'unavailable',
+      success: false,
+    }),
+  })
+
+  assert.match(checkingHtml, /Checking ratings\.\.\./)
+  assert.match(updatedHtml, /Power Ratings updated: 1 game/)
+  assert.match(updatedHtml, /latest game: 2026-01-15 TOR at BOS/)
+  assert.match(upToDateHtml, /Power Ratings up to date/)
+  assert.match(partialHtml, /Power Rating update partially completed/)
+  assert.match(partialHtml, /Missing Power Rating for NJD\./)
+  assert.match(unavailableHtml, /Power Rating update unavailable/)
+  assert.match(unavailableHtml, /Schedule unavailable\./)
+  assert.doesNotMatch(updatedHtml, /class="dashboard-metric-card"[\s\S]*Power Ratings updated/)
+  assertNoInvalidNumbers(
+    `${checkingHtml}${updatedHtml}${upToDateHtml}${partialHtml}${unavailableHtml}`,
+  )
+})
+
+test('Dashboard initialization-required status links to manual update workflow', () => {
+  const html = renderDashboard({
+    initialAutomaticRatingUpdateResult: automaticUpdateResult({
+      dateRange: null,
+      gamesAlreadyProcessed: 0,
+      gamesFound: 0,
+      gamesProcessed: 0,
+      gamesSkipped: 0,
+      latestProcessedGame: null,
+      message:
+        'Power Rating automatic updates need an initial processing point.',
+      ratingSettingsUsed: null,
+      status: 'requires_initialization',
+      success: false,
+    }),
+    onOpenManualPowerRatingUpdate: () => {},
+  })
+
+  assert.match(html, /Power Rating initialization required/)
+  assert.match(html, /initial processing point/)
+  assert.match(html, /Open manual update/)
+  assertNoInvalidNumbers(html)
+})
+
+test('Dashboard automatic update trigger stays on initial load and Refresh', () => {
+  const dashboardSource = readFileSync(
+    new URL('../components/Dashboard.jsx', import.meta.url),
+    'utf8',
+  )
+  const appSource = readFileSync(new URL('../App.jsx', import.meta.url), 'utf8')
+  const dateChangeBlock =
+    dashboardSource.match(
+      /const handleDateChange = \(event\) => \{[\s\S]*?const handleShiftDate/,
+    )?.[0] ?? ''
+
+  assert.match(
+    dashboardSource,
+    /useEffect\(\(\) => \{[\s\S]*setTimeout\(\(\) => \{[\s\S]*triggerAutomaticPowerRatingUpdate\(\)[\s\S]*clearTimeout\(timerId\)[\s\S]*\}, \[triggerAutomaticPowerRatingUpdate\]\)/,
+  )
+  assert.match(
+    dashboardSource,
+    /const handleRefreshDashboard = \(\) => \{[\s\S]*triggerAutomaticPowerRatingUpdate\(\)/,
+  )
+  assert.doesNotMatch(dateChangeBlock, /triggerAutomaticPowerRatingUpdate/)
+  assert.match(
+    appSource,
+    /if \(result\.gamesProcessed > 0\) \{[\s\S]*fetchPowerRatings\(\)[\s\S]*applyPowerRatingDocuments/,
+  )
+})
+
 test('Dashboard renders bankroll-not-initialized state without fabricated balances', () => {
   const html = renderDashboard({
     initialBankrollSummary: {
@@ -1104,74 +1284,396 @@ test('partial Previous Day failure does not hide today games', () => {
 })
 
 test('GameAnalyzer separates detected rest conditions from applied modifiers', () => {
-  const html = renderToStaticMarkup(
-    React.createElement(GameAnalyzer, {
-      baseHomeAdvantage: 0,
-      injurySummaries: {},
-      injurySummaryStatus: 'success',
-      onNavigate: () => {},
-      onRetryInjuries: () => {},
-      onRetryPowerRatings: () => {},
-      onRetryRatingEngineSettings: () => {},
-      powerRatings: createRatings(),
-      powerRatingsStatus: 'success',
-      prefillMatchup: {
-        away: 'LAK',
-        gameContext: {
-          awayContext: {
-            adjustmentBreakdown: [],
-            automaticRestFatigueAdjustment: 0,
-            conditions: ['well_rested', '4_games_in_6_days'],
-            effectiveRestFatigueAdjustment: 0,
-            quickRematch: {
-              reason: 'No previous head-to-head meeting.',
-            },
-            restDays: 2,
-            restFatigueCondition: 'fourInSix',
-            totalGameContextAdjustment: 0,
-          },
-          awayTeam: {
-            abbreviation: 'LAK',
-            name: 'Los Angeles Kings',
-            teamId: 'LAK',
-          },
-          gameId: '2025021044',
-          homeContext: {
-            adjustmentBreakdown: [
-              {
-                adjustment: 0,
-                condition: 'normal',
-              },
-            ],
-            quickRematch: {
-              reason: 'No previous head-to-head meeting.',
-            },
-            restFatigueCondition: 'normal',
-          },
-          homeTeam: {
-            abbreviation: 'NYI',
-            name: 'New York Islanders',
-            teamId: 'NYI',
-          },
-          scheduledStart: '2026-03-13T23:30:00.000Z',
-        },
-        gameId: '2025021044',
-        home: 'NYI',
-        marketOdds: {
-          away: '2.05',
-          home: '1.85',
-        },
-        scheduledStart: '2026-03-13T23:30:00.000Z',
+  const html = renderGameAnalyzer({
+    awayContext: {
+      adjustmentBreakdown: [],
+      conditions: ['well_rested', '4_games_in_6_days'],
+      quickRematch: {
+        reason: 'No previous head-to-head meeting.',
       },
-      ratingEngineSettingsStatus: 'success',
-    }),
-  )
+      restDays: 2,
+      restFatigueCondition: 'fourInSix',
+    },
+    awayTeam: {
+      abbreviation: 'LAK',
+      name: 'Los Angeles Kings',
+      teamId: 'LAK',
+    },
+    gameId: '2025021044',
+    gameState: 'FUT',
+    homeContext: {
+      adjustmentBreakdown: [],
+      restFatigueCondition: 'normal',
+    },
+    homeTeam: {
+      abbreviation: 'NYI',
+      name: 'New York Islanders',
+      teamId: 'NYI',
+    },
+    scheduledStart: '2026-03-13T23:30:00.000Z',
+    status: 'Scheduled',
+  })
 
   assert.match(html, /Well Rested[\s\S]*adjustment disabled/)
-  assert.match(html, /4 Games in 6 Days[\s\S]*info only/)
-  assert.match(html, /No applied modifiers/)
-  assert.match(html, /<dt>Rest Days<\/dt><dd>2<\/dd>/)
-  assert.match(html, /<dt>Rest\/Fatigue<\/dt><dd>\+0\.00<\/dd>/)
+  assert.match(html, /4 Games in 6 Days[\s\S]*informational/)
+  assert.match(html, /Applied adjustments<\/h3><p>None<\/p>/)
+  assert.match(html, /<dt>Rest days<\/dt><dd>2<\/dd>/)
+  assert.match(html, /Total schedule adjustment[\s\S]*\+0\.00/)
+  assert.match(
+    html,
+    /<details class="game-context-overrides"><summary>Manual overrides<\/summary>/,
+  )
+  assert.doesNotMatch(html, /<details class="game-context-overrides" open/)
+  assert.doesNotMatch(html, /<dt>Rest\/Fatigue<\/dt>/)
   assert.doesNotMatch(html, /4 Games in 6 Days[\s\S]*-0\.50/)
+  assert.equal(countMatches(html, /game-context-status-badge/g), 1)
+  assert.doesNotMatch(html, /Current game has already started/i)
+  assertNoInvalidNumbers(html)
+})
+
+test('GameAnalyzer keeps applied totals, Team Adjustments and Effective Rating aligned', () => {
+  const context = {
+    awayContext: {
+      adjustmentBreakdown: [
+        {
+          adjustment: -1.25,
+          category: 'restFatigue',
+          condition: 'back_to_back_travel',
+        },
+        {
+          adjustment: 0.25,
+          category: 'quickRematch',
+          condition: 'quick_rematch',
+        },
+      ],
+      conditions: [
+        '3_games_in_4_days',
+        'back_to_back_travel',
+        '4_games_in_6_days',
+      ],
+      manualRestFatigueAdjustment: -1,
+      quickRematch: {
+        eligible: true,
+      },
+      restDays: 0,
+      restFatigueOverrideEnabled: true,
+    },
+    awayTeam: {
+      abbreviation: 'LAK',
+      name: 'Los Angeles Kings',
+      teamId: 'LAK',
+    },
+    gameId: '2025021044',
+    gameState: 'LIVE',
+    homeContext: {
+      adjustmentBreakdown: [],
+      restDays: 2,
+      restFatigueCondition: 'normal',
+    },
+    homeTeam: {
+      abbreviation: 'NYI',
+      name: 'New York Islanders',
+      teamId: 'NYI',
+    },
+    status: 'Live',
+  }
+  const ratings = createRatings()
+  const inputs = modelAnalysisUtils.createInputsForTeams(
+    ratings,
+    { away: 'LAK', home: 'NYI' },
+    {},
+    {},
+    0,
+    context,
+  )
+  const expectedAwayRating = calculateGameUtils
+    .calculateGame(inputs.home, inputs.away)
+    .awayFinalRating.toFixed(1)
+  const html = renderGameAnalyzer(context)
+
+  assert.match(html, /3 Games in 4 Days/)
+  assert.match(html, /Back-to-Back \+ Travel/)
+  assert.match(html, /4 Games in 6 Days[\s\S]*informational/)
+  assert.match(html, /Quick Rematch eligible/)
+  assert.match(html, /Manual Rest\/Fatigue override[\s\S]*-1\.00/)
+  assert.match(html, /Quick Rematch[\s\S]*\+0\.25/)
+  assert.match(html, /data-testid="game-context-away-total">-0\.75/)
+  assert.match(
+    html,
+    /data-testid="analyzer-away-restFatigue"[\s\S]*?<strong>-1\.00<\/strong>/,
+  )
+  assert.match(
+    html,
+    new RegExp(
+      `data-testid="analyzer-away-effective-rating">${expectedAwayRating}`,
+    ),
+  )
+  assert.match(html, /Manual override active/)
+  assert.equal(countMatches(html, /game-context-status-badge/g), 1)
+  assertNoInvalidNumbers(html)
+})
+
+test('Dashboard uses concise schedule-adjustment labels and omits neutral context', () => {
+  const adjustedContext = {
+    awayContext: {
+      adjustmentBreakdown: [
+        {
+          adjustment: -1.25,
+          condition: 'back_to_back_travel',
+        },
+        {
+          adjustment: 0.25,
+          category: 'quickRematch',
+          condition: 'quick_rematch',
+        },
+      ],
+      quickRematch: {
+        eligible: true,
+      },
+    },
+    awayTeam: {
+      abbreviation: 'TOR',
+      name: 'Toronto Maple Leafs',
+      teamId: 'TOR',
+    },
+    gameId: 'game-candidate',
+    homeContext: {
+      adjustmentBreakdown: [
+        {
+          adjustment: -0.75,
+          condition: 'back_to_back',
+        },
+      ],
+    },
+    homeTeam: {
+      abbreviation: 'BOS',
+      name: 'Boston Bruins',
+      teamId: 'BOS',
+    },
+  }
+  const neutralContext = {
+    ...adjustedContext,
+    awayContext: {
+      adjustmentBreakdown: [],
+    },
+    homeContext: {
+      adjustmentBreakdown: [],
+    },
+  }
+  const adjustedHtml = renderDashboard({
+    initialGameContexts: [adjustedContext],
+    initialGameContextsStatus: 'success',
+  })
+  const neutralHtml = renderDashboard({
+    initialGameContexts: [neutralContext],
+    initialGameContextsStatus: 'success',
+  })
+
+  assert.match(adjustedHtml, /aria-label="Schedule adjustments"/)
+  assert.match(adjustedHtml, /Away[\s\S]*B2B \+ Travel \+ Quick Rematch[\s\S]*-1\.00/)
+  assert.match(adjustedHtml, /Home[\s\S]*B2B[\s\S]*-0\.75/)
+  assert.doesNotMatch(adjustedHtml, /Away context|Home context/)
+  assert.doesNotMatch(neutralHtml, /aria-label="Schedule adjustments"/)
+  assertNoInvalidNumbers(`${adjustedHtml}${neutralHtml}`)
+})
+
+const createMarketOddsResponse = (overrides = {}) => ({
+  date: '2026-01-15',
+  fetchedAt: '2026-01-14T22:15:00.000Z',
+  games: [
+    {
+      gameId: 'game-candidate',
+      oddsStatus: 'ready',
+      marketOdds: {
+        allBookmakers: [
+          {
+            awayOdds: 2.3,
+            bookmakerKey: 'book-a',
+            bookmakerTitle: 'Bookmaker A',
+            enabled: true,
+            homeOdds: 1.68,
+            lastUpdate: '2026-01-14T22:14:00.000Z',
+          },
+          {
+            awayOdds: 2.2,
+            bookmakerKey: 'book-b',
+            bookmakerTitle: 'Bookmaker B',
+            enabled: true,
+            homeOdds: 1.72,
+            lastUpdate: '2026-01-14T22:14:00.000Z',
+          },
+        ],
+        awayBest: {
+          bookmakerKey: 'book-a',
+          bookmakerTitle: 'Bookmaker A',
+          lastUpdate: '2026-01-14T22:14:00.000Z',
+          odds: 2.3,
+        },
+        bookmakers: [],
+        fetchedAt: '2026-01-14T22:15:00.000Z',
+        homeBest: {
+          bookmakerKey: 'book-b',
+          bookmakerTitle: 'Bookmaker B',
+          lastUpdate: '2026-01-14T22:14:00.000Z',
+          odds: 1.72,
+        },
+        providerEventId: 'provider-event-1',
+        providerName: 'The Odds API',
+        source: 'provider',
+      },
+    },
+  ],
+  lowQuota: false,
+  quota: { lastCost: 1, remaining: 100, used: 10 },
+  source: 'provider',
+  status: 'ready',
+  ...overrides,
+})
+
+test('Dashboard renders provider best odds, bookmaker sources, and ready status', () => {
+  const html = renderDashboard({
+    initialMarketOdds: {},
+    initialMarketOddsResponse: createMarketOddsResponse(),
+  })
+
+  assert.match(html, /Ready/)
+  assert.match(html, /Market odds[\s\S]*Away 2\.30[\s\S]*Bookmaker A/)
+  assert.match(html, /Home 1\.72[\s\S]*Bookmaker B/)
+  assert.match(html, /View Market Odds/)
+  assertNoInvalidNumbers(html)
+})
+
+test('manual Dashboard odds keep priority over refreshed provider values', () => {
+  const html = renderDashboard({
+    initialMarketOdds: {
+      'game-candidate': { away: '4.50', home: '1.35' },
+    },
+    initialMarketOddsResponse: createMarketOddsResponse(),
+  })
+
+  assert.match(html, /Market odds[\s\S]*Away 4\.50[\s\S]*Manual/)
+  assert.match(html, /Home 1\.35[\s\S]*Manual/)
+})
+
+test('Dashboard market status covers cache, unavailable, configuration, quota, and low credits', () => {
+  const cached = renderDashboard({
+    initialMarketOddsResponse: createMarketOddsResponse({
+      source: 'cache',
+      status: 'cached',
+    }),
+  })
+  const unavailable = renderDashboard({
+    initialMarketOddsResponse: createMarketOddsResponse({
+      games: [],
+      status: 'unavailable',
+    }),
+  })
+  const notConfigured = renderDashboard({
+    initialMarketOddsResponse: createMarketOddsResponse({
+      games: [],
+      status: 'not_configured',
+    }),
+  })
+  const exhausted = renderDashboard({
+    initialMarketOddsResponse: createMarketOddsResponse({
+      games: [],
+      status: 'quota_exhausted',
+    }),
+  })
+  const low = renderDashboard({
+    initialMarketOddsResponse: createMarketOddsResponse({
+      lowQuota: true,
+      quota: { lastCost: 1, remaining: 25, used: 75 },
+    }),
+  })
+
+  assert.match(cached, /Cached/)
+  assert.match(unavailable, /Provider unavailable/)
+  assert.match(notConfigured, /Provider unavailable/)
+  assert.match(exhausted, /Quota exhausted/)
+  assert.match(low, /Low API credits: 25 remaining/)
+  assert.doesNotMatch(cached, /Low API credits/)
+})
+
+test('one-sided provider odds leave the other side in Add Odds flow', () => {
+  const response = createMarketOddsResponse()
+  response.games[0].marketOdds.homeBest = null
+  const html = renderDashboard({
+    initialMarketOdds: {},
+    initialMarketOddsResponse: response,
+  })
+
+  assert.match(html, /Away 2\.30/)
+  assert.match(html, /Value side|Worth Reviewing|No positive edge/)
+  assert.match(html, /aria-label="Boston Bruins market odds"[^>]*value=""/)
+  assertNoInvalidNumbers(html)
+})
+
+test('Dashboard explains when provider markets have not opened yet', () => {
+  const html = renderDashboard({
+    initialMarketOdds: {},
+    initialMarketOddsResponse: createMarketOddsResponse({
+      games: [],
+      status: 'no_events',
+    }),
+  })
+
+  assert.match(html, /No markets available yet/)
+  assert.match(html, /Market odds have not opened yet\./)
+  assert.match(html, /Preliminary/)
+})
+
+test('GameAnalyzer exposes explicit latest-odds action for provider prefill', () => {
+  const context = {
+    awayContext: { adjustmentBreakdown: [] },
+    homeContext: { adjustmentBreakdown: [] },
+  }
+  const providerSide = (odds, bookmakerTitle) => ({
+    bookmakerKey: bookmakerTitle.toLowerCase(),
+    bookmakerLastUpdate: '2026-03-13T22:00:00.000Z',
+    bookmakerTitle,
+    offeredOdds: odds,
+    providerEventId: 'event-1',
+    providerFetchedAt: '2026-03-13T22:01:00.000Z',
+    providerName: 'The Odds API',
+    source: 'provider',
+  })
+  const html = renderGameAnalyzer(context, {
+    prefillMatchup: {
+      away: 'LAK',
+      gameContext: context,
+      gameId: '2025021044',
+      home: 'NYI',
+      marketOdds: {
+        allBookmakers: [
+          {
+            awayOdds: 2.05,
+            bookmakerKey: 'book-a',
+            bookmakerTitle: 'Book A',
+            enabled: true,
+            homeOdds: 1.8,
+            lastUpdate: '2026-03-13T22:00:00.000Z',
+          },
+        ],
+        away: '2.05',
+        home: '1.85',
+        latestProvider: {
+          away: providerSide(2.05, 'Book A'),
+          home: providerSide(1.85, 'Book B'),
+        },
+        metadata: {
+          away: providerSide(2.05, 'Book A'),
+          home: providerSide(1.85, 'Book B'),
+        },
+      },
+      scheduledStart: '2026-03-13T23:30:00.000Z',
+    },
+  })
+
+  assert.match(html, /Use Latest Market Odds/)
+  assert.match(html, /Current Market Source/)
+  assert.match(html, /Best available[\s\S]*Book A \/ Book B/)
+  assert.match(html, /View All Bookmakers/)
+  assert.match(html, /Manual edits remain unchanged/)
   assertNoInvalidNumbers(html)
 })

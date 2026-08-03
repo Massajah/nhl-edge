@@ -411,6 +411,12 @@ const normalizeCreatePayload = (payload = {}) => {
     (modelProbability * marketOdds - 1) * 100
   const modelStatus =
     normalizeModelStatus(payload.modelStatus) || getModelStatus(expectedValue)
+  const marketOddsSource = ['manual', 'manual_override', 'provider'].includes(
+    payload.marketOddsSource,
+  )
+    ? payload.marketOddsSource
+    : 'manual'
+  const isProviderOdds = marketOddsSource === 'provider'
 
   return {
     gameId: toText(payload.gameId),
@@ -429,6 +435,28 @@ const normalizeCreatePayload = (payload = {}) => {
     modelProbability,
     fairOdds,
     marketOdds,
+    marketOddsSource,
+    providerName: isProviderOdds ? toText(payload.providerName) || null : null,
+    providerEventId: isProviderOdds
+      ? toText(payload.providerEventId) || null
+      : null,
+    bookmakerKey: isProviderOdds
+      ? toText(payload.bookmakerKey) || null
+      : null,
+    bookmakerTitle: isProviderOdds
+      ? toText(payload.bookmakerTitle) || null
+      : null,
+    providerFetchedAt: isProviderOdds
+      ? toDate(payload.providerFetchedAt, 'providerFetchedAt', {
+          allowNull: true,
+        })
+      : null,
+    bookmakerLastUpdate: isProviderOdds
+      ? toDate(payload.bookmakerLastUpdate, 'bookmakerLastUpdate', {
+          allowNull: true,
+        })
+      : null,
+    offeredOdds: marketOdds,
     impliedMarketProbability,
     probabilityEdge,
     expectedValue,
@@ -641,5 +669,6 @@ module.exports = {
   createBet,
   deleteBet,
   getBets,
+  normalizeCreatePayload,
   updateBet,
 }

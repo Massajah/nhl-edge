@@ -30,6 +30,7 @@ function AdjustmentComparison({
   goalies,
   homeTeam,
   inputs,
+  isGameContextManaged = false,
   onChange,
   onRetryGoalies,
 }) {
@@ -187,33 +188,56 @@ function AdjustmentComparison({
         </AdjustmentRow>
 
         <AdjustmentRow
-          helpText="Back-to-backs, compressed schedules, travel, rest edge and road-trip fatigue."
+          helpText={
+            isGameContextManaged
+              ? 'This value is managed by the normalized Game Context below.'
+              : 'Back-to-backs, compressed schedules, travel, rest edge and road-trip fatigue.'
+          }
           label="Rest & fatigue"
         >
-          <NumberCell
-            field="restFatigue"
-            label="Rest and fatigue adjustment"
-            max="3"
-            min="-3"
-            side="away"
-            sideLabel="Away"
-            step="0.25"
-            teamName={awayTeam.name}
-            value={inputs.away.restFatigue}
-            onChange={onChange}
-          />
-          <NumberCell
-            field="restFatigue"
-            label="Rest and fatigue adjustment"
-            max="3"
-            min="-3"
-            side="home"
-            sideLabel="Home"
-            step="0.25"
-            teamName={homeTeam.name}
-            value={inputs.home.restFatigue}
-            onChange={onChange}
-          />
+          {isGameContextManaged ? (
+            <>
+              <ReadOnlyCell
+                secondary="Game Context"
+                sideLabel="Away"
+                testId="analyzer-away-restFatigue"
+                value={toNumber(inputs.away.restFatigue).toFixed(2)}
+              />
+              <ReadOnlyCell
+                secondary="Game Context"
+                sideLabel="Home"
+                testId="analyzer-home-restFatigue"
+                value={toNumber(inputs.home.restFatigue).toFixed(2)}
+              />
+            </>
+          ) : (
+            <>
+              <NumberCell
+                field="restFatigue"
+                label="Rest and fatigue adjustment"
+                max="3"
+                min="-3"
+                side="away"
+                sideLabel="Away"
+                step="0.25"
+                teamName={awayTeam.name}
+                value={inputs.away.restFatigue}
+                onChange={onChange}
+              />
+              <NumberCell
+                field="restFatigue"
+                label="Rest and fatigue adjustment"
+                max="3"
+                min="-3"
+                side="home"
+                sideLabel="Home"
+                step="0.25"
+                teamName={homeTeam.name}
+                value={inputs.home.restFatigue}
+                onChange={onChange}
+              />
+            </>
+          )}
         </AdjustmentRow>
 
         <AdjustmentRow
@@ -331,11 +355,18 @@ function InfoHint({ text }) {
   )
 }
 
-function ReadOnlyCell({ muted = false, secondary, sideLabel, value }) {
+function ReadOnlyCell({
+  muted = false,
+  secondary,
+  sideLabel,
+  testId,
+  value,
+}) {
   return (
     <div
       className={`adjustment-cell adjustment-readonly ${muted ? 'muted' : ''}`}
       data-side-label={sideLabel}
+      data-testid={testId}
       role="cell"
     >
       <strong>{value}</strong>
@@ -364,6 +395,7 @@ function NumberCell({
       <input
         aria-label={`${teamName} ${label}`}
         className="compact-number-input"
+        data-testid={`analyzer-${side}-${field}`}
         id={inputId}
         inputMode="decimal"
         max={max}

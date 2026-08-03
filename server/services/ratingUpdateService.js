@@ -30,12 +30,20 @@ const {
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/
 const DAY_MS = 24 * 60 * 60 * 1000
 const DEFAULT_UPDATE_RANGE_DAYS = 7
+const AUTO_UPDATE_SAFE_OVERLAP_DAYS = 1
 const LIVE_UPDATE_GAME_TYPE_FILTERS = Object.freeze({
   playoffs: false,
   preseason: false,
   regularSeason: true,
 })
 const PRESENTATION_PRECISION_DECIMALS = 6
+const AUTOMATIC_UPDATE_STATUSES = Object.freeze({
+  PARTIAL: 'partial',
+  REQUIRES_INITIALIZATION: 'requires_initialization',
+  UNAVAILABLE: 'unavailable',
+  UPDATED: 'updated',
+  UP_TO_DATE: 'up_to_date',
+})
 
 class RatingUpdateError extends Error {
   constructor(message, statusCode = 500, details = undefined) {
@@ -164,6 +172,47 @@ const normalizeUpdateDateRange = (
   }
 }
 
+const normalizeAutomaticUpdateInput = (
+  payload = {},
+  { todayProvider = nhlApiService.getTodayNhlDate } = {},
+) => {
+  const normalizedPayload = payload ?? {}
+
+  if (!isPlainObject(normalizedPayload)) {
+    throw new RatingUpdateError('Request body must be an object.', 400)
+  }
+
+  const supportedFields = new Set(['throughDate'])
+  const unsupportedFields = Object.keys(normalizedPayload).filter(
+    (field) => !supportedFields.has(field),
+  )
+
+  if (unsupportedFields.length > 0) {
+    throw new RatingUpdateError(
+      'Request body contains unsupported automatic rating update fields.',
+      400,
+      { unsupportedFields },
+    )
+  }
+
+  const today = parseUpdateDate(todayProvider(), 'today')
+  const parsedThroughDate = Object.hasOwn(normalizedPayload, 'throughDate')
+    ? parseUpdateDate(normalizedPayload.throughDate, 'throughDate')
+    : today
+
+  if (parsedThroughDate.timestamp > today.timestamp) {
+    throw new RatingUpdateError('throughDate cannot be after today.', 400, {
+      field: 'throughDate',
+      today: today.date,
+    })
+  }
+
+  return {
+    throughDate: parsedThroughDate.date,
+    throughDateTimestamp: parsedThroughDate.timestamp,
+  }
+}
+
 const buildTeamDirectory = async () => {
   const seedTeams = await getSeedTeams()
 
@@ -215,6 +264,20 @@ const applySession = (query, session) =>
 const selectGameId = (query) =>
   query && typeof query.select === 'function' ? query.select('gameId') : query
 
+const sortLatestProcessedGame = (query) =>
+  query && typeof query.sort === 'function'
+    ? query.sort({
+        gameDate: -1,
+        gameId: -1,
+      })
+    : query
+
+const limitOne = (query) =>
+  query && typeof query.limit === 'function' ? query.limit(1) : query
+
+const maybeLean = (query) =>
+  query && typeof query.lean === 'function' ? query.lean() : query
+
 const isDuplicateKeyError = (error) => error?.code === 11000
 
 const isTransactionUnsupportedError = (error) =>
@@ -225,6 +288,8 @@ const isTransactionUnsupportedError = (error) =>
 const canUseMongooseTransactions = () =>
   mongoose.connection.readyState === 1 &&
   typeof mongoose.startSession === 'function'
+
+const automaticUpdateLocks = new Map()
 
 const loadExistingProcessedGameIds = async ({
   processedRatingGameModel,
@@ -248,6 +313,76 @@ const loadExistingProcessedGameIds = async ({
       Number(game.gameId),
     ),
   )
+}
+
+const findLatestProcessedRatingGame = async ({
+  processedRatingGameModel,
+  userId,
+}) => {
+  if (typeof processedRatingGameModel.findOne === 'function') {
+    const query = maybeLean(
+      sortLatestProcessedGame(
+        processedRatingGameModel.findOne({
+          userId,
+        }),
+      ),
+    )
+
+    return query
+  }
+
+  const query = maybeLean(
+    limitOne(
+      sortLatestProcessedGame(
+        processedRatingGameModel.find({
+          userId,
+        }),
+      ),
+    ),
+  )
+  const records = await query
+  const normalizedRecords = Array.isArray(records) ? records : []
+
+  return normalizedRecords
+    .map(getPlainRecord)
+    .filter(Boolean)
+    .sort((recordA, recordB) => {
+      const timestampA = Date.parse(recordA.gameDate)
+      const timestampB = Date.parse(recordB.gameDate)
+      const dateDifference =
+        (Number.isFinite(timestampB) ? timestampB : Number.NEGATIVE_INFINITY) -
+        (Number.isFinite(timestampA) ? timestampA : Number.NEGATIVE_INFINITY)
+
+      if (dateDifference !== 0) {
+        return dateDifference
+      }
+
+      return Number(recordB.gameId ?? 0) - Number(recordA.gameId ?? 0)
+    })[0] ?? null
+}
+
+const subtractDays = (date, days) =>
+  formatDate(parseUpdateDate(date, 'date').timestamp - days * DAY_MS)
+
+const determineAutomaticUpdateDateRange = ({
+  latestProcessedGame,
+  throughDate,
+}) => {
+  const latestProcessedDate = getLatestProcessedGameDate(latestProcessedGame)
+
+  if (!latestProcessedDate) {
+    return null
+  }
+
+  const overlapStart = subtractDays(
+    latestProcessedDate,
+    AUTO_UPDATE_SAFE_OVERLAP_DAYS,
+  )
+
+  return {
+    from: overlapStart <= throughDate ? overlapStart : throughDate,
+    to: throughDate,
+  }
 }
 
 const loadPowerRatingsForGame = async ({
@@ -327,6 +462,9 @@ const buildEngineSettingsSnapshot = (settings) => ({
   shootoutMultiplier: settings.shootoutMultiplier,
 })
 
+const normalizeEngineSettingsSnapshot = (settings) =>
+  settings ? buildEngineSettingsSnapshot(settings) : null
+
 const buildProcessedGameResponse = ({
   auditRecord,
   awayTeam,
@@ -360,6 +498,202 @@ const buildProcessedGameResponse = ({
     auditRecord.effectiveHomeAdvantage,
   ),
 })
+
+const formatAuditGameDate = (value) => {
+  if (!value) {
+    return null
+  }
+
+  const dateValue = value instanceof Date ? value : new Date(value)
+
+  return Number.isNaN(dateValue.getTime())
+    ? null
+    : dateValue.toISOString().slice(0, 10)
+}
+
+const formatAuditTimestamp = (value) => {
+  if (!value) {
+    return null
+  }
+
+  const dateValue = value instanceof Date ? value : new Date(value)
+
+  return Number.isNaN(dateValue.getTime()) ? null : dateValue.toISOString()
+}
+
+const getPlainRecord = (record) =>
+  typeof record?.toObject === 'function'
+    ? record.toObject()
+    : typeof record?.toJSON === 'function'
+      ? record.toJSON()
+      : record
+        ? { ...record }
+        : null
+
+const buildLatestProcessedGameResponse = (record) => {
+  const plainRecord = getPlainRecord(record)
+
+  if (!plainRecord) {
+    return null
+  }
+
+  const awayTeam = normalizeIdentifier(
+    plainRecord.awayTeamAbbreviation ?? plainRecord.awayTeam,
+  )
+  const homeTeam = normalizeIdentifier(
+    plainRecord.homeTeamAbbreviation ?? plainRecord.homeTeam,
+  )
+
+  return {
+    awayScore: toOptionalFiniteNumber(plainRecord.awayScore),
+    awayTeam: awayTeam || null,
+    gameDate: formatAuditGameDate(plainRecord.gameDate),
+    gameId: toOptionalFiniteNumber(plainRecord.gameId),
+    homeScore: toOptionalFiniteNumber(plainRecord.homeScore),
+    homeTeam: homeTeam || null,
+    processedAt: formatAuditTimestamp(plainRecord.processedAt),
+    result:
+      awayTeam && homeTeam
+        ? buildResultLabel({
+            awayScore: plainRecord.awayScore,
+            awayTeam: { abbreviation: awayTeam },
+            homeScore: plainRecord.homeScore,
+            homeTeam: { abbreviation: homeTeam },
+          })
+        : '',
+    resultType:
+      typeof plainRecord.resultType === 'string'
+        ? plainRecord.resultType
+        : null,
+    settingsSnapshot: normalizeEngineSettingsSnapshot(
+      plainRecord.engineSettingsSnapshot,
+    ),
+  }
+}
+
+const getLatestProcessedGameDate = (record) => {
+  const plainRecord = getPlainRecord(record)
+  const timestamp = Date.parse(plainRecord?.gameDate)
+
+  return Number.isFinite(timestamp) ? formatDate(timestamp) : null
+}
+
+const getLatestProcessedGameFromUpdateResult = (processedGames = []) => {
+  const latestGame = [...processedGames]
+    .filter((game) => game?.gameDate)
+    .sort((gameA, gameB) => {
+      const dateDifference = gameA.gameDate.localeCompare(gameB.gameDate)
+
+      if (dateDifference !== 0) {
+        return dateDifference
+      }
+
+      return String(gameA.gameId ?? '').localeCompare(
+        String(gameB.gameId ?? ''),
+      )
+    })
+    .at(-1)
+
+  if (!latestGame) {
+    return null
+  }
+
+  return {
+    awayScore: latestGame.awayScore,
+    awayTeam: latestGame.awayTeam,
+    gameDate: latestGame.gameDate,
+    gameId: toOptionalFiniteNumber(latestGame.gameId),
+    homeScore: latestGame.homeScore,
+    homeTeam: latestGame.homeTeam,
+    processedAt: null,
+    result: latestGame.result,
+    resultType: latestGame.resultType,
+    settingsSnapshot: null,
+  }
+}
+
+const buildEmptyAutomaticUpdateResult = ({
+  dateRange = null,
+  errors = [],
+  latestProcessedGame = null,
+  message = '',
+  ratingSettingsUsed = null,
+  status,
+}) => ({
+  dateRange,
+  errors,
+  gamesAlreadyProcessed: 0,
+  gamesFound: 0,
+  gamesProcessed: 0,
+  gamesSkipped: 0,
+  latestProcessedGame,
+  message,
+  processedGames: [],
+  ratingSettingsUsed,
+  status,
+  success:
+    status === AUTOMATIC_UPDATE_STATUSES.UPDATED ||
+    status === AUTOMATIC_UPDATE_STATUSES.UP_TO_DATE,
+})
+
+const buildAutomaticUpdateResult = ({
+  latestProcessedGame,
+  ratingSettingsUsed,
+  summary,
+}) => {
+  const hasErrors = summary.errors.length > 0
+  const status = hasErrors
+    ? AUTOMATIC_UPDATE_STATUSES.PARTIAL
+    : summary.gamesProcessed > 0
+      ? AUTOMATIC_UPDATE_STATUSES.UPDATED
+      : AUTOMATIC_UPDATE_STATUSES.UP_TO_DATE
+  const latestProcessedGameFromRun =
+    getLatestProcessedGameFromUpdateResult(summary.processedGames) ??
+    latestProcessedGame
+
+  return {
+    ...summary,
+    latestProcessedGame: latestProcessedGameFromRun,
+    ratingSettingsUsed,
+    status,
+    success:
+      status === AUTOMATIC_UPDATE_STATUSES.UPDATED ||
+      status === AUTOMATIC_UPDATE_STATUSES.UP_TO_DATE,
+  }
+}
+
+const buildUnavailableAutomaticUpdateResult = ({
+  dateRange = null,
+  error,
+  latestProcessedGame = null,
+  ratingSettingsUsed = null,
+  summary = null,
+}) => {
+  const publicReason =
+    error?.publicMessage || error?.message || 'Power Rating update unavailable.'
+  const errors = [
+    ...(summary?.errors ?? []),
+    {
+      code: 'AUTO_UPDATE_UNAVAILABLE',
+      gameId: null,
+      reason: publicReason,
+    },
+  ]
+
+  return {
+    dateRange: summary?.dateRange ?? dateRange,
+    errors,
+    gamesAlreadyProcessed: summary?.gamesAlreadyProcessed ?? 0,
+    gamesFound: summary?.gamesFound ?? 0,
+    gamesProcessed: summary?.gamesProcessed ?? 0,
+    gamesSkipped: (summary?.gamesSkipped ?? 0) + 1,
+    latestProcessedGame,
+    processedGames: summary?.processedGames ?? [],
+    ratingSettingsUsed,
+    status: AUTOMATIC_UPDATE_STATUSES.UNAVAILABLE,
+    success: false,
+  }
+}
 
 const updateTeamRating = async ({
   powerRatingModel,
@@ -729,6 +1063,7 @@ const applyCompletedGamesToPowerRatings = async (
   const useTransactions =
     options.useTransactions ?? canUseMongooseTransactions()
   const processedAt = options.processedAt ?? new Date()
+  let processingStopped = false
 
   for (const eligibleGame of eligibleGames) {
     if (
@@ -739,18 +1074,39 @@ const applyCompletedGamesToPowerRatings = async (
       continue
     }
 
-    const result = await processEligibleGame({
-      awayTeam: eligibleGame.awayTeam,
-      configuration,
-      game: eligibleGame.game,
-      homeTeam: eligibleGame.homeTeam,
-      powerRatingModel,
-      processedAt,
-      processedRatingGameModel,
-      settings,
-      useTransactions,
-      userId,
-    })
+    let result
+
+    try {
+      result = await processEligibleGame({
+        awayTeam: eligibleGame.awayTeam,
+        configuration,
+        game: eligibleGame.game,
+        homeTeam: eligibleGame.homeTeam,
+        powerRatingModel,
+        processedAt,
+        processedRatingGameModel,
+        settings,
+        useTransactions,
+        userId,
+      })
+    } catch (error) {
+      if (!options.stopOnGameError) {
+        throw error
+      }
+
+      summary.success = false
+      summary.gamesSkipped += 1
+      summary.errors.push({
+        code: error?.code ? String(error.code) : 'RATING_UPDATE_FAILED',
+        gameId: eligibleGame.gameId ?? null,
+        reason:
+          error?.publicMessage ||
+          error?.message ||
+          'Power Rating update failed for this game.',
+      })
+      processingStopped = true
+      break
+    }
 
     if (result.status === 'alreadyProcessed') {
       summary.gamesAlreadyProcessed += 1
@@ -767,13 +1123,141 @@ const applyCompletedGamesToPowerRatings = async (
     summary.processedGames.push(result.processedGame)
   }
 
+  if (processingStopped) {
+    summary.processingStopped = true
+  }
+
   return summary
 }
 
+const runAutomaticPowerRatingUpdate = async (
+  userId,
+  payload = {},
+  options = {},
+) => {
+  if (!userId) {
+    throw new RatingUpdateError('Authenticated userId is required.', 401)
+  }
+
+  const processedRatingGameModel =
+    options.processedRatingGameModel ?? ProcessedRatingGame
+  const normalizedInput = normalizeAutomaticUpdateInput(payload, {
+    todayProvider: options.todayProvider,
+  })
+  let latestProcessedGame
+
+  try {
+    latestProcessedGame = await findLatestProcessedRatingGame({
+      processedRatingGameModel,
+      userId,
+    })
+  } catch (error) {
+    return buildUnavailableAutomaticUpdateResult({
+      error,
+    })
+  }
+
+  const latestProcessedGameResponse =
+    buildLatestProcessedGameResponse(latestProcessedGame)
+  const dateRange = determineAutomaticUpdateDateRange({
+    latestProcessedGame,
+    throughDate: normalizedInput.throughDate,
+  })
+
+  if (!dateRange) {
+    return buildEmptyAutomaticUpdateResult({
+      dateRange: null,
+      latestProcessedGame: null,
+      message:
+        'Power Rating automatic updates need an initial processing point.',
+      status: AUTOMATIC_UPDATE_STATUSES.REQUIRES_INITIALIZATION,
+    })
+  }
+
+  const settingsProvider =
+    options.settingsProvider ?? getProductionRatingEngineSettings
+  let ratingSettingsUsed
+
+  try {
+    ratingSettingsUsed = await settingsProvider(userId)
+  } catch (error) {
+    return buildUnavailableAutomaticUpdateResult({
+      dateRange,
+      error,
+      latestProcessedGame: latestProcessedGameResponse,
+    })
+  }
+
+  try {
+    const summary = await applyCompletedGamesToPowerRatings(
+      userId,
+      dateRange,
+      {
+        ...options,
+        processedRatingGameModel,
+        settingsProvider: async () => ratingSettingsUsed,
+        stopOnGameError: true,
+      },
+    )
+
+    return buildAutomaticUpdateResult({
+      latestProcessedGame: latestProcessedGameResponse,
+      ratingSettingsUsed: normalizeEngineSettingsSnapshot(ratingSettingsUsed),
+      summary,
+    })
+  } catch (error) {
+    return buildUnavailableAutomaticUpdateResult({
+      dateRange,
+      error,
+      latestProcessedGame: latestProcessedGameResponse,
+      ratingSettingsUsed: normalizeEngineSettingsSnapshot(ratingSettingsUsed),
+    })
+  }
+}
+
+const applyAutomaticPowerRatingUpdate = async (
+  userId,
+  payload = {},
+  options = {},
+) => {
+  if (!userId) {
+    throw new RatingUpdateError('Authenticated userId is required.', 401)
+  }
+
+  normalizeAutomaticUpdateInput(payload, {
+    todayProvider: options.todayProvider,
+  })
+
+  const lockKey = String(userId)
+  const existingUpdate = automaticUpdateLocks.get(lockKey)
+
+  if (existingUpdate) {
+    return existingUpdate
+  }
+
+  const updatePromise = runAutomaticPowerRatingUpdate(
+    userId,
+    payload,
+    options,
+  ).finally(() => {
+    automaticUpdateLocks.delete(lockKey)
+  })
+
+  automaticUpdateLocks.set(lockKey, updatePromise)
+
+  return updatePromise
+}
+
 module.exports = {
+  AUTOMATIC_UPDATE_STATUSES,
+  AUTO_UPDATE_SAFE_OVERLAP_DAYS,
   DEFAULT_UPDATE_RANGE_DAYS,
   LIVE_UPDATE_GAME_TYPE_FILTERS,
   RatingUpdateError,
+  applyAutomaticPowerRatingUpdate,
   applyCompletedGamesToPowerRatings,
+  determineAutomaticUpdateDateRange,
+  findLatestProcessedRatingGame,
+  normalizeAutomaticUpdateInput,
   normalizeUpdateDateRange,
 }

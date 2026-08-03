@@ -206,6 +206,7 @@ function PowerRatings({
   onRetry,
   onSave,
   onUpdatePowerRatings,
+  openUpdatePanelRequest = 0,
   ratings,
   ratingsCount,
   status,
@@ -248,6 +249,20 @@ function PowerRatings({
   const [historySeasonStatus, setHistorySeasonStatus] = useState('idle')
   const [historySeasonError, setHistorySeasonError] = useState('')
   const historyTopRef = useRef(null)
+
+  useEffect(() => {
+    if (openUpdatePanelRequest <= 0) {
+      return undefined
+    }
+
+    const timerId = setTimeout(() => {
+      setUpdatePanelOpen(true)
+    }, 0)
+
+    return () => {
+      clearTimeout(timerId)
+    }
+  }, [openUpdatePanelRequest])
 
   let draftRatings = draftRatingsState.values
 
@@ -1795,6 +1810,10 @@ function PowerRatingUpdatePanel({
             <li>Already processed games will not be applied again.</li>
             <li>Games are processed chronologically.</li>
             <li>Current Power Rating Engine settings will be used.</li>
+            <li>
+              Changes affect future rating updates only. Previously processed
+              games are not recalculated.
+            </li>
             <li>Changes cannot be undone automatically from this dialog.</li>
           </ul>
 

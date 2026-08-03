@@ -8,6 +8,7 @@ import { getBankrollSummary } from '../services/bankrollApi.js'
 import { fetchBets } from '../services/betsApi.js'
 import { getBettingSettings } from '../services/bettingSettingsApi.js'
 import { fetchGameContexts } from '../services/gameContextApi.js'
+import { fetchNhlMarketOdds } from '../services/marketOddsApi.js'
 import {
   formatBankrollCurrency,
   formatSignedBankrollCurrency,
@@ -22,7 +23,10 @@ import {
 } from '../utils/injuries.js'
 import { calculatePreliminaryAnalysis } from '../utils/modelAnalysis.js'
 import {
+  getMarketOddsStatusLabel,
+  indexProviderMarketOdds,
   loadDashboardMarketOdds,
+  resolveGameMarketOdds,
   saveDashboardMarketOdds,
 } from '../utils/marketOdds.js'
 import {
@@ -51,11 +55,14 @@ import {
 import { normalizeBets } from '../utils/savedAnalyses.js'
 import {
   formatSignedGameContextAdjustment,
+  getCompactGameContextAdjustmentLabel,
   getGameContextForSide,
   hasNonZeroGameContextAdjustment,
   normalizeGameContext,
 } from '../utils/gameContext.js'
 import { createLatestRequestTracker } from '../utils/requestTracker.js'
+import { AUTOMATIC_POWER_RATING_UPDATE_STATUSES } from '../utils/powerRatingUpdates.js'
+import MarketOddsDetails from './MarketOddsDetails.jsx'
 
 const formatScheduleDate = (date) => {
   if (!date) {
@@ -217,6 +224,9 @@ function Dashboard({
   initialBankrollSummary = null,
   initialBankrollError = '',
   initialBankrollStatus = null,
+  initialAutomaticRatingUpdateError = '',
+  initialAutomaticRatingUpdateResult = null,
+  initialAutomaticRatingUpdateStatus = null,
   initialBets = null,
   initialBetsError = '',
   initialBetsStatus = null,
@@ -227,12 +237,15 @@ function Dashboard({
   initialGameContextsError = '',
   initialGameContextsStatus = null,
   initialMarketOdds = null,
+  initialMarketOddsResponse = null,
   initialPreviousSchedule = null,
   initialPreviousError = '',
   initialPreviousStatus = null,
   initialSchedule = null,
+  onAutoUpdatePowerRatings,
   onAnalyzeGame,
   onNavigate,
+  onOpenManualPowerRatingUpdate,
   onRetryInjuries,
   onRetryPowerRatings,
   onRetryRatingEngineSettings,
@@ -295,8 +308,33 @@ function Dashboard({
   const [marketOddsByGame, setMarketOddsByGame] = useState(() =>
     initialMarketOdds ?? loadDashboardMarketOdds(),
   )
+  const [providerOddsByGame, setProviderOddsByGame] = useState(() =>
+    indexProviderMarketOdds(initialMarketOddsResponse?.games),
+  )
+  const [marketOddsResult, setMarketOddsResult] = useState(
+    initialMarketOddsResponse,
+  )
+  const [marketOddsStatus, setMarketOddsStatus] = useState(
+    initialMarketOddsResponse ? 'success' : 'idle',
+  )
+  const [automaticRatingUpdateStatus, setAutomaticRatingUpdateStatus] =
+    useState(
+      initialAutomaticRatingUpdateStatus ??
+        (initialAutomaticRatingUpdateResult ? 'success' : 'idle'),
+    )
+  const [automaticRatingUpdateResult, setAutomaticRatingUpdateResult] =
+    useState(initialAutomaticRatingUpdateResult)
+  const [
+    automaticRatingUpdateError,
+    setAutomaticRatingUpdateError,
+  ] = useState(initialAutomaticRatingUpdateError)
   const dateChangeDebounceRef = useRef(null)
   const scheduleRequestTrackerRef = useRef(createLatestRequestTracker())
+  const marketOddsRequestTrackerRef = useRef(createLatestRequestTracker())
+  const marketOddsRefreshDateRef = useRef('')
+  const automaticRatingUpdateRequestTrackerRef = useRef(
+    createLatestRequestTracker(),
+  )
 
   const applySchedule = useCallback((nextSchedule, fallbackDate = '') => {
     const nextDate = nextSchedule.date ?? fallbackDate
@@ -390,10 +428,49 @@ function Dashboard({
     }
   }, [])
 
+  const loadMarketOdds = useCallback(async (date, { refresh = false } = {}) => {
+    if (!date) {
+      return
+    }
+
+    const request = marketOddsRequestTrackerRef.current.start()
+
+    setMarketOddsStatus('loading')
+
+    try {
+      const result = await fetchNhlMarketOdds(date, { refresh })
+
+      if (!request.isLatest()) {
+        return
+      }
+
+      setProviderOddsByGame(indexProviderMarketOdds(result.games))
+      setMarketOddsResult(result)
+      setMarketOddsStatus('success')
+    } catch (error) {
+      if (!request.isLatest()) {
+        return
+      }
+
+      setProviderOddsByGame({})
+      setMarketOddsResult({
+        date,
+        message: error.message,
+        quota: null,
+        status: 'unavailable',
+      })
+      setMarketOddsStatus('error')
+    }
+  }, [])
+
   const loadScheduleForDate = useCallback(
     async (date) => {
       const request = scheduleRequestTrackerRef.current.start()
 
+      marketOddsRequestTrackerRef.current.invalidate()
+      setProviderOddsByGame({})
+      setMarketOddsResult(null)
+      setMarketOddsStatus('loading')
       setSelectedDate(date)
       setStatus('loading')
       setErrorMessage('')
@@ -424,6 +501,10 @@ function Dashboard({
   const loadTodaySchedule = useCallback(async () => {
     const request = scheduleRequestTrackerRef.current.start()
 
+    marketOddsRequestTrackerRef.current.invalidate()
+    setProviderOddsByGame({})
+    setMarketOddsResult(null)
+    setMarketOddsStatus('loading')
     setStatus('loading')
     setErrorMessage('')
 
@@ -447,6 +528,38 @@ function Dashboard({
       setErrorMessage(error.message)
     }
   }, [applySchedule, loadPreviousSchedule])
+
+  const triggerAutomaticPowerRatingUpdate = useCallback(async () => {
+    if (typeof onAutoUpdatePowerRatings !== 'function') {
+      return null
+    }
+
+    const request = automaticRatingUpdateRequestTrackerRef.current.start()
+
+    setAutomaticRatingUpdateStatus('checking')
+    setAutomaticRatingUpdateError('')
+
+    try {
+      const result = await onAutoUpdatePowerRatings()
+
+      if (!request.isLatest()) {
+        return result
+      }
+
+      setAutomaticRatingUpdateResult(result)
+      setAutomaticRatingUpdateStatus('success')
+      return result
+    } catch (error) {
+      if (!request.isLatest()) {
+        return null
+      }
+
+      setAutomaticRatingUpdateResult(null)
+      setAutomaticRatingUpdateStatus('error')
+      setAutomaticRatingUpdateError(error.message)
+      return null
+    }
+  }, [onAutoUpdatePowerRatings])
 
   useEffect(() => {
     let isCurrent = true
@@ -482,6 +595,16 @@ function Dashboard({
     }
   }, [applySchedule, loadPreviousSchedule])
 
+  useEffect(() => {
+    const timerId = setTimeout(() => {
+      triggerAutomaticPowerRatingUpdate()
+    }, 0)
+
+    return () => {
+      clearTimeout(timerId)
+    }
+  }, [triggerAutomaticPowerRatingUpdate])
+
   useEffect(
     () => () => {
       if (dateChangeDebounceRef.current) {
@@ -489,6 +612,8 @@ function Dashboard({
       }
 
       scheduleRequestTrackerRef.current.invalidate()
+      marketOddsRequestTrackerRef.current.invalidate()
+      automaticRatingUpdateRequestTrackerRef.current.invalidate()
     },
     [],
   )
@@ -544,6 +669,23 @@ function Dashboard({
     }
   }, [schedule.games, status])
 
+  useEffect(() => {
+    if (status !== 'success' || !schedule.date) {
+      return undefined
+    }
+
+    if (marketOddsRefreshDateRef.current === schedule.date) {
+      marketOddsRefreshDateRef.current = ''
+      return undefined
+    }
+
+    const timerId = setTimeout(() => {
+      loadMarketOdds(schedule.date)
+    }, 0)
+
+    return () => clearTimeout(timerId)
+  }, [loadMarketOdds, schedule.date, status])
+
   const displayDate = selectedDate || schedule.date
   const dateContextLabels = useMemo(
     () =>
@@ -584,10 +726,11 @@ function Dashboard({
   const dashboardGames = useMemo(
     () =>
       schedule.games.map((game) => {
-        const normalizedMarketOdds = {
-          away: marketOddsByGame[game.gameId]?.away ?? '',
-          home: marketOddsByGame[game.gameId]?.home ?? '',
-        }
+        const normalizedMarketOdds = resolveGameMarketOdds({
+          gameId: String(game.gameId),
+          manualOddsByGame: marketOddsByGame,
+          providerOddsByGame,
+        })
         const preliminaryAnalysis =
           !isGameStarted(game) && canUseModel
             ? calculatePreliminaryAnalysis({
@@ -634,6 +777,7 @@ function Dashboard({
       injurySummaries,
       marketOddsByGame,
       powerRatings,
+      providerOddsByGame,
       schedule.games,
     ],
   )
@@ -681,6 +825,10 @@ function Dashboard({
 
     if (nextDate) {
       scheduleRequestTrackerRef.current.invalidate()
+      marketOddsRequestTrackerRef.current.invalidate()
+      setProviderOddsByGame({})
+      setMarketOddsResult(null)
+      setMarketOddsStatus('loading')
       setSelectedDate(nextDate)
       setStatus('loading')
       setErrorMessage('')
@@ -712,8 +860,11 @@ function Dashboard({
   }
 
   const handleRefreshDashboard = () => {
+    marketOddsRefreshDateRef.current = displayDate
     handleRetry()
     loadAccountData()
+    triggerAutomaticPowerRatingUpdate()
+    loadMarketOdds(displayDate, { refresh: true })
   }
 
   const handleViewBets = () => {
@@ -791,6 +942,18 @@ function Dashboard({
             Refresh
           </button>
         </div>
+
+        <MarketOddsStatus
+          requestStatus={marketOddsStatus}
+          result={marketOddsResult}
+        />
+
+        <AutomaticPowerRatingUpdateStatus
+          errorMessage={automaticRatingUpdateError}
+          onOpenManualUpdate={onOpenManualPowerRatingUpdate}
+          requestStatus={automaticRatingUpdateStatus}
+          result={automaticRatingUpdateResult}
+        />
 
         <PowerRatingsNotice
           errorMessage={powerRatingsError}
@@ -892,6 +1055,166 @@ function Dashboard({
         </div>
       </div>
     </section>
+  )
+}
+
+const pluralizeGames = (count) => `${count} ${count === 1 ? 'game' : 'games'}`
+
+const formatAutomaticRatingLatestGame = (game) => {
+  if (!game?.gameDate && !game?.awayTeam && !game?.homeTeam) {
+    return ''
+  }
+
+  const matchup =
+    game.awayTeam && game.homeTeam ? `${game.awayTeam} at ${game.homeTeam}` : ''
+
+  return ['latest game:', game.gameDate, matchup].filter(Boolean).join(' ')
+}
+
+const getAutomaticRatingUpdatePresentation = ({
+  errorMessage,
+  requestStatus,
+  result,
+}) => {
+  if (requestStatus === 'checking') {
+    return {
+      detail: '',
+      status: 'checking',
+      title: 'Checking ratings...',
+      tone: 'checking',
+    }
+  }
+
+  if (requestStatus === 'error') {
+    return {
+      detail: errorMessage,
+      status: AUTOMATIC_POWER_RATING_UPDATE_STATUSES.UNAVAILABLE,
+      title: 'Power Rating update unavailable',
+      tone: 'error',
+    }
+  }
+
+  if (!result) {
+    return null
+  }
+
+  const latestGame = formatAutomaticRatingLatestGame(
+    result.latestProcessedGame,
+  )
+
+  if (
+    result.status === AUTOMATIC_POWER_RATING_UPDATE_STATUSES.UPDATED
+  ) {
+    return {
+      detail: [
+        `${pluralizeGames(result.gamesProcessed)} processed`,
+        latestGame,
+        result.refreshError
+          ? `Ratings refresh failed: ${result.refreshError}`
+          : '',
+      ]
+        .filter(Boolean)
+        .join(' | '),
+      status: result.status,
+      title: `Power Ratings updated: ${pluralizeGames(
+        result.gamesProcessed,
+      )}`,
+      tone: result.refreshError ? 'warning' : 'success',
+    }
+  }
+
+  if (result.status === AUTOMATIC_POWER_RATING_UPDATE_STATUSES.UP_TO_DATE) {
+    return {
+      detail: latestGame,
+      status: result.status,
+      title: 'Power Ratings up to date',
+      tone: 'neutral',
+    }
+  }
+
+  if (result.status === AUTOMATIC_POWER_RATING_UPDATE_STATUSES.PARTIAL) {
+    return {
+      detail: [
+        `${pluralizeGames(result.gamesProcessed)} processed`,
+        result.errors.length > 0
+          ? `${result.errors.length} update issue${
+              result.errors.length === 1 ? '' : 's'
+            }`
+          : '',
+        result.errors[0]?.reason ?? '',
+        result.refreshError
+          ? `Ratings refresh failed: ${result.refreshError}`
+          : '',
+      ]
+        .filter(Boolean)
+        .join(' | '),
+      status: result.status,
+      title: 'Power Rating update partially completed',
+      tone: 'warning',
+    }
+  }
+
+  if (
+    result.status ===
+    AUTOMATIC_POWER_RATING_UPDATE_STATUSES.REQUIRES_INITIALIZATION
+  ) {
+    return {
+      detail:
+        result.message ||
+        'Power Rating automatic updates need an initial processing point.',
+      status: result.status,
+      title: 'Power Rating initialization required',
+      tone: 'warning',
+    }
+  }
+
+  if (result.status === AUTOMATIC_POWER_RATING_UPDATE_STATUSES.UNAVAILABLE) {
+    return {
+      detail: result.errors[0]?.reason ?? '',
+      status: result.status,
+      title: 'Power Rating update unavailable',
+      tone: 'error',
+    }
+  }
+
+  return null
+}
+
+function AutomaticPowerRatingUpdateStatus({
+  errorMessage = '',
+  onOpenManualUpdate,
+  requestStatus,
+  result,
+}) {
+  const presentation = getAutomaticRatingUpdatePresentation({
+    errorMessage,
+    requestStatus,
+    result,
+  })
+
+  if (!presentation) {
+    return null
+  }
+
+  const requiresInitialization =
+    presentation.status ===
+    AUTOMATIC_POWER_RATING_UPDATE_STATUSES.REQUIRES_INITIALIZATION
+
+  return (
+    <div
+      className={`automatic-rating-update-status ${presentation.tone}`}
+      role={presentation.tone === 'error' ? 'alert' : 'status'}
+    >
+      <div>
+        <strong>{presentation.title}</strong>
+        {presentation.detail ? <span>{presentation.detail}</span> : null}
+      </div>
+      {requiresInitialization && typeof onOpenManualUpdate === 'function' ? (
+        <button type="button" onClick={onOpenManualUpdate}>
+          Open manual update
+        </button>
+      ) : null}
+    </div>
   )
 }
 
@@ -1043,6 +1366,95 @@ function ScheduleLoadingState({ className = 'schedule-grid' }) {
   )
 }
 
+const formatMarketOddsTime = (value) => {
+  const date = new Date(value)
+
+  if (Number.isNaN(date.getTime())) {
+    return ''
+  }
+
+  return new Intl.DateTimeFormat(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(date)
+}
+
+function MarketOddsStatus({ requestStatus, result }) {
+  if (requestStatus === 'idle') {
+    return null
+  }
+
+  if (requestStatus === 'loading') {
+    return (
+      <div className="market-odds-status" role="status">
+        Loading...
+      </div>
+    )
+  }
+
+  const status = result?.status ?? 'unavailable'
+  const updatedAt = formatMarketOddsTime(result?.fetchedAt)
+  const statusLabel = getMarketOddsStatusLabel(status, requestStatus)
+  const primaryMessage = `${statusLabel}${
+    updatedAt && ['cached', 'ready'].includes(status)
+      ? ` · updated ${updatedAt}`
+      : ''
+  }`
+  const remaining = result?.quota?.remaining
+  const showLowQuota = result?.lowQuota && Number.isFinite(remaining)
+
+  return (
+    <div
+      className={`market-odds-status ${
+        ['invalid_response', 'quota_exhausted', 'rate_limited', 'unavailable'].includes(
+          status,
+        )
+          ? 'warning'
+          : ''
+      }`}
+      role="status"
+    >
+      <span>{primaryMessage}</span>
+      {status === 'no_events' ? (
+        <span>Market odds have not opened yet.</span>
+      ) : null}
+      {showLowQuota ? <span>Low API credits: {remaining} remaining</span> : null}
+    </div>
+  )
+}
+
+function GameMarketOdds({ marketOdds }) {
+  const sides = [
+    ['Away', 'away'],
+    ['Home', 'home'],
+  ].filter(([, side]) => parseMarketOdds(marketOdds[side]))
+
+  if (sides.length === 0) {
+    return null
+  }
+
+  return (
+    <div className="game-market-odds" aria-label="Market odds">
+      <strong>Market odds</strong>
+      {sides.map(([label, side]) => {
+        const metadata = marketOdds.metadata?.[side]
+        const sourceLabel =
+          metadata?.source === 'provider'
+            ? metadata.bookmakerTitle || 'The Odds API'
+            : 'Manual'
+
+        return (
+          <span key={side}>
+            {label} {Number(marketOdds[side]).toFixed(2)}
+            <small> · {sourceLabel}</small>
+          </span>
+        )
+      })}
+      <MarketOddsDetails bookmakers={marketOdds.allBookmakers} />
+    </div>
+  )
+}
+
 function GameCard({
   currency,
   dashboardGame,
@@ -1150,6 +1562,8 @@ function GameCard({
         gameContextStatus={gameContextStatus}
       />
 
+      {!isCompletedGame ? <GameMarketOdds marketOdds={marketOdds} /> : null}
+
       {preliminaryAnalysis?.available ? (
         <PreliminaryAnalysis
           analysis={preliminaryAnalysis}
@@ -1219,17 +1633,23 @@ function GameContextSummary({
   }
 
   return (
-    <div className="game-context-summary" aria-label="Game context adjustments">
-      {items.map(([label, context]) => (
-        <span key={label}>
-          {label} context{' '}
-          <strong>
-            {formatSignedGameContextAdjustment(
-              context.totalGameContextAdjustment,
-            )}
-          </strong>
-        </span>
-      ))}
+    <div className="game-context-summary" aria-label="Schedule adjustments">
+      <strong className="game-context-summary-title">
+        Schedule adjustments
+      </strong>
+      <div className="game-context-summary-rows">
+        {items.map(([label, context]) => (
+          <div className="game-context-summary-row" key={label}>
+            <span>{label}</span>
+            <em>{getCompactGameContextAdjustmentLabel(context)}</em>
+            <strong>
+              {formatSignedGameContextAdjustment(
+                context.totalGameContextAdjustment,
+              )}
+            </strong>
+          </div>
+        ))}
+      </div>
     </div>
   )
 }

@@ -50,6 +50,19 @@ const updatePowerRatingsFromCompletedGames = async (request, response, next) => 
   }
 }
 
+const automaticallyUpdatePowerRatings = async (request, response, next) => {
+  try {
+    const result = await ratingUpdateService.applyAutomaticPowerRatingUpdate(
+      request.user.id,
+      request.body,
+    )
+
+    response.json(result)
+  } catch (error) {
+    next(error)
+  }
+}
+
 const getPowerRatingHistory = async (request, response, next) => {
   try {
     const result = await powerRatingHistoryService.getPowerRatingHistory(
@@ -75,6 +88,7 @@ const getPowerRatingHistorySeasons = async (_request, response, next) => {
 }
 
 module.exports = {
+  automaticallyUpdatePowerRatings,
   getPowerRatingHistory,
   getPowerRatingHistorySeasons,
   getPowerRatings,

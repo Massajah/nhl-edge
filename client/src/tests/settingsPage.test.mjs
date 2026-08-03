@@ -31,12 +31,12 @@ after(async () => {
   await vite?.close()
 })
 
-const renderSettings = () =>
+const renderSettings = (props = {}) =>
   renderToStaticMarkup(
     React.createElement(
       AuthProvider,
       null,
-      React.createElement(Settings, null),
+      React.createElement(Settings, props),
     ),
   )
 
@@ -153,4 +153,109 @@ test('schedule adjustment draft validation rejects unsafe numeric values', () =>
   assert.equal(comma.settings.quickRematchLoserAdjustment, 0.3)
   assert.equal(JSON.stringify(comma).includes('NaN'), false)
   assert.equal(JSON.stringify(invalid).includes('Infinity'), false)
+})
+
+test('Market Odds status card renders safe provider and quota metadata', () => {
+  const html = renderSettings({
+    initialMarketOddsStatus: {
+      configuration: {
+        cacheTtlMs: 600000,
+        configured: true,
+        market: 'Moneyline',
+        provider: 'The Odds API',
+        region: 'EU',
+        sport: 'NHL',
+      },
+      lastSuccessfulFetch: '2026-08-03T12:00:00.000Z',
+      quota: { lastCost: 1, remaining: 80, used: 20 },
+      status: 'ready',
+    },
+  })
+
+  assert.match(html, /External data/)
+  assert.match(html, /Market Odds/)
+  assert.match(html, /Provider<\/dt><dd>The Odds API/)
+  assert.match(html, /Configuration<\/dt><dd>Connected/)
+  assert.match(html, /Sport<\/dt><dd>NHL/)
+  assert.match(html, /Region<\/dt><dd>EU/)
+  assert.match(html, /Market<\/dt><dd>Moneyline/)
+  assert.match(html, /Cache TTL<\/dt><dd>10 min/)
+  assert.match(html, /Credits Used<\/dt><dd>20/)
+  assert.match(html, /Credits Remaining<\/dt><dd>80/)
+  assert.match(html, /Last Request Cost<\/dt><dd>1/)
+  assert.doesNotMatch(html, /THE_ODDS_API_KEY|secret|api key/i)
+})
+
+test('Market Odds status card renders not-configured state without quota noise', () => {
+  const html = renderSettings({
+    initialMarketOddsStatus: {
+      configuration: {
+        cacheTtlMs: 600000,
+        configured: false,
+        market: 'Moneyline',
+        provider: 'The Odds API',
+        region: 'EU',
+        sport: 'NHL',
+      },
+      lastSuccessfulFetch: null,
+      quota: null,
+      status: 'not_configured',
+    },
+  })
+
+  assert.match(html, /Configuration<\/dt><dd>Not configured/)
+  assert.match(html, /Credits Used<\/dt><dd>--/)
+  assert.match(html, /Current Status<\/dt><dd>Provider unavailable/)
+})
+
+test('Preferred Bookmakers renders every available bookmaker enabled by default', () => {
+  const html = renderSettings({
+    initialBookmakerPreferences: {
+      availableBookmakers: [
+        { bookmakerKey: 'book-a', bookmakerTitle: 'Book A' },
+        { bookmakerKey: 'book-b', bookmakerTitle: 'Book B' },
+      ],
+      disabledBookmakerKeys: [],
+      enabledBookmakerKeys: ['book-a', 'book-b'],
+      fallbackApplied: false,
+      warning: null,
+    },
+  })
+
+  assert.match(html, /Preferred Bookmakers/)
+  assert.match(html, /Book A/)
+  assert.match(html, /Book B/)
+  assert.equal((html.match(/type="checkbox" checked=""/g) ?? []).length >= 2, true)
+  assert.match(html, /Save Preferred Bookmakers/)
+})
+
+test('Preferred Bookmakers shows empty and all-disabled fallback states', () => {
+  const emptyHtml = renderSettings({
+    initialBookmakerPreferences: {
+      availableBookmakers: [],
+      disabledBookmakerKeys: [],
+      enabledBookmakerKeys: [],
+      fallbackApplied: false,
+      warning: null,
+    },
+  })
+  const warning =
+    'At least one bookmaker must be enabled. All bookmakers have been enabled automatically.'
+  const fallbackHtml = renderSettings({
+    initialBookmakerPreferences: {
+      availableBookmakers: [
+        { bookmakerKey: 'book-a', bookmakerTitle: 'Book A' },
+      ],
+      disabledBookmakerKeys: [],
+      enabledBookmakerKeys: ['book-a'],
+      fallbackApplied: true,
+      warning,
+    },
+  })
+
+  assert.match(
+    emptyHtml,
+    /Bookmakers will appear after market odds have been loaded\./,
+  )
+  assert.match(fallbackHtml, new RegExp(warning.replaceAll('.', '\\.')))
 })

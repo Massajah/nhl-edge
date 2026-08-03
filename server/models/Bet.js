@@ -229,6 +229,44 @@ const betSchema = new mongoose.Schema(
       default: 1.01,
       min: 1.01,
     },
+    marketOddsSource: {
+      type: String,
+      enum: ['manual', 'manual_override', 'provider'],
+      default: 'manual',
+    },
+    providerName: {
+      type: String,
+      trim: true,
+      default: null,
+    },
+    providerEventId: {
+      type: String,
+      trim: true,
+      default: null,
+    },
+    bookmakerKey: {
+      type: String,
+      trim: true,
+      default: null,
+    },
+    bookmakerTitle: {
+      type: String,
+      trim: true,
+      default: null,
+    },
+    providerFetchedAt: {
+      type: Date,
+      default: null,
+    },
+    bookmakerLastUpdate: {
+      type: Date,
+      default: null,
+    },
+    offeredOdds: {
+      type: Number,
+      default: null,
+      min: 1.01,
+    },
     probabilityEdge: {
       type: Number,
       default: 0,
