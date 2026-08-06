@@ -7,6 +7,10 @@ const router = express.Router()
 router.use(authenticate)
 
 router.post('/bulk', gameContextController.getGameContexts)
+router.patch(
+  '/:gameId/goalies',
+  gameContextController.updateGameGoalieSelections,
+)
 router.patch('/:gameId', gameContextController.updateGameContextOverrides)
 
 module.exports = router

@@ -60,6 +60,7 @@ import {
   hasNonZeroGameContextAdjustment,
   normalizeGameContext,
 } from '../utils/gameContext.js'
+import { getGoalieSelectionForSide } from '../utils/goalies.js'
 import { createLatestRequestTracker } from '../utils/requestTracker.js'
 import { AUTOMATIC_POWER_RATING_UPDATE_STATUSES } from '../utils/powerRatingUpdates.js'
 import MarketOddsDetails from './MarketOddsDetails.jsx'
@@ -1544,6 +1545,8 @@ function GameCard({
         </div>
       ) : null}
 
+      <DashboardGoalieSummary game={game} gameContext={gameContext} />
+
       {savedBets.length > 0 ? (
         <SavedBetSummary
           currency={currency}
@@ -1600,6 +1603,57 @@ function GameCard({
         ) : null}
       </div>
     </article>
+  )
+}
+
+function DashboardGoalieSummary({ game, gameContext }) {
+  const selections = [
+    {
+      label: 'Away',
+      selection: getGoalieSelectionForSide(
+        gameContext,
+        'away',
+        game.awayTeam.id ?? game.awayTeam.abbreviation,
+      ),
+    },
+    {
+      label: 'Home',
+      selection: getGoalieSelectionForSide(
+        gameContext,
+        'home',
+        game.homeTeam.id ?? game.homeTeam.abbreviation,
+      ),
+    },
+  ]
+
+  return (
+    <div className="dashboard-goalie-summary" aria-label="Goalie selections">
+      {selections.map(({ label, selection }) => {
+        const isUnknown = selection.selectionType === 'unknown'
+        let status = 'Unconfirmed'
+
+        if (!isUnknown && selection.confirmationStatus === 'confirmed') {
+          status = 'Confirmed'
+        } else if (!isUnknown && selection.confirmationStatus === 'expected') {
+          status = 'Expected'
+        } else if (!isUnknown) {
+          status = 'Selected'
+        }
+        const adjustment = Number(selection.effectiveAdjustment)
+        const formattedAdjustment = `${adjustment >= 0 ? '+' : ''}${adjustment.toFixed(2)}`
+
+        return (
+          <span key={label}>
+            <strong>{label} goalie:</strong>{' '}
+            {isUnknown ? 'Unknown starter' : selection.goalieName || 'Unlisted'}
+            <small>
+              {' '}
+              · {formattedAdjustment} · {status}
+            </small>
+          </span>
+        )
+      })}
+    </div>
   )
 }
 

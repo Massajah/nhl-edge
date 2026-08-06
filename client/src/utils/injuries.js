@@ -31,6 +31,7 @@ export const normalizeInjurySummary = (summary = []) => {
         teamName: teamSummary.teamName ?? '',
         teamAbbreviation: normalizeIdentifier(teamSummary.teamAbbreviation),
         activeInjuries: toNumber(teamSummary.activeInjuries),
+        goalieInjuries: toNumber(teamSummary.goalieInjuries),
         totalImpact: toNumber(teamSummary.totalImpact),
       },
     ]),
@@ -44,6 +45,7 @@ export const normalizeInjurySummary = (summary = []) => {
       teamName: team.name,
       teamAbbreviation: team.abbreviation,
       activeInjuries: teamSummary?.activeInjuries ?? 0,
+      goalieInjuries: teamSummary?.goalieInjuries ?? 0,
       totalImpact: teamSummary?.totalImpact ?? 0,
     }
 
@@ -60,6 +62,7 @@ export const getTeamInjurySummary = (summaryByTeamId = {}, teamId) => {
       teamName: '',
       teamAbbreviation: normalizedTeamId,
       activeInjuries: 0,
+      goalieInjuries: 0,
       totalImpact: 0,
     }
   )
@@ -80,6 +83,7 @@ export const normalizeInjury = (injury = {}) => ({
   expectedReturn: injury.expectedReturn ?? '',
   notes: injury.notes ?? '',
   active: injury.active ?? true,
+  isGoalie: injury.isGoalie === true,
   createdAt: injury.createdAt,
   updatedAt: injury.updatedAt,
 })

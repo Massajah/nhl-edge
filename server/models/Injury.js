@@ -74,6 +74,10 @@ const injurySchema = new mongoose.Schema(
       type: Boolean,
       default: true,
     },
+    isGoalie: {
+      type: Boolean,
+      default: false,
+    },
   },
   {
     timestamps: true,

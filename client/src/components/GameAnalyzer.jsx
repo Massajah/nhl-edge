@@ -11,11 +11,12 @@ import { getBettingSettings } from '../services/bettingSettingsApi.js'
 import {
   fetchGameContexts,
   updateGameContextOverrides,
+  updateGameGoalieSelections,
 } from '../services/gameContextApi.js'
 import { parseBankrollMoneyInput } from '../utils/bankroll.js'
 import {
+  fetchGoalieAdjustments,
   fetchTeamGoalieSummaries,
-  fetchTeamRoster,
 } from '../services/teamsApi.js'
 import { calculateGame, parseMarketOdds } from '../utils/calculateGame.js'
 import {
@@ -45,6 +46,14 @@ import {
   normalizeBets,
 } from '../utils/savedAnalyses.js'
 import { markOddsAsManual } from '../utils/marketOdds.js'
+import {
+  createGoalieSelectionPayload,
+  createUnknownGoalieSelection,
+  goalieSelectionToInputFields,
+  normalizeProviderGoalies,
+  updateGoalieInputs,
+  validateGoalieSelectionInputs,
+} from '../utils/goalies.js'
 import MarketOddsDetails from './MarketOddsDetails.jsx'
 
 const findTeamById = (teamId) => NHL_TEAMS.find((team) => team.id === teamId)
@@ -57,7 +66,7 @@ const defaultTeams = {
 }
 
 const adjustmentLimits = {
-  goalieAdjustment: { max: 20, min: -20 },
+  goalieAdjustment: { max: 5, min: -5 },
   homeAdvantage: { max: 10, min: -10 },
   injuries: { max: 20, min: -20 },
   manualAdjustment: { max: 2, min: -2 },
@@ -90,9 +99,6 @@ const formatAnalyzerUtcTime = (value) => {
 
 const getTeamLogo = (team = {}) =>
   team.logo || getTeamMetadata(team.abbreviation).logo || ''
-
-const getGoalieName = (goalie = {}) =>
-  goalie.fullName || goalie.name || goalie.playerName || ''
 
 const formatRating = (value) =>
   Number.isFinite(Number(value)) ? Number(value).toFixed(1) : '--'
@@ -263,7 +269,9 @@ function GameAnalyzer({
   const [goalieStatsByPlayerId, setGoalieStatsByPlayerId] = useState({})
   const [goalieStatusByTeam, setGoalieStatusByTeam] = useState({})
   const [goalieErrorByTeam, setGoalieErrorByTeam] = useState({})
-  const [rostersByTeam, setRostersByTeam] = useState({})
+  const [teamGoaliesByTeam, setTeamGoaliesByTeam] = useState({})
+  const [goalieSaveStatus, setGoalieSaveStatus] = useState('idle')
+  const [goalieSaveMessage, setGoalieSaveMessage] = useState('')
   const [saveStatus, setSaveStatus] = useState('idle')
   const [saveMessage, setSaveMessage] = useState('')
   const [selectedSaveSide, setSelectedSaveSide] = useState('home')
@@ -331,6 +339,44 @@ function GameAnalyzer({
       ),
     [gameContext, gameContextDraft],
   )
+  const goalieSelectionPayload = useMemo(
+    () => ({
+      away: createGoalieSelectionPayload(inputs.away, awayTeam.id),
+      home: createGoalieSelectionPayload(inputs.home, homeTeam.id),
+    }),
+    [awayTeam.id, homeTeam.id, inputs.away, inputs.home],
+  )
+  const goalieValidationErrors = useMemo(
+    () => ({
+      away: validateGoalieSelectionInputs(inputs.away),
+      home: validateGoalieSelectionInputs(inputs.home),
+    }),
+    [inputs.away, inputs.home],
+  )
+  const hasGoalieValidationErrors = Boolean(
+    goalieValidationErrors.away || goalieValidationErrors.home,
+  )
+  const hasUnsavedGoalieChanges = useMemo(() => {
+    if (!contextRequestGame?.gameId) {
+      return false
+    }
+
+    const persistedSelections = {
+      away: gameContext?.goalieSelections?.away ??
+        createUnknownGoalieSelection(awayTeam.id),
+      home: gameContext?.goalieSelections?.home ??
+        createUnknownGoalieSelection(homeTeam.id),
+    }
+
+    return JSON.stringify(goalieSelectionPayload) !==
+      JSON.stringify(persistedSelections)
+  }, [
+    awayTeam.id,
+    contextRequestGame?.gameId,
+    gameContext?.goalieSelections,
+    goalieSelectionPayload,
+    homeTeam.id,
+  ])
 
   const result = useMemo(
     () => calculateGame(inputs.home, inputs.away),
@@ -536,8 +582,13 @@ function GameAnalyzer({
     selectedMarket.modelProbability > 0 &&
     selectedMarket.modelProbability <= 1
   const canSaveBet =
-    Boolean(selectedMarketOdds) && hasValidModelProbability && isStakeValid
-  const saveDisabledReason = !selectedMarketOdds
+    Boolean(selectedMarketOdds) &&
+    hasValidModelProbability &&
+    isStakeValid &&
+    !hasGoalieValidationErrors
+  const saveDisabledReason = hasGoalieValidationErrors
+    ? 'Complete the required game-specific goalie adjustment.'
+    : !selectedMarketOdds
     ? 'Add valid market odds for the selected side.'
     : !hasValidModelProbability
       ? 'Model probability is unavailable for the selected side.'
@@ -664,15 +715,26 @@ function GameAnalyzer({
       }))
 
       try {
-        const [roster, goalieSummaries] = await Promise.all([
-          fetchTeamRoster(teamKey),
+        const [teamGoaliesResult, goalieSummariesResult] =
+          await Promise.allSettled([
+          fetchGoalieAdjustments(team.abbreviation),
           fetchTeamGoalieSummaries(teamKey),
-        ])
-        const summaries = goalieSummaries?.goalies ?? []
+          ])
 
-        setRostersByTeam((currentRosters) => ({
-          ...currentRosters,
-          [teamKey]: roster,
+        if (teamGoaliesResult.status === 'rejected') {
+          throw teamGoaliesResult.reason
+        }
+
+        const summaries =
+          goalieSummariesResult.status === 'fulfilled'
+            ? goalieSummariesResult.value?.goalies ?? []
+            : []
+
+        setTeamGoaliesByTeam((currentGoalies) => ({
+          ...currentGoalies,
+          [teamKey]: normalizeProviderGoalies(
+            teamGoaliesResult.value.goalies,
+          ),
         }))
         setGoalieStatsByPlayerId((currentStats) => {
           const nextStats = { ...currentStats }
@@ -721,9 +783,9 @@ function GameAnalyzer({
     (side) => {
       const team = side === 'home' ? homeTeam : awayTeam
 
-      return rostersByTeam[team.abbreviation]?.goalies ?? []
+      return teamGoaliesByTeam[team.abbreviation] ?? []
     },
-    [awayTeam, homeTeam, rostersByTeam],
+    [awayTeam, homeTeam, teamGoaliesByTeam],
   )
 
   const handleTeamChange = (side, teamId) => {
@@ -768,10 +830,13 @@ function GameAnalyzer({
       )
 
       changedSides.forEach((changedSide) => {
+        const changedTeam = findTeam(nextTeams[changedSide])
+
         nextInputs[changedSide] = {
           ...nextInputs[changedSide],
-          selectedGoalieId: '',
-          selectedGoalieName: '',
+          ...goalieSelectionToInputFields(
+            createUnknownGoalieSelection(changedTeam.id),
+          ),
         }
       })
 
@@ -793,15 +858,6 @@ function GameAnalyzer({
 
       if (field === 'marketOdds') {
         nextSideInputs.marketOdds = value
-      } else if (field === 'selectedGoalieId') {
-        const selectedGoalie = getGoaliesForSide(side).find(
-          (goalie) => String(goalie.id) === String(value),
-        )
-
-        nextSideInputs.selectedGoalieId = value
-        nextSideInputs.selectedGoalieName = selectedGoalie
-          ? getGoalieName(selectedGoalie)
-          : ''
       } else {
         const nextValue = Number(value)
         const safeValue = Number.isFinite(nextValue) ? nextValue : 0
@@ -876,6 +932,26 @@ function GameAnalyzer({
     }))
     setSaveStatus('idle')
     setSaveMessage('Latest provider odds applied.')
+  }
+
+  const handleGoalieSelectionChange = (side, field, value) => {
+    setSaveStatus('idle')
+    setSaveMessage('')
+    setGoalieSaveStatus('idle')
+    setGoalieSaveMessage('')
+
+    setMatchup((currentMatchup) => ({
+      ...currentMatchup,
+      inputs: {
+        ...currentMatchup.inputs,
+        [side]: updateGoalieInputs(
+          currentMatchup.inputs[side],
+          field,
+          value,
+          getGoaliesForSide(side),
+        ),
+      },
+    }))
   }
 
   const handleGameContextDraftChange = (side, field, value) => {
@@ -966,6 +1042,38 @@ function GameAnalyzer({
     }
   }
 
+  const handleSaveGoalieSelections = async () => {
+    if (!contextRequestGame?.gameId || !hasUnsavedGoalieChanges) {
+      return
+    }
+
+    if (hasGoalieValidationErrors) {
+      setGoalieSaveStatus('error')
+      setGoalieSaveMessage(
+        'Complete the required game-specific goalie adjustments.',
+      )
+      return
+    }
+
+    setGoalieSaveStatus('saving')
+    setGoalieSaveMessage('')
+
+    try {
+      const response = await updateGameGoalieSelections(
+        contextRequestGame.gameId,
+        goalieSelectionPayload,
+      )
+      const nextContext = normalizeGameContext(response.context)
+
+      setGameContext(nextContext)
+      setGoalieSaveStatus('success')
+      setGoalieSaveMessage('Goalie selections saved for this game.')
+    } catch (error) {
+      setGoalieSaveStatus('error')
+      setGoalieSaveMessage(error.message)
+    }
+  }
+
   const handleUseRecommendedStake = () => {
     if (
       !selectedStakeRecommendation.eligible ||
@@ -1019,7 +1127,7 @@ function GameAnalyzer({
         selectedSide: selectedSaveSide,
         selectedGoalieStats:
           goalieStatsByPlayerId[
-            String(inputs[selectedSaveSide].selectedGoalieId)
+            String(inputs[selectedSaveSide].goalieNhlPlayerId)
           ]?.currentSeason ?? null,
         kellyRecommendation: createKellyRecommendationSnapshot(
           selectedStakeRecommendation,
@@ -1152,6 +1260,9 @@ function GameAnalyzer({
               home: goalieStatusByTeam[homeTeam.abbreviation] ?? 'idle',
             }}
             goalieStatsByPlayerId={goalieStatsByPlayerId}
+            goalieSaveMessage={goalieSaveMessage}
+            goalieSaveStatus={goalieSaveStatus}
+            goalieValidationErrors={goalieValidationErrors}
             goalies={{
               away: awayGoalies,
               home: homeGoalies,
@@ -1160,6 +1271,10 @@ function GameAnalyzer({
             inputs={inputs}
             isGameContextManaged={Boolean(gameContext)}
             onChange={handleInputChange}
+            onGoalieChange={handleGoalieSelectionChange}
+            onSaveGoalies={handleSaveGoalieSelections}
+            canPersistGoalies={Boolean(contextRequestGame?.gameId)}
+            hasUnsavedGoalieChanges={hasUnsavedGoalieChanges}
             onRetryGoalies={{
               away: () => loadTeamGoalies(awayTeam, { force: true }),
               home: () => loadTeamGoalies(homeTeam, { force: true }),

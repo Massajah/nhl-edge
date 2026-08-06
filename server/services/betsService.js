@@ -351,6 +351,168 @@ const normalizeGameContextSnapshot = (snapshot = null) => {
   return JSON.parse(JSON.stringify(snapshot))
 }
 
+const normalizeGoalieSnapshotAdjustment = (value, field) => {
+  const adjustment = toFiniteNumber(value, field)
+
+  if (adjustment < -5 || adjustment > 5) {
+    throw new BetsError(`${field} must be between -5.00 and +5.00.`, 400, {
+      field,
+    })
+  }
+
+  const stepUnits = adjustment / 0.05
+
+  if (Math.abs(stepUnits - Math.round(stepUnits)) > 1e-8) {
+    throw new BetsError(`${field} must use 0.05 increments.`, 400, { field })
+  }
+
+  return adjustment
+}
+
+const normalizeGoalieSelectionSnapshot = (snapshot = null) => {
+  if (snapshot === null || snapshot === '' || snapshot === undefined) {
+    return null
+  }
+
+  if (Array.isArray(snapshot) || typeof snapshot !== 'object') {
+    throw new BetsError('goalieSelectionSnapshot must be an object.', 400, {
+      field: 'goalieSelectionSnapshot',
+    })
+  }
+
+  const rawSelectionType = toText(snapshot.selectionType)
+  const isLegacyTeamGoalie = rawSelectionType === 'team_goalie'
+  const rawNhlPlayerId = toOptionalNumber(
+    snapshot.nhlPlayerId,
+    'goalieSelectionSnapshot.nhlPlayerId',
+  )
+  const selectionType =
+    isLegacyTeamGoalie
+      ? rawNhlPlayerId === null
+        ? 'custom'
+        : 'provider_goalie'
+      : rawSelectionType
+
+  if (!['provider_goalie', 'custom', 'unknown'].includes(selectionType)) {
+    throw new BetsError(
+      'goalieSelectionSnapshot.selectionType must be provider_goalie, custom, or unknown.',
+      400,
+      { field: 'goalieSelectionSnapshot.selectionType' },
+    )
+  }
+
+  if (selectionType === 'unknown') {
+    return {
+      confirmationStatus: 'unknown',
+      customNote: '',
+      displayName: '',
+      effectiveAdjustment: 0,
+      manualAdjustment: null,
+      nhlPlayerId: null,
+      overrideEnabled: false,
+      selectionType,
+      source: 'unknown',
+      teamDefaultAdjustment: null,
+      teamGoalieId: null,
+      teamId: toText(snapshot.teamId).toUpperCase(),
+    }
+  }
+
+  const confirmationStatus = toText(snapshot.confirmationStatus, 'selected')
+
+  if (
+    !['unknown', 'selected', 'expected', 'confirmed'].includes(
+      confirmationStatus,
+    )
+  ) {
+    throw new BetsError(
+      'Selected goalie status must be unknown, selected, expected, or confirmed.',
+      400,
+      { field: 'goalieSelectionSnapshot.confirmationStatus' },
+    )
+  }
+
+  const isCustom = selectionType === 'custom'
+  const overrideEnabled = isCustom || snapshot.overrideEnabled === true
+  const manualAdjustment = overrideEnabled
+    ? normalizeGoalieSnapshotAdjustment(
+        snapshot.manualAdjustment ?? snapshot.effectiveAdjustment,
+        'goalieSelectionSnapshot.manualAdjustment',
+      )
+    : null
+  const teamDefaultAdjustment = isCustom
+    ? null
+    : normalizeGoalieSnapshotAdjustment(
+        snapshot.teamDefaultAdjustment ??
+          (isLegacyTeamGoalie ? snapshot.effectiveAdjustment : undefined),
+        'goalieSelectionSnapshot.teamDefaultAdjustment',
+      )
+  const effectiveAdjustment = normalizeGoalieSnapshotAdjustment(
+    snapshot.effectiveAdjustment,
+    'goalieSelectionSnapshot.effectiveAdjustment',
+  )
+  const expectedEffectiveAdjustment = overrideEnabled
+    ? manualAdjustment
+    : teamDefaultAdjustment
+
+  if (Math.abs(effectiveAdjustment - expectedEffectiveAdjustment) > 1e-8) {
+    throw new BetsError(
+      'goalieSelectionSnapshot.effectiveAdjustment does not match its selected adjustment.',
+      400,
+      { field: 'goalieSelectionSnapshot.effectiveAdjustment' },
+    )
+  }
+
+  const displayName = toText(snapshot.displayName ?? snapshot.goalieName)
+  const customNote = isCustom ? toText(snapshot.customNote) : ''
+
+  if (displayName.length > 120) {
+    throw new BetsError(
+      'goalieSelectionSnapshot.displayName cannot exceed 120 characters.',
+      400,
+      { field: 'goalieSelectionSnapshot.displayName' },
+    )
+  }
+
+  if (customNote.length > 300) {
+    throw new BetsError(
+      'goalieSelectionSnapshot.customNote cannot exceed 300 characters.',
+      400,
+      { field: 'goalieSelectionSnapshot.customNote' },
+    )
+  }
+
+  const nhlPlayerId = isCustom
+    ? null
+    : rawNhlPlayerId
+
+  if (
+    !isCustom &&
+    (!Number.isSafeInteger(nhlPlayerId) || nhlPlayerId <= 0)
+  ) {
+    throw new BetsError(
+      'goalieSelectionSnapshot.nhlPlayerId must be a positive integer.',
+      400,
+      { field: 'goalieSelectionSnapshot.nhlPlayerId' },
+    )
+  }
+
+  return {
+    confirmationStatus,
+    customNote,
+    displayName,
+    effectiveAdjustment,
+    manualAdjustment,
+    nhlPlayerId,
+    overrideEnabled,
+    selectionType,
+    source: selectionType,
+    teamDefaultAdjustment,
+    teamGoalieId: null,
+    teamId: toText(snapshot.teamId).toUpperCase(),
+  }
+}
+
 const calculateProfit = ({ marketOdds, result, stake }) => {
   const odds = Number(marketOdds)
   const wager = Number(stake)
@@ -417,6 +579,9 @@ const normalizeCreatePayload = (payload = {}) => {
     ? payload.marketOddsSource
     : 'manual'
   const isProviderOdds = marketOddsSource === 'provider'
+  const goalieSelectionSnapshot = normalizeGoalieSelectionSnapshot(
+    payload.goalieSelectionSnapshot,
+  )
 
   return {
     gameId: toText(payload.gameId),
@@ -510,7 +675,12 @@ const normalizeCreatePayload = (payload = {}) => {
       payload.manualAdjustment,
       'manualAdjustment',
     ),
-    selectedGoalieName: toText(payload.selectedGoalieName),
+    selectedGoalieName: toText(
+      payload.selectedGoalieName,
+      goalieSelectionSnapshot?.displayName ??
+        goalieSelectionSnapshot?.goalieName ??
+        '',
+    ),
     selectedGoalieSavePercentage: toOptionalNumber(
       payload.selectedGoalieSavePercentage,
       'selectedGoalieSavePercentage',
@@ -523,6 +693,7 @@ const normalizeCreatePayload = (payload = {}) => {
       payload.selectedGoalieGamesStarted,
       'selectedGoalieGamesStarted',
     ),
+    goalieSelectionSnapshot,
     stake,
     stakeType: toText(payload.stakeType, 'units') || 'units',
     sportsbook: toText(payload.sportsbook),
@@ -670,5 +841,6 @@ module.exports = {
   deleteBet,
   getBets,
   normalizeCreatePayload,
+  normalizeGoalieSelectionSnapshot,
   updateBet,
 }

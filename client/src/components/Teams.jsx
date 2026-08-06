@@ -1,14 +1,21 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ChevronDown } from 'lucide-react'
 import { getTeamMetadata } from '../data/teamMetadata.js'
+import TeamModelValues from './TeamModelValues.jsx'
 import {
+  deleteGoalieAdjustment,
   fetchGoalieStats,
+  fetchGoalieAdjustments,
   fetchTeamGoalieSummaries,
   fetchTeamRoster,
   fetchTeamStats,
   fetchTeams,
+  saveGoalieAdjustment,
 } from '../services/teamsApi.js'
 import { getTeamInjurySummary } from '../utils/injuries.js'
+import {
+  mergeProviderGoaliesWithAdjustments,
+} from '../utils/goalies.js'
 import { getEffectiveBaseRating } from '../utils/powerRatings.js'
 
 const rosterGroups = [
@@ -611,12 +618,19 @@ function TeamDetails({
   const injurySummary = getTeamInjurySummary(injurySummaries, team.abbreviation)
   const logo = getTeamLogo(team)
   const [expandedGoalieId, setExpandedGoalieId] = useState(null)
+  const [goalieAdjustments, setGoalieAdjustments] = useState([])
+  const [goalieAdjustmentStatus, setGoalieAdjustmentStatus] =
+    useState('loading')
+  const [goalieAdjustmentError, setGoalieAdjustmentError] = useState('')
   const effectiveRating =
     powerRatingsStatus === 'success' && rating
       ? getEffectiveBaseRating(rating)
       : null
   const sortedGoalies = useMemo(() => {
-    const goalies = roster?.goalies ?? []
+    const goalies = mergeProviderGoaliesWithAdjustments(
+      roster?.goalies ?? [],
+      goalieAdjustments,
+    )
     const goaliesWithIndex = goalies.map((goalie, index) => ({
       goalie,
       index,
@@ -643,7 +657,70 @@ function TeamDetails({
         return goalieA.index - goalieB.index
       })
       .map(({ goalie }) => goalie)
-  }, [goalieStatsByPlayerId, roster])
+  }, [goalieAdjustments, goalieStatsByPlayerId, roster])
+
+  useEffect(() => {
+    let isCurrent = true
+
+    fetchGoalieAdjustments(team.abbreviation)
+      .then((result) => {
+        if (!isCurrent) {
+          return
+        }
+
+        setGoalieAdjustments(result.adjustments ?? [])
+        setGoalieAdjustmentStatus('success')
+      })
+      .catch((error) => {
+        if (!isCurrent) {
+          return
+        }
+
+        setGoalieAdjustmentError(error.message)
+        setGoalieAdjustmentStatus('error')
+      })
+
+    return () => {
+      isCurrent = false
+    }
+  }, [team.abbreviation])
+
+  const handleSaveGoalieAdjustment = async (goalie, draft) => {
+    const result = await saveGoalieAdjustment(
+      team.abbreviation,
+      goalie.nhlPlayerId,
+      {
+        activeOverride: null,
+        note: draft.note,
+        ratingAdjustment: Number(draft.ratingAdjustment),
+      },
+    )
+
+    setGoalieAdjustments((currentAdjustments) => {
+      const remaining = currentAdjustments.filter(
+        (adjustment) =>
+          Number(adjustment.nhlPlayerId) !== goalie.nhlPlayerId,
+      )
+
+      return result.adjustment
+        ? [...remaining, result.adjustment]
+        : remaining
+    })
+    setGoalieAdjustmentStatus('success')
+    setGoalieAdjustmentError('')
+  }
+
+  const handleDeleteGoalieAdjustment = async (goalie) => {
+    await deleteGoalieAdjustment(team.abbreviation, goalie.nhlPlayerId)
+    setGoalieAdjustments((currentAdjustments) =>
+      currentAdjustments.filter(
+        (adjustment) =>
+          Number(adjustment.nhlPlayerId) !== goalie.nhlPlayerId,
+      ),
+    )
+    setGoalieAdjustmentStatus('success')
+    setGoalieAdjustmentError('')
+  }
 
   const handleToggleGoalie = useCallback(
     (goalie) => {
@@ -659,6 +736,17 @@ function TeamDetails({
     },
     [expandedGoalieId, onLoadGoalieStats],
   )
+
+  const handleManageGoalies = useCallback(() => {
+    const goalieSection = document.getElementById('team-goalies-section')
+
+    goalieSection?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    window.setTimeout(() => {
+      goalieSection
+        ?.querySelector('.goalie-adjustment-edit-button')
+        ?.focus()
+    }, 350)
+  }, [])
 
   return (
     <div className="team-details-panel">
@@ -711,6 +799,14 @@ function TeamDetails({
         errorMessage={statsError}
       />
 
+      <TeamModelValues
+        goalieAdjustments={goalieAdjustments}
+        goalieAdjustmentStatus={goalieAdjustmentStatus}
+        onManageGoalies={handleManageGoalies}
+        roster={roster}
+        team={team}
+      />
+
       {rosterStatus === 'loading' ? <RosterLoadingState /> : null}
 
       {rosterStatus === 'error' ? (
@@ -741,7 +837,11 @@ function TeamDetails({
               goalieStatsStatusByPlayerId={goalieStatsStatusByPlayerId}
               goalieSummaryError={goalieSummaryError}
               goalieSummaryStatus={goalieSummaryStatus}
+              goalieAdjustmentError={goalieAdjustmentError}
+              goalieAdjustmentStatus={goalieAdjustmentStatus}
               onLoadGoalieStats={onLoadGoalieStats}
+              onDeleteGoalieAdjustment={handleDeleteGoalieAdjustment}
+              onSaveGoalieAdjustment={handleSaveGoalieAdjustment}
               onToggleGoalie={handleToggleGoalie}
             />
           ))}
@@ -825,6 +925,8 @@ function TeamCard({ onSelect, team }) {
 
 function RosterSection({
   expandedGoalieId,
+  goalieAdjustmentError,
+  goalieAdjustmentStatus,
   goalieStatsByPlayerId,
   goalieStatsErrorByPlayerId,
   goalieStatsStatusByPlayerId,
@@ -832,14 +934,20 @@ function RosterSection({
   goalieSummaryStatus,
   groupKey,
   label,
+  onDeleteGoalieAdjustment,
   onLoadGoalieStats,
+  onSaveGoalieAdjustment,
   onToggleGoalie,
   players,
 }) {
   const isGoalieSection = groupKey === 'goalies'
 
   return (
-    <section className="roster-section" aria-label={label}>
+    <section
+      aria-label={label}
+      className="roster-section"
+      id={isGoalieSection ? 'team-goalies-section' : undefined}
+    >
       <div className="roster-section-header">
         <h3>{label}</h3>
         <span>{players.length}</span>
@@ -855,7 +963,11 @@ function RosterSection({
                   goalieStatsErrorByPlayerId?.[String(player.id)] ?? ''
                 }
                 isExpanded={expandedGoalieId === String(player.id)}
+                adjustmentErrorMessage={goalieAdjustmentError}
+                adjustmentStatus={goalieAdjustmentStatus}
+                onDeleteAdjustment={onDeleteGoalieAdjustment}
                 onLoadGoalieStats={onLoadGoalieStats}
+                onSaveAdjustment={onSaveGoalieAdjustment}
                 onToggle={onToggleGoalie}
                 player={player}
                 stats={goalieStatsByPlayerId?.[String(player.id)]}
@@ -877,10 +989,14 @@ function RosterSection({
   )
 }
 
-function GoalieRow({
+export function GoalieRow({
+  adjustmentErrorMessage,
+  adjustmentStatus,
   errorMessage,
   isExpanded,
+  onDeleteAdjustment,
   onLoadGoalieStats,
+  onSaveAdjustment,
   onToggle,
   player,
   stats,
@@ -888,6 +1004,13 @@ function GoalieRow({
   summaryStatus,
   status,
 }) {
+  const [isEditingAdjustment, setIsEditingAdjustment] = useState(false)
+  const [adjustmentDraft, setAdjustmentDraft] = useState(() => ({
+    note: player.note ?? '',
+    ratingAdjustment: Number(player.ratingAdjustment ?? 0).toFixed(2),
+  }))
+  const [adjustmentSaveStatus, setAdjustmentSaveStatus] = useState('idle')
+  const [adjustmentMessage, setAdjustmentMessage] = useState('')
   const playerKey = String(player.id)
   const expandedContentId = `goalie-stats-${playerKey}`
   const effectiveStatus =
@@ -896,9 +1019,60 @@ function GoalieRow({
   const effectiveErrorMessage = errorMessage || summaryErrorMessage
   const handleToggle = () => onToggle(player)
   const handleKeyDown = (event) => {
+    if (event.target !== event.currentTarget) {
+      return
+    }
+
     if (event.key === 'Enter' || event.key === ' ') {
       event.preventDefault()
       handleToggle()
+    }
+  }
+  const openAdjustmentEditor = (event) => {
+    event.stopPropagation()
+    setAdjustmentDraft({
+      note: player.note ?? '',
+      ratingAdjustment: Number(player.ratingAdjustment ?? 0).toFixed(2),
+    })
+    setAdjustmentMessage('')
+    setAdjustmentSaveStatus('idle')
+    setIsEditingAdjustment(true)
+  }
+  const handleAdjustmentSave = async (event) => {
+    event.preventDefault()
+    event.stopPropagation()
+    const adjustment = Number(adjustmentDraft.ratingAdjustment)
+
+    if (!Number.isFinite(adjustment) || adjustment < -5 || adjustment > 5) {
+      setAdjustmentSaveStatus('error')
+      setAdjustmentMessage('Use a finite adjustment from -5.00 to +5.00.')
+      return
+    }
+
+    if (Math.abs(adjustment / 0.05 - Math.round(adjustment / 0.05)) > 1e-8) {
+      setAdjustmentSaveStatus('error')
+      setAdjustmentMessage('Use 0.05 increments.')
+      return
+    }
+
+    setAdjustmentSaveStatus('saving')
+    setAdjustmentMessage('')
+
+    try {
+      if (adjustment === 0 && !adjustmentDraft.note.trim()) {
+        await onDeleteAdjustment(player)
+      } else {
+        await onSaveAdjustment(player, {
+          note: adjustmentDraft.note.trim(),
+          ratingAdjustment: adjustment,
+        })
+      }
+
+      setAdjustmentSaveStatus('success')
+      setIsEditingAdjustment(false)
+    } catch (error) {
+      setAdjustmentSaveStatus('error')
+      setAdjustmentMessage(error.message)
     }
   }
 
@@ -910,7 +1084,13 @@ function GoalieRow({
       aria-expanded={isExpanded}
       aria-controls={expandedContentId}
       aria-label={`${player.fullName} goalie statistics`}
-      onClick={handleToggle}
+      onClick={(event) => {
+        if (event.target.closest('button, input')) {
+          return
+        }
+
+        handleToggle()
+      }}
       onKeyDown={handleKeyDown}
     >
       <div className="player-headshot">
@@ -942,7 +1122,43 @@ function GoalieRow({
           <strong>{quickStat}</strong>
         )}
       </div>
+      <div className="goalie-rating-adjustment">
+        <span>Adjustment</span>
+        <strong>
+          {Number(player.ratingAdjustment ?? 0) > 0 ? '+' : ''}
+          {Number(player.ratingAdjustment ?? 0).toFixed(2)}
+        </strong>
+      </div>
+      <button
+        className="goalie-adjustment-edit-button"
+        disabled={adjustmentStatus === 'loading'}
+        type="button"
+        onClick={openAdjustmentEditor}
+      >
+        Edit
+      </button>
       <ChevronDown className="goalie-chevron" aria-hidden="true" />
+
+      {isEditingAdjustment ? (
+        <GoalieAdjustmentEditor
+          draft={adjustmentDraft}
+          errorMessage={adjustmentMessage || adjustmentErrorMessage}
+          goalieName={player.fullName}
+          isSaving={adjustmentSaveStatus === 'saving'}
+          onCancel={(event) => {
+            event.stopPropagation()
+            setIsEditingAdjustment(false)
+            setAdjustmentMessage('')
+          }}
+          onChange={(field, value) =>
+            setAdjustmentDraft((currentDraft) => ({
+              ...currentDraft,
+              [field]: value,
+            }))
+          }
+          onSubmit={handleAdjustmentSave}
+        />
+      ) : null}
 
       {isExpanded ? (
         <GoalieExpandedStats
@@ -957,6 +1173,63 @@ function GoalieRow({
         />
       ) : null}
     </article>
+  )
+}
+
+export function GoalieAdjustmentEditor({
+  draft,
+  errorMessage,
+  goalieName,
+  isSaving,
+  onCancel,
+  onChange,
+  onSubmit,
+}) {
+  return (
+    <form
+      className="goalie-adjustment-editor"
+      aria-label={`Edit ${goalieName} adjustment`}
+      onClick={(event) => event.stopPropagation()}
+      onSubmit={onSubmit}
+    >
+      <label className="field">
+        <span>Goalie adjustment</span>
+        <input
+          inputMode="decimal"
+          max="5"
+          min="-5"
+          required
+          step="0.05"
+          type="number"
+          value={draft.ratingAdjustment}
+          onChange={(event) =>
+            onChange('ratingAdjustment', event.target.value)
+          }
+        />
+      </label>
+      <label className="field">
+        <span>Optional note</span>
+        <input
+          maxLength="300"
+          type="text"
+          value={draft.note}
+          onChange={(event) => onChange('note', event.target.value)}
+        />
+      </label>
+      <div className="goalie-adjustment-editor-actions">
+        <button type="button" onClick={onCancel}>
+          Cancel
+        </button>
+        <button disabled={isSaving} type="submit">
+          {isSaving ? 'Saving...' : 'Save'}
+        </button>
+      </div>
+      {errorMessage ? (
+        <p className="field-error" role="alert">
+          {errorMessage}
+        </p>
+      ) : null}
+    </form>
   )
 }
 

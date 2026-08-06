@@ -27,7 +27,22 @@ const updateGameContextOverrides = async (request, response, next) => {
   }
 }
 
+const updateGameGoalieSelections = async (request, response, next) => {
+  try {
+    const result = await gameContextService.updateGameGoalieSelections(
+      request.user.id,
+      request.params.gameId,
+      request.body,
+    )
+
+    response.json(result)
+  } catch (error) {
+    next(error)
+  }
+}
+
 module.exports = {
   getGameContexts,
   updateGameContextOverrides,
+  updateGameGoalieSelections,
 }

@@ -9,6 +9,9 @@ const {
   normalizeOverridePayload,
   roundAdjustment,
 } = require('./gameContextRules')
+const {
+  normalizeGameGoalieSelection,
+} = require('./gameGoalieSelectionService')
 
 const MAX_BULK_GAMES = 30
 const GAME_CONTEXT_MUTABLE_FIELDS = Object.freeze([
@@ -19,6 +22,7 @@ const GAME_CONTEXT_MUTABLE_FIELDS = Object.freeze([
   'awayTeam',
   'homeContext',
   'awayContext',
+  'goalieSelections',
   'sourceVersion',
   'lastCalculatedAt',
 ])
@@ -399,6 +403,108 @@ const updateGameContextOverrides = async (
   }
 }
 
+const updateGameGoalieSelections = async (
+  userId,
+  gameId,
+  payload = {},
+  options = {},
+) => {
+  if (!userId) {
+    throw new GameContextError('Authenticated userId is required.', 401)
+  }
+
+  const normalizedGameId = String(gameId ?? '').trim()
+
+  if (!normalizedGameId) {
+    throw new GameContextError('gameId is required.', 400, { field: 'gameId' })
+  }
+
+  if (!payload || Array.isArray(payload) || typeof payload !== 'object') {
+    throw new GameContextError('Request body must be an object.', 400)
+  }
+
+  const supportedSides = ['away', 'home']
+  const unsupportedFields = Object.keys(payload).filter(
+    (field) => !supportedSides.includes(field),
+  )
+
+  if (unsupportedFields.length > 0) {
+    throw new GameContextError(
+      'Request body contains unsupported goalie selection fields.',
+      400,
+      { unsupportedFields },
+    )
+  }
+
+  const selectedSides = supportedSides.filter((side) =>
+    Object.hasOwn(payload, side),
+  )
+
+  if (selectedSides.length === 0) {
+    throw new GameContextError(
+      'At least one goalie selection is required.',
+      400,
+    )
+  }
+
+  const contextModel = getContextModel(options)
+  const existingDocument = await contextModel.findOne({
+    gameId: normalizedGameId,
+    userId,
+  })
+  const existingContext = asPlainDocument(existingDocument) ?? {}
+  const normalizedSelections = await Promise.all(
+    selectedSides.map(async (side) => {
+      const expectedTeam = existingContext[`${side}Team`] ?? {}
+      const expectedTeamId =
+        expectedTeam.teamId ?? expectedTeam.abbreviation ?? ''
+      const selection = await normalizeGameGoalieSelection(
+        userId,
+        payload[side],
+        {
+          existingSelection: existingContext.goalieSelections?.[side],
+          expectedTeamId,
+          getRosterForTeam: options.getRosterForTeam,
+          goalieAdjustmentModel: options.goalieAdjustmentModel,
+          legacyTeamGoaliesModel: options.legacyTeamGoaliesModel,
+          side,
+        },
+      )
+
+      return [side, selection]
+    }),
+  )
+  const updates = Object.fromEntries(
+    normalizedSelections.map(([side, selection]) => [
+      `goalieSelections.${side}`,
+      selection,
+    ]),
+  )
+  const document = await contextModel.findOneAndUpdate(
+    { gameId: normalizedGameId, userId },
+    {
+      $set: updates,
+      $setOnInsert: {
+        gameId: normalizedGameId,
+        lastCalculatedAt: new Date(0),
+        sourceVersion: 'game-context-v1',
+        userId,
+      },
+    },
+    {
+      new: true,
+      runValidators: true,
+      setDefaultsOnInsert: true,
+      upsert: true,
+    },
+  )
+
+  return {
+    context: serializeContext(document),
+    success: true,
+  }
+}
+
 module.exports = {
   GAME_CONTEXT_MUTABLE_FIELDS,
   MAX_BULK_GAMES,
@@ -408,5 +514,6 @@ module.exports = {
   getScheduleRangeForGames,
   loadScheduleGamesForContext,
   updateGameContextOverrides,
+  updateGameGoalieSelections,
   validateGamesPayload,
 }

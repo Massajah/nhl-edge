@@ -7,6 +7,11 @@ import {
   parseMarketOdds,
 } from './calculateGame.js'
 import { createGameContextSnapshot } from './gameContext.js'
+import {
+  createGoalieSelectionPayload,
+  getGoalieSelectionFromInputs,
+  normalizeGoalieSelection,
+} from './goalies.js'
 
 export const SAVED_ANALYSES_STORAGE_KEY = 'nhl-edge-saved-analyses'
 
@@ -99,21 +104,38 @@ const normalizeResult = (result) =>
 
 const normalizeStake = (stake) => Math.max(toNumber(stake, DEFAULT_STAKE), 0)
 
-const normalizeAdjustments = (values = {}) => ({
-  baseRating: toNumber(values.baseRating),
-  marketOdds: toOdds(values.marketOdds),
-  homeAdvantage: toNumber(values.homeAdvantage),
-  storedInjuryImpact: toNumber(values.storedInjuryImpact),
-  injuries: toNumber(values.injuries),
-  goalieAdjustment: toNumber(values.goalieAdjustment),
-  selectedGoalieId: toText(values.selectedGoalieId, ''),
-  selectedGoalieName: toText(values.selectedGoalieName, ''),
-  recentForm: toNumber(values.recentForm ?? values.restFatigue),
-  restFatigue: toNumber(values.restFatigue ?? values.recentForm),
-  quickRematchAdjustment: toNumber(values.quickRematchAdjustment),
-  motivation: toNumber(values.motivation),
-  manualAdjustment: toNumber(values.manualAdjustment),
-})
+const normalizeAdjustments = (values = {}) => {
+  const goalieSelection = getGoalieSelectionFromInputs(
+    values,
+    values.goalieTeamId,
+  )
+
+  return {
+    baseRating: toNumber(values.baseRating),
+    marketOdds: toOdds(values.marketOdds),
+    homeAdvantage: toNumber(values.homeAdvantage),
+    storedInjuryImpact: toNumber(values.storedInjuryImpact),
+    injuries: toNumber(values.injuries),
+    goalieAdjustment: toNumber(values.goalieAdjustment),
+    selectedGoalieId: toText(values.selectedGoalieId, ''),
+    selectedGoalieName: toText(values.selectedGoalieName, ''),
+    goalieSelectionType: goalieSelection.selectionType,
+    goalieSource: goalieSelection.source,
+    goalieConfirmationStatus: goalieSelection.confirmationStatus,
+    goalieTeamId: goalieSelection.teamId,
+    teamGoalieId: goalieSelection.teamGoalieId ?? '',
+    goalieNhlPlayerId: goalieSelection.nhlPlayerId,
+    goalieCustomNote: goalieSelection.customNote,
+    goalieTeamDefaultAdjustment: goalieSelection.teamDefaultAdjustment,
+    goalieManualAdjustment: goalieSelection.manualAdjustment,
+    goalieOverrideEnabled: goalieSelection.overrideEnabled,
+    recentForm: toNumber(values.recentForm ?? values.restFatigue),
+    restFatigue: toNumber(values.restFatigue ?? values.recentForm),
+    quickRematchAdjustment: toNumber(values.quickRematchAdjustment),
+    motivation: toNumber(values.motivation),
+    manualAdjustment: toNumber(values.manualAdjustment),
+  }
+}
 
 export const getRecommendedSide = (analysis) => {
   const homeModelStatus =
@@ -435,6 +457,10 @@ export const createBetPayloadFromGameAnalysis = ({
     ratingDifference: result.ratingDifference,
     ...selectedAdjustmentSnapshot,
     ...createSelectedGoalieSnapshot(selectedInputs, selectedGoalieStats),
+    goalieSelectionSnapshot: createGoalieSelectionPayload(
+      selectedInputs,
+      selectedTeam.id,
+    ),
     gameContextSnapshot: createGameContextSnapshot(gameContextSnapshot),
     stake: normalizeStake(stake),
     stakeType: 'units',
@@ -597,6 +623,10 @@ export const createBetPayloadFromSavedAnalysis = (analysis) => {
     ratingDifference: normalized.homeFinalRating - normalized.awayFinalRating,
     ...selectedAdjustmentSnapshot,
     selectedGoalieName: toText(selectedAdjustments.selectedGoalieName, ''),
+    goalieSelectionSnapshot: createGoalieSelectionPayload(
+      selectedAdjustments,
+      selectedTeam.id,
+    ),
     selectedGoalieSavePercentage: null,
     selectedGoalieGamesPlayed: null,
     selectedGoalieGamesStarted: null,
@@ -655,6 +685,31 @@ export const normalizeBet = (bet = {}) => {
   const selectedGoalieFallback = toText(
     bet.adjustments?.[`${selectedAdjustmentPrefix}GoalieName`],
     '',
+  )
+  const legacyGoalieName = toText(
+    bet.selectedGoalieName,
+    selectedGoalieFallback,
+  )
+  const legacyGoalieAdjustment =
+    toNullableNumber(bet.goalieAdjustment) ??
+    toNullableNumber(bet.adjustments?.[`${selectedAdjustmentPrefix}Goalie`]) ??
+    0
+  const hasLegacyGoalieSelection =
+    Boolean(legacyGoalieName) || Math.abs(legacyGoalieAdjustment) >= 0.005
+  const goalieSelectionSnapshot = normalizeGoalieSelection(
+    bet.goalieSelectionSnapshot ?? {
+      confirmationStatus: hasLegacyGoalieSelection ? 'expected' : 'unknown',
+      effectiveAdjustment: legacyGoalieAdjustment,
+      goalieName: legacyGoalieName,
+      manualAdjustment: hasLegacyGoalieSelection
+        ? legacyGoalieAdjustment
+        : null,
+      overrideEnabled: hasLegacyGoalieSelection,
+      selectionType: hasLegacyGoalieSelection ? 'custom' : 'unknown',
+      source: hasLegacyGoalieSelection ? 'custom' : 'unknown',
+      teamId: bet.selectedSide?.teamId,
+    },
+    bet.selectedSide?.teamId,
   )
   const marketOdds = toNullableOdds(bet.marketOdds)
   const expectedValue = toNullableNumber(bet.expectedValue)
@@ -767,12 +822,16 @@ export const normalizeBet = (bet = {}) => {
       toNullableNumber(
         bet.adjustments?.[`${selectedAdjustmentPrefix}ManualAdjustment`],
       ),
-    selectedGoalieName: toText(bet.selectedGoalieName, selectedGoalieFallback),
+    selectedGoalieName: toText(
+      bet.selectedGoalieName,
+      goalieSelectionSnapshot.goalieName || selectedGoalieFallback,
+    ),
     selectedGoalieSavePercentage: toNullableNumber(
       bet.selectedGoalieSavePercentage,
     ),
     selectedGoalieGamesPlayed: toNullableNumber(bet.selectedGoalieGamesPlayed),
     selectedGoalieGamesStarted: toNullableNumber(bet.selectedGoalieGamesStarted),
+    goalieSelectionSnapshot,
     stake: normalizeStake(bet.stake),
     stakeType: toText(bet.stakeType, 'units'),
     sportsbook: toText(bet.sportsbook, ''),

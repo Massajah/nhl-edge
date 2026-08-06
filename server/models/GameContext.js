@@ -22,6 +22,88 @@ const teamSchema = new mongoose.Schema(
   { _id: false },
 )
 
+const goalieSelectionSchema = new mongoose.Schema(
+  {
+    selectionType: {
+      type: String,
+      enum: ['provider_goalie', 'team_goalie', 'custom', 'unknown'],
+      default: 'unknown',
+    },
+    teamId: {
+      type: String,
+      trim: true,
+      uppercase: true,
+      default: '',
+    },
+    teamGoalieId: {
+      type: String,
+      trim: true,
+      default: null,
+    },
+    nhlPlayerId: {
+      type: Number,
+      default: null,
+    },
+    goalieName: {
+      type: String,
+      trim: true,
+      maxlength: 120,
+      default: '',
+    },
+    displayName: {
+      type: String,
+      trim: true,
+      maxlength: 120,
+      default: '',
+    },
+    customNote: {
+      type: String,
+      trim: true,
+      maxlength: 300,
+      default: '',
+    },
+    source: {
+      type: String,
+      enum: [
+        'provider_goalie',
+        'team_goalie',
+        'team_roster',
+        'custom',
+        'unknown',
+      ],
+      default: 'unknown',
+    },
+    confirmationStatus: {
+      type: String,
+      enum: ['unknown', 'selected', 'expected', 'confirmed'],
+      default: 'unknown',
+    },
+    teamDefaultAdjustment: {
+      type: Number,
+      min: -5,
+      max: 5,
+      default: null,
+    },
+    manualAdjustment: {
+      type: Number,
+      min: -5,
+      max: 5,
+      default: null,
+    },
+    overrideEnabled: {
+      type: Boolean,
+      default: false,
+    },
+    effectiveAdjustment: {
+      type: Number,
+      min: -5,
+      max: 5,
+      default: 0,
+    },
+  },
+  { _id: false },
+)
+
 const quickRematchContextSchema = new mongoose.Schema(
   {
     eligible: {
@@ -286,6 +368,16 @@ const gameContextSchema = new mongoose.Schema(
     awayContext: {
       type: teamGameContextSchema,
       default: () => ({}),
+    },
+    goalieSelections: {
+      away: {
+        type: goalieSelectionSchema,
+        default: () => ({}),
+      },
+      home: {
+        type: goalieSelectionSchema,
+        default: () => ({}),
+      },
     },
     sourceVersion: {
       type: String,

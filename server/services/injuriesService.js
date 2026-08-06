@@ -1,7 +1,10 @@
-const path = require('path')
-const { pathToFileURL } = require('url')
 const mongoose = require('mongoose')
 const Injury = require('../models/Injury')
+const {
+  getKnownTeamById,
+  getKnownTeams,
+  normalizeTeamIdentifier,
+} = require('./teamCatalogService')
 
 const INJURY_STATUSES = Injury.INJURY_STATUSES
 const DURATION_TYPES = Injury.DURATION_TYPES
@@ -17,6 +20,7 @@ const CREATE_FIELDS = [
   'expectedReturn',
   'notes',
   'active',
+  'isGoalie',
 ]
 const UPDATE_FIELDS = [
   'playerName',
@@ -27,9 +31,8 @@ const UPDATE_FIELDS = [
   'expectedReturn',
   'notes',
   'active',
+  'isGoalie',
 ]
-
-let teamsPromise = null
 
 class InjuriesError extends Error {
   constructor(message, statusCode = 500, details = undefined) {
@@ -41,8 +44,7 @@ class InjuriesError extends Error {
   }
 }
 
-const normalizeIdentifier = (value) =>
-  typeof value === 'string' ? value.trim().toUpperCase() : ''
+const normalizeIdentifier = normalizeTeamIdentifier
 
 const toObjectId = (userId) => new mongoose.Types.ObjectId(userId)
 
@@ -61,32 +63,16 @@ const toNumber = (value, field) => {
   return parsedValue
 }
 
-const getTeams = async () => {
-  if (!teamsPromise) {
-    const teamsPath = path.resolve(__dirname, '../../client/src/data/teams.js')
-    const teamsUrl = pathToFileURL(teamsPath).href
-
-    teamsPromise = import(teamsUrl).then(({ NHL_TEAMS }) => {
-      if (!Array.isArray(NHL_TEAMS) || NHL_TEAMS.length === 0) {
-        throw new InjuriesError('Unable to load NHL team data.', 500)
-      }
-
-      return NHL_TEAMS.map((team) => ({
-        teamId: normalizeIdentifier(team.id),
-        teamName: team.name,
-        teamAbbreviation: normalizeIdentifier(team.abbreviation),
-      }))
-    })
+const toBoolean = (value, field, fallback) => {
+  if (value === undefined) {
+    return fallback
   }
 
-  return teamsPromise
-}
+  if (typeof value !== 'boolean') {
+    throw new InjuriesError(`${field} must be true or false.`, 400, { field })
+  }
 
-const getTeamById = async (teamId) => {
-  const normalizedTeamId = normalizeIdentifier(teamId)
-  const teams = await getTeams()
-
-  return teams.find((team) => team.teamId === normalizedTeamId)
+  return value
 }
 
 const assertSupportedFields = (payload, allowedFields) => {
@@ -144,7 +130,7 @@ const normalizeCreatePayload = async (payload = {}) => {
 
   assertSupportedFields(payload, CREATE_FIELDS)
 
-  const team = await getTeamById(payload.teamId)
+  const team = await getKnownTeamById(payload.teamId)
 
   if (!team) {
     throw new InjuriesError('teamId must match a known NHL team.', 400, {
@@ -171,7 +157,8 @@ const normalizeCreatePayload = async (payload = {}) => {
     durationType: normalizeDurationType(payload.durationType ?? 'unknown'),
     expectedReturn: toText(payload.expectedReturn),
     notes: toText(payload.notes),
-    active: payload.active ?? true,
+    active: toBoolean(payload.active, 'active', true),
+    isGoalie: toBoolean(payload.isGoalie, 'isGoalie', false),
   }
 }
 
@@ -217,8 +204,14 @@ const normalizeUpdatePayload = (payload = {}) => {
       return updates
     }
 
-    if (field === 'active') {
-      updates.active = Boolean(payload.active)
+    if (field === 'active' || field === 'isGoalie') {
+      if (typeof payload[field] !== 'boolean') {
+        throw new InjuriesError(`${field} must be true or false.`, 400, {
+          field,
+        })
+      }
+
+      updates[field] = payload[field]
       return updates
     }
 
@@ -319,9 +312,7 @@ const deleteInjury = async (userId, id) => {
   return serializeInjury(deletedInjury)
 }
 
-const getTeamInjurySummary = async (userId) => {
-  const teams = await getTeams()
-  const summaryRows = await Injury.aggregate([
+const buildTeamInjurySummaryPipeline = (userId) => [
     {
       $match: {
         active: true,
@@ -333,15 +324,29 @@ const getTeamInjurySummary = async (userId) => {
       $group: {
         _id: '$teamId',
         activeInjuries: { $sum: 1 },
-        totalImpact: { $sum: '$impact' },
+        goalieInjuries: {
+          $sum: { $cond: [{ $eq: ['$isGoalie', true] }, 1, 0] },
+        },
+        totalImpact: {
+          $sum: {
+            $cond: [{ $eq: ['$isGoalie', true] }, 0, '$impact'],
+          },
+        },
       },
     },
-  ])
+  ]
+
+const getTeamInjurySummary = async (userId) => {
+  const teams = await getKnownTeams()
+  const summaryRows = await Injury.aggregate(
+    buildTeamInjurySummaryPipeline(userId),
+  )
   const summaryByTeamId = new Map(
     summaryRows.map((row) => [
       row._id,
       {
         activeInjuries: row.activeInjuries,
+        goalieInjuries: row.goalieInjuries,
         totalImpact: row.totalImpact,
       },
     ]),
@@ -352,16 +357,20 @@ const getTeamInjurySummary = async (userId) => {
     teamName: team.teamName,
     teamAbbreviation: team.teamAbbreviation,
     activeInjuries: summaryByTeamId.get(team.teamId)?.activeInjuries ?? 0,
+    goalieInjuries: summaryByTeamId.get(team.teamId)?.goalieInjuries ?? 0,
     totalImpact: summaryByTeamId.get(team.teamId)?.totalImpact ?? 0,
   }))
 }
 
 module.exports = {
   InjuriesError,
+  buildTeamInjurySummaryPipeline,
   createInjury,
   deleteInjury,
   getInjuries,
   getTeamInjuries,
   getTeamInjurySummary,
+  normalizeCreatePayload,
+  normalizeUpdatePayload,
   updateInjury,
 }

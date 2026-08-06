@@ -48,6 +48,37 @@ Protected user-specific routes:
 - `PUT /api/settings/bookmakers`
 - `GET /api/market-odds/nhl?date=YYYY-MM-DD&refresh=true|false`
 - `GET /api/market-odds/status`
+- `GET /api/teams/:teamId/goalie-adjustments`
+- `PUT /api/teams/:teamId/goalie-adjustments/:nhlPlayerId`
+- `DELETE /api/teams/:teamId/goalie-adjustments/:nhlPlayerId`
+- `PATCH /api/game-context/:gameId/goalies`
+
+## Provider Goalie Adjustments
+
+The existing NHL roster service is authoritative for current team goalies.
+Authenticated users store only a mapping keyed by canonical team ID and NHL
+player ID, with a model adjustment from `-5.00` to `+5.00` in `0.05`
+increments plus an optional note and nullable active override. A provider
+goalie with no mapping has an implicit `0.00` adjustment and creates no
+database record. The API never accepts a client-provided owner ID, and the
+`{ userId, teamId, nhlPlayerId }` mapping is unique.
+
+Legacy user-maintained goalie documents remain readable for compatibility.
+Rows with a valid NHL player ID are normalized onto matching current provider
+goalies; unmatched manual rows are excluded from current roster choices.
+Historical game-context and bet snapshots retain legacy status values and are
+normalized for display without being rewritten.
+
+Game-specific starting-goalie selections live in the existing `GameContext`.
+Selections snapshot the provider goalie identity, team default, any game
+override, effective adjustment, display name, and source. Custom and unknown
+selections remain game-specific. Later adjustment edits therefore do not
+rewrite saved game contexts or bet snapshots.
+
+Injury records can be explicitly flagged with `isGoalie`. Flagged records stay
+visible and count as active injury records, but their point impact is excluded
+from the regular injury aggregate so the Analyzer goalie adjustment is not
+counted twice. Legacy injury records are not guessed or reclassified.
 
 ## Market Odds Phase 1
 
@@ -121,6 +152,35 @@ Public NHL data routes:
 - `/api/teams/:teamAbbreviation/goalie-summaries`
 - `/api/teams/:teamAbbreviation/stats`
 - `/api/players/:playerId/goalie-stats`
+
+## Team Model Values Phase 1
+
+Authenticated Team Details lineup notes use one current `TeamLineup` document
+per `userId + teamId`. The client never sends `userId`; every operation uses the
+authenticated token and the canonical NHL team identity shared with goalie
+adjustments.
+
+Protected endpoints:
+
+- `GET /api/teams/:teamId/model-values` returns the current user's saved values
+  or a fixed empty four-line/three-pair shape.
+- `PUT /api/teams/:teamId/model-values/lines` upserts four optional forward
+  lines, three optional defense pairs, and one optional plain-text lineup note.
+- `DELETE /api/teams/:teamId/model-values/lines` clears positions and the note.
+
+Selections store NHL player IDs, not authoritative player names. Current
+provider forwards validate forward slots and current provider defensemen
+validate defense slots. Previously saved IDs remain readable and may be saved
+unchanged if a player later disappears from the provider roster, allowing the
+client to display an unavailable-player fallback and let the user clear or
+replace it.
+
+Team Model Values are personal notes only. They are not read by Power Ratings,
+Dashboard, Game Analyzer, Game Context, injuries, goalie adjustments,
+special-teams calculations, Bet Candidate logic, Kelly sizing, or saved bets.
+Phase 1 has no PP/PK units, automatic lineup feed, historical versions,
+game-specific lineups, or lineup automation. Provider goalie adjustments
+remain a separate persisted feature and retain their existing model effects.
 
 ## Power Rating Updates
 

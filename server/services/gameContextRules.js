@@ -2,6 +2,9 @@ const {
   DEFAULT_QUICK_REMATCH_SETTINGS,
   normalizeScheduleAdjustmentSettings,
 } = require('./quickRematchSettingsService')
+const {
+  normalizePersistedGoalieSelection,
+} = require('./gameGoalieSelectionService')
 
 const SOURCE_VERSION = 'game-context-v1'
 const MS_PER_HOUR = 60 * 60 * 1000
@@ -1229,6 +1232,16 @@ const calculateGameContextForGame = ({
     awayTeam: serializeTeam(normalizedGame.awayTeam),
     gameId: normalizedGame.gameId,
     gameState: normalizedGame.gameState,
+    goalieSelections: {
+      away: normalizePersistedGoalieSelection(
+        existingContext.goalieSelections?.away,
+        getTeamKey(normalizedGame.awayTeam),
+      ),
+      home: normalizePersistedGoalieSelection(
+        existingContext.goalieSelections?.home,
+        getTeamKey(normalizedGame.homeTeam),
+      ),
+    },
     homeContext,
     homeTeam: serializeTeam(normalizedGame.homeTeam),
     lastCalculatedAt,

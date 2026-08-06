@@ -25,3 +25,12 @@ export const updateGameContextOverrides = async (gameId, overrides) =>
     body: JSON.stringify(overrides),
     method: 'PATCH',
   })
+
+export const updateGameGoalieSelections = async (gameId, selections) =>
+  requestGameContext(
+    `/api/game-context/${encodeURIComponent(gameId)}/goalies`,
+    {
+      body: JSON.stringify(selections),
+      method: 'PATCH',
+    },
+  )

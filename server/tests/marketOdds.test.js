@@ -506,6 +506,7 @@ test('missing configuration is graceful and safe status never exposes a key', as
   const service = createMarketOddsService({
     getConfig: () => createConfig({ apiKey: '' }),
     getGamesForDate: async () => createSchedule(),
+    now: () => Date.parse(NOW_ISO),
     provider: { fetchNhlOdds: async () => assert.fail('provider called') },
   })
   const result = await service.getNhlMarketOdds({ date: '2026-08-03' })

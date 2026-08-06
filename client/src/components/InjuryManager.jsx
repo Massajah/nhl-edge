@@ -36,6 +36,7 @@ const emptyDraft = {
   injuryType: '',
   expectedReturn: '',
   notes: '',
+  isGoalie: false,
 }
 
 const isCountingInjury = (injury) => injury.active && injury.status !== 'healthy'
@@ -53,6 +54,7 @@ const getDraftFromInjury = (injury) =>
         injuryType: injury.injuryType,
         expectedReturn: injury.expectedReturn,
         notes: injury.notes,
+        isGoalie: injury.isGoalie === true,
       }
     : emptyDraft
 
@@ -561,6 +563,7 @@ function InjuryPlayerRow({ injury, onEdit, onMarkHealthy }) {
       <span role="cell">{injury.expectedReturn || 'TBD'}</span>
       <strong className="injury-impact-value" role="cell">
         {formatInjuryImpact(injury.impact)}
+        {injury.isGoalie ? <small>Excluded from model</small> : null}
       </strong>
       <div className="injury-row-actions" role="cell">
         <button
@@ -745,6 +748,21 @@ function InjuryEditorModal({
               />
             </label>
           </div>
+
+          <label className="toggle-field injury-goalie-flag">
+            <input
+              type="checkbox"
+              checked={draft.isGoalie}
+              onChange={(event) =>
+                handleDraftChange('isGoalie', event.target.checked)
+              }
+            />
+            <span>Goalie availability record</span>
+            <small>
+              Preserved for reference but excluded from injury model impact;
+              select the starting goalie in Analyzer instead.
+            </small>
+          </label>
 
           <div className="injury-note-control">
             <button

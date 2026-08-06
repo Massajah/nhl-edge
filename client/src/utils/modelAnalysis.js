@@ -8,6 +8,11 @@ import {
 import { getTeamInjurySummary } from './injuries.js'
 import { applyGameContextToInputs } from './gameContext.js'
 import {
+  GOALIE_SELECTION_TYPES,
+  applyGameGoalieSelectionsToInputs,
+  getGoalieSelectionForSide,
+} from './goalies.js'
+import {
   getEffectiveHomeAdvantage,
   getTeamPowerRating,
 } from './powerRatings.js'
@@ -112,6 +117,17 @@ export const defaultGameInputs = {
     baseRating: 50,
     marketOdds: '',
     selectedGoalieId: '',
+    selectedGoalieName: '',
+    teamGoalieId: '',
+    goalieSelectionType: 'unknown',
+    goalieSource: 'unknown',
+    goalieConfirmationStatus: 'unknown',
+    goalieTeamId: '',
+    goalieNhlPlayerId: null,
+    goalieCustomNote: '',
+    goalieTeamDefaultAdjustment: null,
+    goalieManualAdjustment: null,
+    goalieOverrideEnabled: false,
     storedInjuryImpact: 0,
     homeAdvantage: 0,
     injuries: 0,
@@ -125,6 +141,17 @@ export const defaultGameInputs = {
     baseRating: 50,
     marketOdds: '',
     selectedGoalieId: '',
+    selectedGoalieName: '',
+    teamGoalieId: '',
+    goalieSelectionType: 'unknown',
+    goalieSource: 'unknown',
+    goalieConfirmationStatus: 'unknown',
+    goalieTeamId: '',
+    goalieNhlPlayerId: null,
+    goalieCustomNote: '',
+    goalieTeamDefaultAdjustment: null,
+    goalieManualAdjustment: null,
+    goalieOverrideEnabled: false,
     storedInjuryImpact: 0,
     injuries: 0,
     goalieAdjustment: 0,
@@ -169,7 +196,11 @@ export const createInputsForTeams = (
     },
   }
 
-  return applyGameContextToInputs(inputs, gameContext)
+  return applyGameGoalieSelectionsToInputs(
+    applyGameContextToInputs(inputs, gameContext),
+    gameContext,
+    teams,
+  )
 }
 
 export const applyTeamRatingsToInputs = (
@@ -286,13 +317,25 @@ export const calculatePreliminaryAnalysis = ({
     homeMarket.modelStatus === MODEL_STATUSES.BELOW_THRESHOLD ||
     awayMarket.modelStatus === MODEL_STATUSES.BELOW_THRESHOLD
 
-  const defaultedInputFields = gameContext
+  const defaultedInputFields = (gameContext
     ? DEFAULTED_PRELIMINARY_INPUTS.filter(
         (field) =>
           !field.endsWith('.restFatigue') &&
           !field.endsWith('.quickRematchAdjustment'),
       )
     : DEFAULTED_PRELIMINARY_INPUTS
+  ).filter((field) => {
+    if (!field.endsWith('.goalieAdjustment')) {
+      return true
+    }
+
+    const side = field.startsWith('away.') ? 'away' : 'home'
+
+    return (
+      getGoalieSelectionForSide(gameContext, side, teams[side])
+        .selectionType === GOALIE_SELECTION_TYPES.UNKNOWN
+    )
+  })
 
   return {
     available: true,

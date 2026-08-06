@@ -47,6 +47,63 @@ Current limitations: no market consensus, de-vig, historical/opening odds,
 line movement, live updates, spreads, totals, props, polling, or betting
 automation.
 
+## Provider Goalie Adjustments and Analyzer Selection
+
+The Teams page uses the existing NHL provider roster as the authoritative
+goalie list. Each provider goalie row includes a compact inline editor for the
+authenticated user's model adjustment and optional note. Adjustments use the
+`-5.00` to `+5.00` range in `0.05` increments. Unedited goalies display an
+implicit `0.00` and do not create a database record; there is no separate Add
+goalie or user-maintained roster flow.
+
+Analyzer starts both teams at `Unknown starter` with a zero adjustment and does
+not auto-select a goalie. Each side lists every current provider goalie with
+its user adjustment, followed by `Other / Unlisted goalie` and `Unknown
+starter`. Provider selections can use the team default or one game-specific
+override. A custom name/note is optional, but its single game adjustment is
+required. Exactly one effective goalie adjustment per side reaches the shared
+calculation path.
+
+Scheduled-game choices save into the existing game context and appear on the
+Dashboard. Saved analyses and bets carry full immutable goalie-selection
+snapshots with `provider_goalie`, `custom`, or `unknown` provenance, so later
+default edits do not change historical display. Legacy goalie selections remain
+readable. Goalie injury records must be explicitly marked in Injury Manager to
+exclude them from regular injury impact; NHL Edge does not infer positions for
+legacy records.
+
+Current limitations: no automatic starter detection, depth-chart roles,
+automatic goalie ratings, scraping, projections, performance automation, or
+historical goalie analytics.
+
+## Team Model Values Phase 1
+
+Team Details includes a compact, user-maintained `Model Values` card after the
+provider Special Teams statistics and before the provider roster sections. It
+summarizes the existing goalie adjustments without duplicating their editor,
+plus all four optional forward lines, all three optional defense pairs, and the
+saved personal lineup note. The summary is read-only and has one shared
+`Manage Model Values` action. Forward Lines and Defense Pairs share a compact
+two-column summary on wide layouts and stack without horizontal scrolling on
+narrow screens.
+
+`Manage Model Values` opens one responsive modal with four optional forward
+lines, three optional defense pairs, Team Notes, and a read-only goalie summary
+that links to the existing provider goalie editor. Player selection uses NHL
+player IDs from the current provider roster: forwards are available in any
+LW/C/RW slot and defensemen are available in either LD/RD slot. Incomplete and
+empty rows are valid. If a previously saved player leaves the current roster,
+the saved ID is preserved and shown as unavailable until it is cleared or
+replaced. Duplicate selections show a non-blocking warning.
+
+These lineups are personal, authenticated, user-scoped notes. They do not
+affect Power Ratings, Dashboard preliminary analysis, Game Analyzer, injuries,
+goalie adjustments, special-teams ratings, Bet Candidate logic, Kelly sizing,
+or saved bets. Provider PP/PK statistics remain separate. Phase 1 has no PP/PK
+units, automatic lineup feed, historical versions, game-specific lineups, or
+lineup automation. Existing goalie adjustments remain separate and continue to
+affect the model through their existing calculation path.
+
 ## Manual Power Rating Updates
 
 Authenticated users can manually update persisted Power Ratings from the Power

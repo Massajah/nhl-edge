@@ -58,6 +58,7 @@ import {
   PROBABILITY_EDGE_HELP_TEXT,
 } from '../utils/calculateGame.js'
 import { formatSignedGameContextAdjustment } from '../utils/gameContext.js'
+import { formatGoalieSelectionSnapshot } from '../utils/goalies.js'
 import { formatLocalDateInputValue } from '../utils/powerRatingUpdates.js'
 
 const filterOptions = [
@@ -1860,9 +1861,14 @@ const createDetailRow = (label, value, title) =>
   hasDisplayValue(value) ? { label, title, value } : null
 
 const getGoalieDetail = (bet) => {
-  if (!bet.selectedGoalieName) {
+  const snapshot = bet.goalieSelectionSnapshot
+  const hasSnapshot = Boolean(snapshot?.selectionType)
+
+  if (!hasSnapshot && !bet.selectedGoalieName) {
     return null
   }
+
+  const goalieName = bet.selectedGoalieName || 'Other / Unlisted goalie'
 
   const goalieStats = [
     createDetailRow('SV%', formatSavePercentage(bet.selectedGoalieSavePercentage)),
@@ -1872,9 +1878,13 @@ const getGoalieDetail = (bet) => {
     .filter(Boolean)
     .map(({ label, value }) => `${label} ${value}`)
 
+  const snapshotDetail = hasSnapshot
+    ? formatGoalieSelectionSnapshot(snapshot, goalieName)
+    : goalieName
+
   return goalieStats.length
-    ? `${bet.selectedGoalieName} (${goalieStats.join(', ')})`
-    : bet.selectedGoalieName
+    ? `${snapshotDetail} (${goalieStats.join(', ')})`
+    : snapshotDetail
 }
 
 const getEffectiveRatingsDetail = (bet) => {

@@ -1,3 +1,5 @@
+import { normalizeGoalieSelection } from './goalies.js'
+
 const toNumber = (value, fallback = 0) => {
   if (value === null || value === '' || value === undefined) {
     return fallback
@@ -322,6 +324,16 @@ export const normalizeGameContext = (context = null) => {
     awayTeam: normalizeTeam(context.awayTeam),
     gameId: toText(context.gameId, ''),
     gameState: toText(context.gameState, ''),
+    goalieSelections: {
+      away: normalizeGoalieSelection(
+        context.goalieSelections?.away,
+        context.awayTeam?.teamId ?? context.awayTeam?.abbreviation,
+      ),
+      home: normalizeGoalieSelection(
+        context.goalieSelections?.home,
+        context.homeTeam?.teamId ?? context.homeTeam?.abbreviation,
+      ),
+    },
     homeContext: normalizeTeamGameContext(
       context.homeContext,
       context.homeTeam,
