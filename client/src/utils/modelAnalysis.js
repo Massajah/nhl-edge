@@ -263,6 +263,7 @@ export const calculatePreliminaryAnalysis = ({
   homeTeamId,
   marketOdds = {},
   powerRatings,
+  probabilityScale,
   injurySummaries = {},
   gameContext = null,
 }) => {
@@ -298,7 +299,7 @@ export const calculatePreliminaryAnalysis = ({
     baseHomeAdvantage,
     gameContext,
   )
-  const result = calculateGame(inputs.home, inputs.away)
+  const result = calculateGame(inputs.home, inputs.away, probabilityScale)
   const homeMarket = createMarketSide({
     fairOdds: result.homeFairOdds,
     marketOdds: marketOdds.home,

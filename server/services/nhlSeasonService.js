@@ -1,10 +1,17 @@
 const nhlApiService = require('./nhlApiService')
 const { getSeedTeams } = require('./powerRatingsService')
 const { NHL_GAME_TYPE_CODES } = require('./nhlGameEligibility')
+const {
+  buildSeasonId,
+  getSeasonLabel,
+  getSeasonStartYear,
+  normalizeSeasonId,
+} = require('./nhlSeasonIdentity')
 
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/
 const FALLBACK_METADATA_SOURCE = 'fallback'
 const NHL_API_METADATA_SOURCE = 'nhl-api'
+const TESTED_BOUNDARY_METADATA_SOURCE = 'tested-explicit'
 const DEFAULT_SEASON_COUNT = 5
 const SEASON_CACHE_TTL_MS = 12 * 60 * 60 * 1000
 
@@ -39,6 +46,11 @@ const FALLBACK_SEASONS = Object.freeze([
     startDate: '2021-10-12',
     endDate: '2022-04-29',
   },
+  {
+    id: '20202021',
+    startDate: '2021-01-13',
+    endDate: '2021-05-19',
+  },
 ])
 
 let availableSeasonsCache = null
@@ -64,21 +76,6 @@ const toOptionalFiniteNumber = (value) => {
   return Number.isFinite(numberValue) ? numberValue : null
 }
 
-const normalizeSeasonId = (seasonId) => {
-  const value = String(seasonId ?? '').trim()
-
-  return /^\d{8}$/.test(value) ? value : ''
-}
-
-const getSeasonStartYear = (seasonId) => {
-  const normalizedSeasonId = normalizeSeasonId(seasonId)
-
-  return normalizedSeasonId ? Number(normalizedSeasonId.slice(0, 4)) : null
-}
-
-const buildSeasonId = (startYear) =>
-  Number.isInteger(startYear) ? `${startYear}${startYear + 1}` : ''
-
 const buildPreviousSeasonIds = (seasonId, count) => {
   const startYear = getSeasonStartYear(seasonId)
 
@@ -95,16 +92,6 @@ const buildNextSeasonId = (seasonId) => {
   const startYear = getSeasonStartYear(seasonId)
 
   return Number.isInteger(startYear) ? buildSeasonId(startYear + 1) : ''
-}
-
-const getSeasonLabel = (seasonId) => {
-  const startYear = getSeasonStartYear(seasonId)
-
-  if (!Number.isInteger(startYear)) {
-    return ''
-  }
-
-  return `${startYear}\u2013${String(startYear + 1).slice(-2)}`
 }
 
 const parseDate = (value, field = 'date') => {
@@ -184,10 +171,12 @@ const buildFallbackSeasonFromId = (seasonId) => {
   }
 }
 
-const getFallbackBoundary = (seasonId) =>
-  normalizeSeasonBoundary(
+const getFallbackBoundary = (seasonId) => ({
+  ...normalizeSeasonBoundary(
     getFallbackSeasonById(seasonId) ?? buildFallbackSeasonFromId(seasonId),
-  )
+  ),
+  metadataSource: TESTED_BOUNDARY_METADATA_SOURCE,
+})
 
 const getGameDate = (game = {}) => {
   if (typeof game.gameDate === 'string' && DATE_PATTERN.test(game.gameDate)) {
@@ -313,16 +302,13 @@ const buildFallbackSeasons = ({ count = DEFAULT_SEASON_COUNT, today }) => {
     currentSeasonId,
     metadataSource: FALLBACK_METADATA_SOURCE,
     seasons: decorateCurrentSeason(seasons, currentSeasonId),
-    warning:
-      'Using fallback NHL regular-season boundaries because live season metadata was unavailable.',
+    warning: 'Season dates loaded from tested fallback metadata.',
   }
 }
 
 const buildNhlApiSeasons = async ({
-  clubScheduleSeasonProvider,
   count = DEFAULT_SEASON_COUNT,
   currentSeasonContextProvider = nhlApiService.getCurrentSeasonContext,
-  teamsProvider,
   today,
 }) => {
   const context = await currentSeasonContextProvider()
@@ -332,11 +318,7 @@ const buildNhlApiSeasons = async ({
     throw new NhlSeasonError('NHL API did not return a current season.')
   }
 
-  const currentBoundary = await deriveSeasonBoundaryFromSchedules({
-    clubScheduleSeasonProvider,
-    seasonId: apiCurrentSeasonId,
-    teamsProvider,
-  })
+  const currentBoundary = getFallbackBoundary(apiCurrentSeasonId)
   const todayDate = parseDate(today, 'today')
   const currentEnd = parseDate(currentBoundary.endDate, 'endDate')
   const effectiveCurrentSeasonId =
@@ -344,15 +326,7 @@ const buildNhlApiSeasons = async ({
       ? buildNextSeasonId(apiCurrentSeasonId)
       : apiCurrentSeasonId
   const seasonIds = buildSeasonIdList(effectiveCurrentSeasonId, count)
-  const seasons = await Promise.all(
-    seasonIds.map((seasonId) =>
-      deriveSeasonBoundaryFromSchedules({
-        clubScheduleSeasonProvider,
-        seasonId,
-        teamsProvider,
-      }),
-    ),
-  )
+  const seasons = seasonIds.map(getFallbackBoundary)
 
   return {
     currentSeasonId: effectiveCurrentSeasonId,
@@ -370,6 +344,7 @@ const normalizeAvailableSeasonsResponse = (response) => ({
     id: season.id,
     isCurrent: Boolean(season.isCurrent),
     label: season.label,
+    metadataSource: season.metadataSource ?? response.metadataSource,
     startDate: season.startDate,
   })),
   warning: response.warning ?? null,
@@ -398,10 +373,8 @@ const getAvailablePowerRatingHistorySeasons = async (options = {}) => {
   const buildResponse = async () => {
     try {
       return await buildNhlApiSeasons({
-        clubScheduleSeasonProvider: options.clubScheduleSeasonProvider,
         count: options.count,
         currentSeasonContextProvider: options.currentSeasonContextProvider,
-        teamsProvider: options.teamsProvider,
         today,
       })
     } catch {
@@ -441,6 +414,7 @@ module.exports = {
   FALLBACK_METADATA_SOURCE,
   FALLBACK_SEASONS,
   NHL_API_METADATA_SOURCE,
+  TESTED_BOUNDARY_METADATA_SOURCE,
   NhlSeasonError,
   buildFallbackSeasons,
   buildSeasonId,
@@ -448,5 +422,6 @@ module.exports = {
   getAvailablePowerRatingHistorySeasons,
   getSeasonForDate,
   getSeasonLabel,
+  normalizeSeasonId,
   normalizeSeasonBoundary,
 }

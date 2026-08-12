@@ -176,6 +176,29 @@ test('regular-season NHL club game is eligible', () => {
   assert.equal(eligibility.details.gameTypeLabel, 'regularSeason')
 })
 
+test('historical Arizona identity resolves to the current Utah franchise', () => {
+  const teamsById = makeTeamsById()
+  teamsById.set('UTA', {
+    abbreviation: 'UTA',
+    teamId: 'UTA',
+    teamName: 'Utah Mammoth',
+  })
+  const eligibility = classifyGameEligibility(
+    {
+      ...eligibilityFixtures.regularSeason,
+      awayTeam: {
+        ...eligibilityFixtures.regularSeason.awayTeam,
+        abbrev: 'ARI',
+        name: { default: 'Arizona Coyotes' },
+      },
+    },
+    makeEligibilityContext({ teamsById }),
+  )
+
+  assert.equal(eligibility.eligible, true)
+  assert.equal(eligibility.awayTeam.teamId, 'UTA')
+})
+
 test('playoff NHL club game is eligible', () => {
   const eligibility = classifyGameEligibility(
     eligibilityFixtures.playoff,

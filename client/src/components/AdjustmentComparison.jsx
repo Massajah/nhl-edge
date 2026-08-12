@@ -2,7 +2,13 @@ import { Info } from 'lucide-react'
 import {
   GOALIE_SELECTION_TYPES,
   getGoalieSelectionSourceLabel,
+  normalizeMaximumGoaliePenalty,
 } from '../utils/goalies.js'
+import { DEFAULT_MAXIMUM_GOALIE_PENALTY } from '../config/baseModel.js'
+import {
+  formatInjuryImpact,
+  getTeamInjurySummary,
+} from '../utils/injuries.js'
 
 const toNumber = (value) => {
   const parsedValue = Number(value)
@@ -38,8 +44,10 @@ function AdjustmentComparison({
   goalies,
   hasUnsavedGoalieChanges = false,
   homeTeam,
+  injurySummaries,
   inputs,
   isGameContextManaged = false,
+  maximumGoaliePenalty = DEFAULT_MAXIMUM_GOALIE_PENALTY,
   onChange,
   onGoalieChange,
   onRetryGoalies,
@@ -49,6 +57,14 @@ function AdjustmentComparison({
   const storedHomeInjuryImpact = toNumber(inputs.home.storedInjuryImpact)
   const awayGameInjuryImpact = toNumber(inputs.away.injuries)
   const homeGameInjuryImpact = toNumber(inputs.home.injuries)
+  const awayInjurySummary = getTeamInjurySummary(
+    injurySummaries,
+    awayTeam.id,
+  )
+  const homeInjurySummary = getTeamInjurySummary(
+    injurySummaries,
+    homeTeam.id,
+  )
 
   return (
     <section
@@ -76,9 +92,17 @@ function AdjustmentComparison({
         hasUnsavedChanges={hasUnsavedGoalieChanges}
         homeTeam={homeTeam}
         inputs={inputs}
+        maximumGoaliePenalty={maximumGoaliePenalty}
         onChange={onGoalieChange}
         onRetry={onRetryGoalies}
         onSave={onSaveGoalies}
+      />
+
+      <InjuryContextPanel
+        awaySummary={awayInjurySummary}
+        awayTeam={awayTeam}
+        homeSummary={homeInjurySummary}
+        homeTeam={homeTeam}
       />
 
       <div className="adjustment-comparison" role="table">
@@ -129,7 +153,10 @@ function AdjustmentComparison({
           />
         </AdjustmentRow>
 
-        <AdjustmentRow label="Game injury adjustment">
+        <AdjustmentRow
+          helpText="Use this only for cumulative or game-specific lineup effects not already included in the stored player injury impacts. Avoid double counting an absence already represented above."
+          label="Game injury adjustment"
+        >
           <NumberCell
             field="injuries"
             label="Game-specific injury adjustment"
@@ -298,6 +325,104 @@ function AdjustmentComparison({
   )
 }
 
+export function InjuryContextPanel({
+  awaySummary,
+  awayTeam,
+  homeSummary,
+  homeTeam,
+}) {
+  return (
+    <section
+      className="analyzer-injury-context"
+      aria-label="Active injury context"
+    >
+      <div className="analyzer-injury-context-heading">
+        <div>
+          <h3>Active injuries</h3>
+          <p>Player records behind each stored injury impact.</p>
+        </div>
+        <span>review context</span>
+      </div>
+      <div className="analyzer-injury-context-grid">
+        <InjuryContextCard summary={awaySummary} team={awayTeam} />
+        <InjuryContextCard summary={homeSummary} team={homeTeam} />
+      </div>
+    </section>
+  )
+}
+
+function InjuryContextCard({ summary = {}, team }) {
+  const injuries = Array.isArray(summary.injuries) ? summary.injuries : []
+  const skaterInjuries = injuries.filter((injury) => !injury.isGoalie)
+  const goalieInjuries = injuries.filter((injury) => injury.isGoalie)
+  const visibleSkaters = skaterInjuries.slice(0, 3)
+  const remainingSkaters = skaterInjuries.slice(3)
+
+  return (
+    <article className="analyzer-injury-card">
+      <header>
+        <strong>{team.name} injuries</strong>
+        <span>{injuries.length} active</span>
+      </header>
+
+      {injuries.length === 0 ? (
+        <p className="analyzer-injury-empty">No active injuries.</p>
+      ) : (
+        <div className="analyzer-injury-list">
+          {visibleSkaters.map((injury) => (
+            <AnalyzerInjuryRow injury={injury} key={injury.id || injury.playerName} />
+          ))}
+
+          {remainingSkaters.length > 0 ? (
+            <details className="analyzer-injury-more">
+              <summary>Show all injuries</summary>
+              {remainingSkaters.map((injury) => (
+                <AnalyzerInjuryRow
+                  injury={injury}
+                  key={injury.id || injury.playerName}
+                />
+              ))}
+            </details>
+          ) : null}
+
+          {goalieInjuries.length > 0 ? (
+            <div className="analyzer-goalie-injury-list">
+              {goalieInjuries.map((injury) => (
+                <div key={injury.id || injury.playerName}>
+                  <span>
+                    {injury.playerName} · {injury.position || 'G'}
+                  </span>
+                  <small>Goalie availability · excluded from injury impact</small>
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      )}
+
+      <footer>
+        <span>Stored injury impact</span>
+        <strong>{formatInjuryImpact(summary.totalImpact)}</strong>
+      </footer>
+    </article>
+  )
+}
+
+function AnalyzerInjuryRow({ injury }) {
+  const zeroImpact = Number(injury.impact) === 0
+
+  return (
+    <div
+      className={`analyzer-injury-row${zeroImpact ? ' zero-impact' : ''}`}
+    >
+      <span>
+        {injury.playerName} · {injury.position || 'Unknown'}
+      </span>
+      <strong>{formatInjuryImpact(injury.impact)}</strong>
+    </div>
+  )
+}
+
 function TeamColumnHeader({ label, team }) {
   return (
     <div className="adjustment-team-heading" role="columnheader">
@@ -398,18 +523,27 @@ export function GoalieSelectionPanel({
   hasUnsavedChanges,
   homeTeam,
   inputs,
+  maximumGoaliePenalty = DEFAULT_MAXIMUM_GOALIE_PENALTY,
   onChange,
   onRetry,
   onSave,
 }) {
   const isSaving = goalieSaveStatus === 'saving'
   const hasErrors = Boolean(errorMessages.away || errorMessages.home)
+  const configuredMaximum = normalizeMaximumGoaliePenalty(
+    maximumGoaliePenalty,
+  )
+  const goalieHelper =
+    `Goalie adjustment is relative to each team's normal starting goalie. ` +
+    `0.00 = baseline. Maximum penalty: ${configuredMaximum.toFixed(2)}.`
 
   return (
     <section className="analyzer-goalie-panel" aria-label="Starting goalies">
       <div className="analyzer-goalie-panel-heading">
         <div>
-          <h3>Starting goalies</h3>
+          <h3>
+            Starting goalies <InfoHint text={goalieHelper} />
+          </h3>
           <p>Exactly one goalie adjustment is applied for each team.</p>
         </div>
         <span>{hasUnsavedChanges ? 'Unsaved changes' : 'Game inputs'}</span>
@@ -422,6 +556,7 @@ export function GoalieSelectionPanel({
           goalieDataError={goalieErrors.away}
           goalieStatsByPlayerId={goalieStatsByPlayerId}
           label="Away"
+          maximumGoaliePenalty={configuredMaximum}
           onChange={onChange}
           onRetry={onRetry.away}
           side="away"
@@ -435,6 +570,7 @@ export function GoalieSelectionPanel({
           goalieDataError={goalieErrors.home}
           goalieStatsByPlayerId={goalieStatsByPlayerId}
           label="Home"
+          maximumGoaliePenalty={configuredMaximum}
           onChange={onChange}
           onRetry={onRetry.home}
           side="home"
@@ -480,6 +616,7 @@ function GoalieSelectionCard({
   goalies,
   goalieStatsByPlayerId,
   label,
+  maximumGoaliePenalty,
   onChange,
   onRetry,
   side,
@@ -487,6 +624,9 @@ function GoalieSelectionCard({
   team,
   values,
 }) {
+  const configuredMaximum = normalizeMaximumGoaliePenalty(
+    maximumGoaliePenalty,
+  )
   const selectionType = values.goalieSelectionType ?? 'unknown'
   const selectedGoalie = goalies.find(
     (goalie) => goalie.nhlPlayerId === Number(values.goalieNhlPlayerId),
@@ -589,8 +729,8 @@ function GoalieSelectionCard({
               aria-invalid={Boolean(errorMessage)}
               id={`analyzer-${side}-goalie-adjustment`}
               inputMode="decimal"
-              max="5"
-              min="-5"
+              max="0"
+              min={configuredMaximum}
               required
               step="0.05"
               type="number"

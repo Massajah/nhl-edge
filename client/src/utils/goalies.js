@@ -1,3 +1,8 @@
+import {
+  DEFAULT_MAXIMUM_GOALIE_PENALTY,
+  MAXIMUM_GOALIE_PENALTY_LIMITS,
+} from '../config/baseModel.js'
+
 export const GOALIE_SELECTION_TYPES = Object.freeze({
   CUSTOM: 'custom',
   PROVIDER: 'provider_goalie',
@@ -30,6 +35,47 @@ const toPositiveIntegerOrNull = (value) => {
   return Number.isSafeInteger(numberValue) && numberValue > 0
     ? numberValue
     : null
+}
+
+export const normalizeMaximumGoaliePenalty = (value) => {
+  const numberValue = toNullableNumber(value)
+
+  return numberValue !== null &&
+    numberValue >= MAXIMUM_GOALIE_PENALTY_LIMITS.min &&
+    numberValue <= MAXIMUM_GOALIE_PENALTY_LIMITS.max
+    ? numberValue
+    : DEFAULT_MAXIMUM_GOALIE_PENALTY
+}
+
+export const validateGoalieAdjustmentValue = (
+  value,
+  maximumGoaliePenalty = DEFAULT_MAXIMUM_GOALIE_PENALTY,
+  requiredMessage = 'Goalie adjustment is required.',
+) => {
+  const adjustment = toNullableNumber(value)
+  const configuredMaximum = normalizeMaximumGoaliePenalty(
+    maximumGoaliePenalty,
+  )
+
+  if (adjustment === null) {
+    return requiredMessage
+  }
+
+  if (adjustment > 0) {
+    return 'Goalie adjustment must be 0.00 or negative.'
+  }
+
+  if (adjustment < configuredMaximum) {
+    return `Goalie adjustment must be between ${configuredMaximum.toFixed(2)} and 0.00.`
+  }
+
+  const stepUnits = adjustment / 0.05
+
+  if (Math.abs(stepUnits - Math.round(stepUnits)) > 1e-8) {
+    return 'Goalie adjustment must use 0.05 increments.'
+  }
+
+  return ''
 }
 
 const clampAdjustment = (value) => {
@@ -326,7 +372,10 @@ export const createGoalieSelectionPayload = (inputs = {}, teamId = '') => {
   }
 }
 
-export const validateGoalieSelectionInputs = (inputs = {}) => {
+export const validateGoalieSelectionInputs = (
+  inputs = {},
+  maximumGoaliePenalty = DEFAULT_MAXIMUM_GOALIE_PENALTY,
+) => {
   const selectionType = inputs.goalieSelectionType ?? 'unknown'
   const needsManualAdjustment =
     selectionType === GOALIE_SELECTION_TYPES.CUSTOM ||
@@ -334,26 +383,30 @@ export const validateGoalieSelectionInputs = (inputs = {}) => {
       inputs.goalieOverrideEnabled)
 
   if (!needsManualAdjustment) {
+    if (selectionType === GOALIE_SELECTION_TYPES.PROVIDER) {
+      const teamDefaultAdjustment = toNullableNumber(
+        inputs.goalieTeamDefaultAdjustment,
+      ) ?? 0
+      const configuredMaximum = normalizeMaximumGoaliePenalty(
+        maximumGoaliePenalty,
+      )
+
+      if (
+        teamDefaultAdjustment < configuredMaximum ||
+        teamDefaultAdjustment > 0
+      ) {
+        return `Saved team goalie adjustment ${teamDefaultAdjustment.toFixed(2)} is outside the current ${configuredMaximum.toFixed(2)} to 0.00 range. Review it on the Teams page before using this goalie.`
+      }
+    }
+
     return ''
   }
 
-  const adjustment = toNullableNumber(inputs.goalieManualAdjustment)
-
-  if (adjustment === null) {
-    return 'Game-specific goalie adjustment is required.'
-  }
-
-  if (adjustment < -5 || adjustment > 5) {
-    return 'Goalie adjustment must be between -5.00 and +5.00.'
-  }
-
-  const stepUnits = adjustment / 0.05
-
-  if (Math.abs(stepUnits - Math.round(stepUnits)) > 1e-8) {
-    return 'Goalie adjustment must use 0.05 increments.'
-  }
-
-  return ''
+  return validateGoalieAdjustmentValue(
+    inputs.goalieManualAdjustment,
+    maximumGoaliePenalty,
+    'Game-specific goalie adjustment is required.',
+  )
 }
 
 export const updateGoalieInputs = (inputs, field, value, goalies = []) => {

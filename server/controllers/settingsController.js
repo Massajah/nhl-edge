@@ -93,10 +93,38 @@ const updateRatingEngineSettings = async (request, response, next) => {
   }
 }
 
+const updateRatingEngineParameters = async (request, response, next) => {
+  try {
+    const result = await ratingEngineSettingsService.updateRatingEngineParameters(
+      request.user.id,
+      request.body,
+    )
+
+    response.json(result)
+  } catch (error) {
+    next(error)
+  }
+}
+
+const updateRatingEngineModelAdjustments = async (request, response, next) => {
+  try {
+    const result =
+      await ratingEngineSettingsService.updateRatingEngineModelAdjustments(
+        request.user.id,
+        request.body,
+      )
+
+    response.json(result)
+  } catch (error) {
+    next(error)
+  }
+}
+
 const resetRatingEngineSettings = async (request, response, next) => {
   try {
     const result = await ratingEngineSettingsService.resetRatingEngineSettings(
       request.user.id,
+      { scope: request.body?.scope },
     )
 
     response.json(result)
@@ -153,5 +181,7 @@ module.exports = {
   updateBettingSettings,
   updateBookmakerPreferences,
   updateQuickRematchSettings,
+  updateRatingEngineModelAdjustments,
+  updateRatingEngineParameters,
   updateRatingEngineSettings,
 }

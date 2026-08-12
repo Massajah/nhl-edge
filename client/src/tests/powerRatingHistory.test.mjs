@@ -32,6 +32,7 @@ const historyResponse = {
         kFactor: 1.2,
         modelVersion: 'power-rating-v1',
         overtimeMultiplier: 0.7,
+        probabilityScale: 20,
         regulationMultiplier: 1,
         shootoutMultiplier: 0.5,
       },
@@ -558,6 +559,7 @@ test('history audit rows show complete calculation details', () => {
   const rowsByKey = new Map(rows.map((row) => [row.key, row]))
 
   assert.equal(rowsByKey.get('kFactor').value, '1.20')
+  assert.equal(rowsByKey.get('probabilityScale').value, '20.00')
   assert.equal(rowsByKey.get('baseHomeAdvantage').value, '4.00')
   assert.equal(rowsByKey.get('resultMultiplier').value, '0.70')
   assert.equal(rowsByKey.get('gameId').value, '2025020123')
@@ -579,6 +581,10 @@ test('history audit rows show unavailable state for legacy records', () => {
 
   assert.equal(
     rowsByKey.get('kFactor').value,
+    historyUtils.POWER_RATING_HISTORY_UNAVAILABLE,
+  )
+  assert.equal(
+    rowsByKey.get('probabilityScale').value,
     historyUtils.POWER_RATING_HISTORY_UNAVAILABLE,
   )
   assert.equal(

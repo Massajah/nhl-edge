@@ -14,7 +14,23 @@ export const updateRatingEngineSettings = async (settings) =>
     method: 'PUT',
   })
 
-export const resetRatingEngineSettings = async () =>
+export const updateRatingEngineParameters = async (settings) =>
+  requestRatingEngineSettings('/api/settings/rating-engine/engine', {
+    body: JSON.stringify(settings),
+    method: 'PUT',
+  })
+
+export const updateRatingEngineModelAdjustments = async (settings) =>
+  requestRatingEngineSettings(
+    '/api/settings/rating-engine/model-adjustments',
+    {
+      body: JSON.stringify(settings),
+      method: 'PUT',
+    },
+  )
+
+export const resetRatingEngineSettings = async (scope = 'all') =>
   requestRatingEngineSettings('/api/settings/rating-engine/reset', {
+    body: JSON.stringify({ scope }),
     method: 'POST',
   })

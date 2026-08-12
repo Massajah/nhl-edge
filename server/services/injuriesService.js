@@ -1,6 +1,10 @@
 const mongoose = require('mongoose')
 const Injury = require('../models/Injury')
 const {
+  DEFAULT_PRODUCTION_RATING_ENGINE_SETTINGS,
+} = require('../config/baseModel')
+const { getRatingEngineSettings } = require('./ratingEngineSettingsService')
+const {
   getKnownTeamById,
   getKnownTeams,
   normalizeTeamIdentifier,
@@ -8,11 +12,14 @@ const {
 
 const INJURY_STATUSES = Injury.INJURY_STATUSES
 const DURATION_TYPES = Injury.DURATION_TYPES
+const PLAYER_POSITIONS = Injury.PLAYER_POSITIONS
 const CREATE_FIELDS = [
   'teamId',
   'teamName',
   'teamAbbreviation',
   'playerName',
+  'providerPlayerId',
+  'position',
   'status',
   'injuryType',
   'impact',
@@ -24,6 +31,8 @@ const CREATE_FIELDS = [
 ]
 const UPDATE_FIELDS = [
   'playerName',
+  'providerPlayerId',
+  'position',
   'status',
   'injuryType',
   'impact',
@@ -75,6 +84,78 @@ const toBoolean = (value, field, fallback) => {
   return value
 }
 
+const POSITION_ALIASES = Object.freeze({
+  C: 'C',
+  CENTER: 'C',
+  CENTRE: 'C',
+  D: 'D',
+  DEFENSE: 'D',
+  DEFENSEMAN: 'D',
+  DEFENCEMAN: 'D',
+  G: 'G',
+  GK: 'G',
+  GOALIE: 'G',
+  GOALTENDER: 'G',
+  L: 'LW',
+  LEFT: 'LW',
+  LW: 'LW',
+  'LEFT WING': 'LW',
+  R: 'RW',
+  RIGHT: 'RW',
+  RW: 'RW',
+  'RIGHT WING': 'RW',
+})
+
+const normalizePlayerPosition = (position) => {
+  const normalizedPosition = toText(position).toUpperCase()
+
+  if (!normalizedPosition) {
+    return ''
+  }
+
+  const canonicalPosition = POSITION_ALIASES[normalizedPosition]
+
+  if (!canonicalPosition || !PLAYER_POSITIONS.includes(canonicalPosition)) {
+    throw new InjuriesError('position must be one of: C, LW, RW, D, G.', 400, {
+      field: 'position',
+    })
+  }
+
+  return canonicalPosition
+}
+
+const normalizeProviderPlayerId = (providerPlayerId) => {
+  if (
+    providerPlayerId === undefined ||
+    providerPlayerId === null ||
+    providerPlayerId === ''
+  ) {
+    return null
+  }
+
+  const normalizedId = Number(providerPlayerId)
+
+  if (!Number.isInteger(normalizedId) || normalizedId <= 0) {
+    throw new InjuriesError('providerPlayerId must be a positive integer.', 400, {
+      field: 'providerPlayerId',
+    })
+  }
+
+  return normalizedId
+}
+
+const normalizeStoredPlayerPosition = (position) => {
+  try {
+    return normalizePlayerPosition(position)
+  } catch {
+    return ''
+  }
+}
+
+const isGoalieRecord = (injury = {}) =>
+  normalizeStoredPlayerPosition(injury.position) === 'G' ||
+  injury.isGoalie === true
+
 const assertSupportedFields = (payload, allowedFields) => {
   const unsupportedFields = Object.keys(payload).filter(
     (field) => !allowedFields.includes(field),
@@ -111,7 +192,12 @@ const normalizeDurationType = (durationType = 'unknown') => {
   return durationType
 }
 
-const normalizeImpact = (impact = 0) => {
+const normalizeImpact = (
+  impact = 0,
+  maximumPlayerInjuryPenalty =
+    DEFAULT_PRODUCTION_RATING_ENGINE_SETTINGS.maximumPlayerInjuryPenalty,
+  options = {},
+) => {
   const normalizedImpact = toNumber(impact, 'impact')
 
   if (normalizedImpact > 0) {
@@ -120,10 +206,34 @@ const normalizeImpact = (impact = 0) => {
     })
   }
 
+  if (
+    Number.isFinite(Number(options.existingImpact)) &&
+    normalizedImpact === Number(options.existingImpact)
+  ) {
+    return normalizedImpact
+  }
+
+  if (normalizedImpact < maximumPlayerInjuryPenalty) {
+    throw new InjuriesError(
+      `impact cannot be below the configured Maximum Player Injury Penalty of ${maximumPlayerInjuryPenalty.toFixed(2)}.`,
+      400,
+      {
+        field: 'impact',
+        maximumPlayerInjuryPenalty,
+      },
+    )
+  }
+
+  if (!Number.isInteger(normalizedImpact * 2)) {
+    throw new InjuriesError('impact must use 0.50-point increments.', 400, {
+      field: 'impact',
+    })
+  }
+
   return normalizedImpact
 }
 
-const normalizeCreatePayload = async (payload = {}) => {
+const normalizeCreatePayload = async (payload = {}, options = {}) => {
   if (!payload || Array.isArray(payload) || typeof payload !== 'object') {
     throw new InjuriesError('Request body must be an object.', 400)
   }
@@ -146,23 +256,38 @@ const normalizeCreatePayload = async (payload = {}) => {
     })
   }
 
+  const position = normalizePlayerPosition(payload.position)
+  const requestedGoalieFlag = toBoolean(
+    payload.isGoalie,
+    'isGoalie',
+    false,
+  )
+  const isGoalie = position === 'G' || requestedGoalieFlag
+
   return {
     teamId: team.teamId,
     teamName: team.teamName,
     teamAbbreviation: team.teamAbbreviation,
     playerName,
+    providerPlayerId: normalizeProviderPlayerId(payload.providerPlayerId),
+    position,
     status: normalizeStatus(payload.status ?? 'out'),
     injuryType: toText(payload.injuryType),
-    impact: normalizeImpact(payload.impact ?? 0),
+    impact: isGoalie
+      ? 0
+      : normalizeImpact(
+          payload.impact ?? 0,
+          options.maximumPlayerInjuryPenalty,
+        ),
     durationType: normalizeDurationType(payload.durationType ?? 'unknown'),
     expectedReturn: toText(payload.expectedReturn),
     notes: toText(payload.notes),
     active: toBoolean(payload.active, 'active', true),
-    isGoalie: toBoolean(payload.isGoalie, 'isGoalie', false),
+    isGoalie,
   }
 }
 
-const normalizeUpdatePayload = (payload = {}) => {
+const normalizeUpdatePayload = (payload = {}, options = {}) => {
   if (!payload || Array.isArray(payload) || typeof payload !== 'object') {
     throw new InjuriesError('Request body must be an object.', 400)
   }
@@ -175,7 +300,7 @@ const normalizeUpdatePayload = (payload = {}) => {
 
   assertSupportedFields(payload, UPDATE_FIELDS)
 
-  return fields.reduce((updates, field) => {
+  const updates = fields.reduce((normalizedUpdates, field) => {
     if (field === 'playerName') {
       const playerName = toText(payload.playerName)
 
@@ -185,23 +310,34 @@ const normalizeUpdatePayload = (payload = {}) => {
         })
       }
 
-      updates.playerName = playerName
-      return updates
+      normalizedUpdates.playerName = playerName
+      return normalizedUpdates
+    }
+
+    if (field === 'providerPlayerId') {
+      normalizedUpdates.providerPlayerId = normalizeProviderPlayerId(
+        payload.providerPlayerId,
+      )
+      return normalizedUpdates
+    }
+
+    if (field === 'position') {
+      normalizedUpdates.position = normalizePlayerPosition(payload.position)
+      return normalizedUpdates
     }
 
     if (field === 'status') {
-      updates.status = normalizeStatus(payload.status)
-      return updates
+      normalizedUpdates.status = normalizeStatus(payload.status)
+      return normalizedUpdates
     }
 
     if (field === 'durationType') {
-      updates.durationType = normalizeDurationType(payload.durationType)
-      return updates
+      normalizedUpdates.durationType = normalizeDurationType(payload.durationType)
+      return normalizedUpdates
     }
 
     if (field === 'impact') {
-      updates.impact = normalizeImpact(payload.impact)
-      return updates
+      return normalizedUpdates
     }
 
     if (field === 'active' || field === 'isGoalie') {
@@ -211,13 +347,36 @@ const normalizeUpdatePayload = (payload = {}) => {
         })
       }
 
-      updates[field] = payload[field]
-      return updates
+      normalizedUpdates[field] = payload[field]
+      return normalizedUpdates
     }
 
-    updates[field] = toText(payload[field])
-    return updates
+    normalizedUpdates[field] = toText(payload[field])
+    return normalizedUpdates
   }, {})
+
+  const existingInjury = options.existingInjury ?? {}
+  const position = Object.hasOwn(updates, 'position')
+    ? updates.position
+    : normalizeStoredPlayerPosition(existingInjury.position)
+  const legacyGoalieFlag = Object.hasOwn(updates, 'isGoalie')
+    ? updates.isGoalie
+    : existingInjury.isGoalie === true
+  const isGoalie = position === 'G' || (!position && legacyGoalieFlag)
+
+  updates.isGoalie = isGoalie
+
+  if (isGoalie) {
+    updates.impact = 0
+  } else if (Object.hasOwn(payload, 'impact')) {
+    updates.impact = normalizeImpact(
+      payload.impact,
+      options.maximumPlayerInjuryPenalty,
+      { existingImpact: existingInjury.impact },
+    )
+  }
+
+  return updates
 }
 
 const serializeInjury = (injury) => {
@@ -235,8 +394,97 @@ const serializeInjury = (injury) => {
   return plainInjury
 }
 
-const getInjuries = async (userId) => {
-  const injuries = await Injury.find({ userId }).sort({
+const getInjuryModel = (options = {}) => options.injuryModel ?? Injury
+
+const resolveMaximumPlayerInjuryPenalty = async (userId, options = {}) => {
+  if (Number.isFinite(Number(options.maximumPlayerInjuryPenalty))) {
+    return Number(options.maximumPlayerInjuryPenalty)
+  }
+
+  const settingsProvider = options.settingsProvider ?? getRatingEngineSettings
+  const { settings } = await settingsProvider(userId, {
+    settingsModel: options.ratingEngineSettingsModel,
+  })
+
+  return settings.maximumPlayerInjuryPenalty
+}
+
+const escapeRegularExpression = (value) =>
+  value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+const buildActiveDuplicateQuery = ({
+  excludeId,
+  playerName,
+  providerPlayerId,
+  teamId,
+  userId,
+}) => {
+  const query = {
+    active: true,
+    status: { $ne: 'healthy' },
+    teamId,
+    userId,
+  }
+
+  if (excludeId) {
+    query._id = { $ne: excludeId }
+  }
+
+  if (providerPlayerId) {
+    query.providerPlayerId = providerPlayerId
+  } else {
+    query.$and = [
+      {
+        $or: [
+          { providerPlayerId: null },
+          { providerPlayerId: { $exists: false } },
+        ],
+      },
+      {
+        playerName: {
+          $regex: `^${escapeRegularExpression(playerName)}$`,
+          $options: 'i',
+        },
+      },
+    ]
+  }
+
+  return query
+}
+
+const assertNoActiveDuplicate = async (
+  injuryModel,
+  injury,
+  { excludeId, userId } = {},
+) => {
+  if (!injury.active || injury.status === 'healthy') {
+    return
+  }
+
+  const duplicate = await injuryModel.findOne(
+    buildActiveDuplicateQuery({
+      excludeId,
+      playerName: injury.playerName,
+      providerPlayerId: injury.providerPlayerId,
+      teamId: injury.teamId,
+      userId,
+    }),
+  )
+
+  if (duplicate) {
+    throw new InjuriesError(
+      'An active injury record already exists for this player and team. Edit the existing record instead.',
+      409,
+      {
+        existingInjuryId: duplicate.id ?? duplicate._id?.toString(),
+        field: 'playerName',
+      },
+    )
+  }
+}
+
+const getInjuries = async (userId, options = {}) => {
+  const injuries = await getInjuryModel(options).find({ userId }).sort({
     active: -1,
     teamName: 1,
     playerName: 1,
@@ -245,14 +493,14 @@ const getInjuries = async (userId) => {
   return injuries.map(serializeInjury)
 }
 
-const getTeamInjuries = async (userId, teamId) => {
+const getTeamInjuries = async (userId, teamId, options = {}) => {
   const normalizedTeamId = normalizeIdentifier(teamId)
 
   if (!normalizedTeamId) {
     throw new InjuriesError('teamId is required.', 400)
   }
 
-  const injuries = await Injury.find({
+  const injuries = await getInjuryModel(options).find({
     teamId: normalizedTeamId,
     userId,
   }).sort({
@@ -263,9 +511,19 @@ const getTeamInjuries = async (userId, teamId) => {
   return injuries.map(serializeInjury)
 }
 
-const createInjury = async (userId, payload) => {
-  const injury = new Injury({
-    ...(await normalizeCreatePayload(payload)),
+const createInjury = async (userId, payload, options = {}) => {
+  const injuryModel = getInjuryModel(options)
+  const maximumPlayerInjuryPenalty = Object.hasOwn(payload, 'impact')
+    ? await resolveMaximumPlayerInjuryPenalty(userId, options)
+    : DEFAULT_PRODUCTION_RATING_ENGINE_SETTINGS.maximumPlayerInjuryPenalty
+  const normalizedPayload = await normalizeCreatePayload(payload, {
+    maximumPlayerInjuryPenalty,
+  })
+
+  await assertNoActiveDuplicate(injuryModel, normalizedPayload, { userId })
+
+  const injury = new injuryModel({
+    ...normalizedPayload,
     userId,
   })
 
@@ -274,13 +532,13 @@ const createInjury = async (userId, payload) => {
   return serializeInjury(injury)
 }
 
-const updateInjury = async (userId, id, payload) => {
+const updateInjury = async (userId, id, payload, options = {}) => {
   if (!mongoose.Types.ObjectId.isValid(id)) {
     throw new InjuriesError('Injury was not found.', 404)
   }
 
-  const updates = normalizeUpdatePayload(payload)
-  const injury = await Injury.findOne({
+  const injuryModel = getInjuryModel(options)
+  const injury = await injuryModel.findOne({
     _id: id,
     userId,
   })
@@ -289,18 +547,35 @@ const updateInjury = async (userId, id, payload) => {
     throw new InjuriesError('Injury was not found.', 404)
   }
 
+  const maximumPlayerInjuryPenalty = Object.hasOwn(payload, 'impact')
+    ? await resolveMaximumPlayerInjuryPenalty(userId, options)
+    : DEFAULT_PRODUCTION_RATING_ENGINE_SETTINGS.maximumPlayerInjuryPenalty
+  const updates = normalizeUpdatePayload(payload, {
+    existingInjury: injury,
+    maximumPlayerInjuryPenalty,
+  })
+  const nextInjury = {
+    ...serializeInjury(injury),
+    ...updates,
+  }
+
+  await assertNoActiveDuplicate(injuryModel, nextInjury, {
+    excludeId: injury._id,
+    userId,
+  })
+
   Object.assign(injury, updates)
   await injury.save()
 
   return serializeInjury(injury)
 }
 
-const deleteInjury = async (userId, id) => {
+const deleteInjury = async (userId, id, options = {}) => {
   if (!mongoose.Types.ObjectId.isValid(id)) {
     throw new InjuriesError('Injury was not found.', 404)
   }
 
-  const deletedInjury = await Injury.findOneAndDelete({
+  const deletedInjury = await getInjuryModel(options).findOneAndDelete({
     _id: id,
     userId,
   })
@@ -310,6 +585,34 @@ const deleteInjury = async (userId, id) => {
   }
 
   return serializeInjury(deletedInjury)
+}
+
+const buildTeamHistoryDeleteQuery = (userId, teamId) => ({
+  userId,
+  teamId,
+  $or: [
+    { active: { $ne: true } },
+    { status: 'healthy' },
+  ],
+})
+
+const clearTeamInjuryHistory = async (userId, teamId, options = {}) => {
+  const team = await getKnownTeamById(teamId)
+
+  if (!team) {
+    throw new InjuriesError('teamId must match a known NHL team.', 400, {
+      field: 'teamId',
+    })
+  }
+
+  const result = await getInjuryModel(options).deleteMany(
+    buildTeamHistoryDeleteQuery(userId, team.teamId),
+  )
+
+  return {
+    deletedCount: Number(result?.deletedCount) || 0,
+    teamId: team.teamId,
+  }
 }
 
 const buildTeamInjurySummaryPipeline = (userId) => [
@@ -324,21 +627,80 @@ const buildTeamInjurySummaryPipeline = (userId) => [
       $group: {
         _id: '$teamId',
         activeInjuries: { $sum: 1 },
+        activeSkaterInjuries: {
+          $sum: {
+            $cond: [
+              {
+                $or: [
+                  { $eq: ['$isGoalie', true] },
+                  { $eq: ['$position', 'G'] },
+                ],
+              },
+              0,
+              1,
+            ],
+          },
+        },
         goalieInjuries: {
-          $sum: { $cond: [{ $eq: ['$isGoalie', true] }, 1, 0] },
+          $sum: {
+            $cond: [
+              {
+                $or: [
+                  { $eq: ['$isGoalie', true] },
+                  { $eq: ['$position', 'G'] },
+                ],
+              },
+              1,
+              0,
+            ],
+          },
         },
         totalImpact: {
           $sum: {
-            $cond: [{ $eq: ['$isGoalie', true] }, 0, '$impact'],
+            $cond: [
+              {
+                $and: [
+                  { $ne: ['$isGoalie', true] },
+                  { $ne: ['$position', 'G'] },
+                  { $lt: ['$impact', 0] },
+                ],
+              },
+              '$impact',
+              0,
+            ],
+          },
+        },
+        injuries: {
+          $push: {
+            id: '$_id',
+            impact: '$impact',
+            isGoalie: '$isGoalie',
+            playerName: '$playerName',
+            position: '$position',
+            providerPlayerId: '$providerPlayerId',
           },
         },
       },
     },
   ]
 
-const getTeamInjurySummary = async (userId) => {
+const serializeSummaryInjury = (injury = {}) => {
+  const position = normalizeStoredPlayerPosition(injury.position)
+  const isGoalie = isGoalieRecord({ ...injury, position })
+
+  return {
+    id: injury.id?.toString?.() ?? '',
+    impact: isGoalie ? 0 : Number(injury.impact) || 0,
+    isGoalie,
+    playerName: toText(injury.playerName, 'Unknown player'),
+    position,
+    providerPlayerId: normalizeProviderPlayerId(injury.providerPlayerId),
+  }
+}
+
+const getTeamInjurySummary = async (userId, options = {}) => {
   const teams = await getKnownTeams()
-  const summaryRows = await Injury.aggregate(
+  const summaryRows = await getInjuryModel(options).aggregate(
     buildTeamInjurySummaryPipeline(userId),
   )
   const summaryByTeamId = new Map(
@@ -346,7 +708,9 @@ const getTeamInjurySummary = async (userId) => {
       row._id,
       {
         activeInjuries: row.activeInjuries,
+        activeSkaterInjuries: row.activeSkaterInjuries,
         goalieInjuries: row.goalieInjuries,
+        injuries: (row.injuries ?? []).map(serializeSummaryInjury),
         totalImpact: row.totalImpact,
       },
     ]),
@@ -357,20 +721,30 @@ const getTeamInjurySummary = async (userId) => {
     teamName: team.teamName,
     teamAbbreviation: team.teamAbbreviation,
     activeInjuries: summaryByTeamId.get(team.teamId)?.activeInjuries ?? 0,
+    activeSkaterInjuries:
+      summaryByTeamId.get(team.teamId)?.activeSkaterInjuries ?? 0,
     goalieInjuries: summaryByTeamId.get(team.teamId)?.goalieInjuries ?? 0,
+    injuries: summaryByTeamId.get(team.teamId)?.injuries ?? [],
     totalImpact: summaryByTeamId.get(team.teamId)?.totalImpact ?? 0,
   }))
 }
 
 module.exports = {
   InjuriesError,
+  buildActiveDuplicateQuery,
+  buildTeamHistoryDeleteQuery,
   buildTeamInjurySummaryPipeline,
+  clearTeamInjuryHistory,
   createInjury,
   deleteInjury,
   getInjuries,
   getTeamInjuries,
   getTeamInjurySummary,
   normalizeCreatePayload,
+  normalizeImpact,
+  normalizePlayerPosition,
   normalizeUpdatePayload,
+  resolveMaximumPlayerInjuryPenalty,
+  serializeSummaryInjury,
   updateInjury,
 }

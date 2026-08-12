@@ -14,6 +14,15 @@ const DEFENSE_SLOT_FIELDS = [
   'leftDefensePlayerId',
   'rightDefensePlayerId',
 ]
+const FORWARD_SNAPSHOT_FIELDS = {
+  leftWingPlayerId: 'leftWingDisplayNameSnapshot',
+  centerPlayerId: 'centerDisplayNameSnapshot',
+  rightWingPlayerId: 'rightWingDisplayNameSnapshot',
+}
+const DEFENSE_SNAPSHOT_FIELDS = {
+  leftDefensePlayerId: 'leftDefenseDisplayNameSnapshot',
+  rightDefensePlayerId: 'rightDefenseDisplayNameSnapshot',
+}
 const UPDATE_FIELDS = ['defensePairs', 'forwardLines', 'lineupNote']
 
 class TeamLineupsError extends Error {
@@ -47,15 +56,20 @@ const createEmptyForwardLines = () =>
   Array.from({ length: FORWARD_LINE_COUNT }, (_item, index) => ({
     lineNumber: index + 1,
     leftWingPlayerId: null,
+    leftWingDisplayNameSnapshot: '',
     centerPlayerId: null,
+    centerDisplayNameSnapshot: '',
     rightWingPlayerId: null,
+    rightWingDisplayNameSnapshot: '',
   }))
 
 const createEmptyDefensePairs = () =>
   Array.from({ length: DEFENSE_PAIR_COUNT }, (_item, index) => ({
     pairNumber: index + 1,
     leftDefensePlayerId: null,
+    leftDefenseDisplayNameSnapshot: '',
     rightDefensePlayerId: null,
+    rightDefenseDisplayNameSnapshot: '',
   }))
 
 const createEmptyLineup = (teamId) => ({
@@ -109,6 +123,7 @@ const normalizeNumberedRows = ({
   count,
   numberField,
   rows,
+  snapshotFields = {},
   slotFields,
 }) => {
   if (rows === undefined) {
@@ -135,7 +150,11 @@ const normalizeNumberedRows = ({
     const field = `${numberField}s[${index}]`
 
     assertPlainObject(row, field)
-    assertSupportedFields(row, [numberField, ...slotFields], field)
+    assertSupportedFields(
+      row,
+      [numberField, ...slotFields, ...Object.values(snapshotFields)],
+      field,
+    )
 
     const rowNumber = Number(row[numberField])
 
@@ -166,6 +185,14 @@ const normalizeNumberedRows = ({
         row[slotField],
         `${field}.${slotField}`,
       )
+
+      const snapshotField = snapshotFields[slotField]
+
+      if (snapshotField) {
+        normalizedRow[snapshotField] = normalizedRow[slotField]
+          ? toText(row[snapshotField]).slice(0, 120)
+          : ''
+      }
     })
     normalizedByNumber.set(rowNumber, normalizedRow)
   })
@@ -176,6 +203,9 @@ const normalizeNumberedRows = ({
     return normalizedByNumber.get(rowNumber) ?? {
       [numberField]: rowNumber,
       ...Object.fromEntries(slotFields.map((field) => [field, null])),
+      ...Object.fromEntries(
+        Object.values(snapshotFields).map((field) => [field, '']),
+      ),
     }
   })
 }
@@ -200,7 +230,13 @@ const normalizeLineupNote = (value) => {
   return lineupNote
 }
 
-const normalizeUpdatePayload = (payload = {}) => {
+const getExistingSelectionRows = (rows, numberField, slotFields) =>
+  (Array.isArray(rows) ? rows : []).map((row) => ({
+    [numberField]: row[numberField],
+    ...Object.fromEntries(slotFields.map((field) => [field, row[field]])),
+  }))
+
+const normalizeUpdatePayload = (payload = {}, existing = null) => {
   assertPlainObject(payload, 'Request body')
   assertSupportedFields(payload, UPDATE_FIELDS, 'Request body')
 
@@ -208,16 +244,34 @@ const normalizeUpdatePayload = (payload = {}) => {
     defensePairs: normalizeNumberedRows({
       count: DEFENSE_PAIR_COUNT,
       numberField: 'pairNumber',
-      rows: payload.defensePairs,
+      rows: payload.defensePairs === undefined
+        ? getExistingSelectionRows(
+            existing?.defensePairs,
+            'pairNumber',
+            DEFENSE_SLOT_FIELDS,
+          )
+        : payload.defensePairs,
+      snapshotFields: DEFENSE_SNAPSHOT_FIELDS,
       slotFields: DEFENSE_SLOT_FIELDS,
     }),
     forwardLines: normalizeNumberedRows({
       count: FORWARD_LINE_COUNT,
       numberField: 'lineNumber',
-      rows: payload.forwardLines,
+      rows: payload.forwardLines === undefined
+        ? getExistingSelectionRows(
+            existing?.forwardLines,
+            'lineNumber',
+            FORWARD_SLOT_FIELDS,
+          )
+        : payload.forwardLines,
+      snapshotFields: FORWARD_SNAPSHOT_FIELDS,
       slotFields: FORWARD_SLOT_FIELDS,
     }),
-    lineupNote: normalizeLineupNote(payload.lineupNote),
+    lineupNote: normalizeLineupNote(
+      payload.lineupNote === undefined
+        ? existing?.lineupNote
+        : payload.lineupNote,
+    ),
   }
 }
 
@@ -248,12 +302,14 @@ const serializeLineup = (document, teamId) => {
       count: DEFENSE_PAIR_COUNT,
       numberField: 'pairNumber',
       rows: lineup.defensePairs,
+      snapshotFields: DEFENSE_SNAPSHOT_FIELDS,
       slotFields: DEFENSE_SLOT_FIELDS,
     }),
     forwardLines: normalizeNumberedRows({
       count: FORWARD_LINE_COUNT,
       numberField: 'lineNumber',
       rows: lineup.forwardLines,
+      snapshotFields: FORWARD_SNAPSHOT_FIELDS,
       slotFields: FORWARD_SLOT_FIELDS,
     }),
     lineupNote: normalizeLineupNote(lineup.lineupNote),
@@ -279,6 +335,97 @@ const getProviderPlayerIds = (players = []) =>
       .map((player) => Number(player.id ?? player.playerId))
       .filter((playerId) => Number.isSafeInteger(playerId) && playerId > 0),
   )
+
+const getProviderPlayersById = (roster = {}) => {
+  const providerRoster = roster ?? {}
+
+  return new Map(
+    [
+      ...(Array.isArray(providerRoster.forwards) ? providerRoster.forwards : []),
+      ...(Array.isArray(providerRoster.defensemen)
+        ? providerRoster.defensemen
+        : []),
+    ]
+      .map((player) => {
+        const playerId = Number(player.id ?? player.playerId)
+        const displayName = toText(player.fullName ?? player.playerName)
+
+        return [playerId, displayName]
+      })
+      .filter(
+        ([playerId, displayName]) =>
+          Number.isSafeInteger(playerId) && playerId > 0 && displayName,
+      ),
+  )
+}
+
+const havePlayerSelectionsChanged = (existing, lineup) => {
+  const fieldsChanged = (existingRows, nextRows, slotFields) =>
+    nextRows.some((row, index) =>
+      slotFields.some(
+        (field) => row[field] !== (existingRows[index]?.[field] ?? null),
+      ),
+    )
+
+  return fieldsChanged(
+    existing.forwardLines,
+    lineup.forwardLines,
+    FORWARD_SLOT_FIELDS,
+  ) || fieldsChanged(
+    existing.defensePairs,
+    lineup.defensePairs,
+    DEFENSE_SLOT_FIELDS,
+  )
+}
+
+const applyDisplayNameSnapshotsToRows = ({
+  existingRows,
+  rows,
+  slotFields,
+  snapshotFields,
+  providerPlayersById,
+}) => rows.map((row, index) => {
+  const existingRow = existingRows[index] ?? {}
+  const nextRow = { ...row }
+
+  slotFields.forEach((slotField) => {
+    const playerId = row[slotField]
+    const snapshotField = snapshotFields[slotField]
+    const existingSnapshot =
+      existingRow[slotField] === playerId
+        ? toText(existingRow[snapshotField])
+        : ''
+    const submittedSnapshot = toText(row[snapshotField])
+
+    nextRow[snapshotField] = playerId
+      ? providerPlayersById.get(playerId) || submittedSnapshot || existingSnapshot
+      : ''
+  })
+
+  return nextRow
+})
+
+const applyDisplayNameSnapshots = ({ existing, lineup, roster }) => {
+  const providerPlayersById = getProviderPlayersById(roster)
+
+  return {
+    ...lineup,
+    defensePairs: applyDisplayNameSnapshotsToRows({
+      existingRows: existing.defensePairs,
+      rows: lineup.defensePairs,
+      slotFields: DEFENSE_SLOT_FIELDS,
+      snapshotFields: DEFENSE_SNAPSHOT_FIELDS,
+      providerPlayersById,
+    }),
+    forwardLines: applyDisplayNameSnapshotsToRows({
+      existingRows: existing.forwardLines,
+      rows: lineup.forwardLines,
+      slotFields: FORWARD_SLOT_FIELDS,
+      snapshotFields: FORWARD_SNAPSHOT_FIELDS,
+      providerPlayersById,
+    }),
+  }
+}
 
 const assertRosterSelections = ({ existing, lineup, roster }) => {
   const forwardIds = getSelectedPlayerIds(
@@ -355,15 +502,42 @@ const saveTeamLineup = async (
 ) => {
   assertUserId(userId)
   const team = await requireKnownTeam(teamIdentity)
-  const lineup = normalizeUpdatePayload(payload)
   const model = getModel(options)
-  const [existingDocument, roster] = await Promise.all([
-    model.findOne({ teamId: team.teamId, userId }),
-    getRosterProvider(options)(team.teamAbbreviation),
-  ])
+  const existingDocument = await model.findOne({
+    teamId: team.teamId,
+    userId,
+  })
   const existing = serializeLineup(existingDocument, team.teamId)
+  const normalizedLineup = normalizeUpdatePayload(payload, existing)
+  const selectionsChanged = havePlayerSelectionsChanged(
+    existing,
+    normalizedLineup,
+  )
+  let roster = null
 
-  assertRosterSelections({ existing, lineup, roster })
+  if (selectionsChanged) {
+    try {
+      roster = await getRosterProvider(options)(team.teamAbbreviation)
+    } catch (error) {
+      throw new TeamLineupsError(
+        'Current roster is temporarily unavailable. Existing selections were preserved.',
+        503,
+        { errorCode: 'PROVIDER_UNAVAILABLE' },
+      )
+    }
+
+    assertRosterSelections({
+      existing,
+      lineup: normalizedLineup,
+      roster,
+    })
+  }
+
+  const lineup = applyDisplayNameSnapshots({
+    existing,
+    lineup: normalizedLineup,
+    roster,
+  })
 
   const filter = { teamId: team.teamId, userId }
   const update = {
@@ -414,12 +588,15 @@ const clearTeamLineup = async (userId, teamIdentity, options = {}) => {
 
 module.exports = {
   DEFENSE_PAIR_COUNT,
+  DEFENSE_SNAPSHOT_FIELDS,
   DEFENSE_SLOT_FIELDS,
   FORWARD_LINE_COUNT,
+  FORWARD_SNAPSHOT_FIELDS,
   FORWARD_SLOT_FIELDS,
   LINEUP_NOTE_MAX_LENGTH,
   TeamLineupsError,
   assertRosterSelections,
+  applyDisplayNameSnapshots,
   clearTeamLineup,
   createEmptyLineup,
   getTeamLineup,

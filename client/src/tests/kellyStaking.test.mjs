@@ -1004,8 +1004,14 @@ test('bet payload keeps actual stake separate from Kelly snapshot', () => {
 
   assert.equal(payload.stake, 5)
   assert.equal(payload.notes, 'Manual stake under Kelly.')
-  assert.equal(payload.kellyRecommendation.recommendedStakeAmount, 30)
-  assert.equal(payload.kellyRecommendation.recommendedStakePercent, 3)
+  assert.equal(
+    payload.kellyRecommendation.recommendedStakeAmount,
+    snapshot.recommendedStakeAmount,
+  )
+  assert.equal(
+    payload.kellyRecommendation.recommendedStakePercent,
+    snapshot.recommendedStakePercent,
+  )
 })
 
 test('manual stake can be saved when Kelly recommendation is absent', () => {

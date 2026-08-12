@@ -10,6 +10,15 @@ export const DEFENSE_SLOT_FIELDS = [
   'leftDefensePlayerId',
   'rightDefensePlayerId',
 ]
+export const FORWARD_SNAPSHOT_FIELDS = {
+  leftWingPlayerId: 'leftWingDisplayNameSnapshot',
+  centerPlayerId: 'centerDisplayNameSnapshot',
+  rightWingPlayerId: 'rightWingDisplayNameSnapshot',
+}
+export const DEFENSE_SNAPSHOT_FIELDS = {
+  leftDefensePlayerId: 'leftDefenseDisplayNameSnapshot',
+  rightDefensePlayerId: 'rightDefenseDisplayNameSnapshot',
+}
 
 const toPlayerId = (value) => {
   if (value === '' || value === null || value === undefined) {
@@ -24,19 +33,30 @@ const toPlayerId = (value) => {
 export const createEmptyForwardLines = () =>
   Array.from({ length: FORWARD_LINE_COUNT }, (_item, index) => ({
     centerPlayerId: null,
+    centerDisplayNameSnapshot: '',
     leftWingPlayerId: null,
+    leftWingDisplayNameSnapshot: '',
     lineNumber: index + 1,
     rightWingPlayerId: null,
+    rightWingDisplayNameSnapshot: '',
   }))
 
 export const createEmptyDefensePairs = () =>
   Array.from({ length: DEFENSE_PAIR_COUNT }, (_item, index) => ({
     leftDefensePlayerId: null,
+    leftDefenseDisplayNameSnapshot: '',
     pairNumber: index + 1,
     rightDefensePlayerId: null,
+    rightDefenseDisplayNameSnapshot: '',
   }))
 
-const normalizeRows = ({ count, numberField, rows, slotFields }) => {
+const normalizeRows = ({
+  count,
+  numberField,
+  rows,
+  snapshotFields,
+  slotFields,
+}) => {
   const rowsByNumber = new Map(
     (Array.isArray(rows) ? rows : []).map((row) => [
       Number(row?.[numberField]),
@@ -51,6 +71,12 @@ const normalizeRows = ({ count, numberField, rows, slotFields }) => {
 
     slotFields.forEach((field) => {
       normalized[field] = toPlayerId(row[field])
+      const snapshotField = snapshotFields[field]
+
+      normalized[snapshotField] = normalized[field] &&
+        typeof row[snapshotField] === 'string'
+        ? row[snapshotField].trim()
+        : ''
     })
 
     return normalized
@@ -63,12 +89,14 @@ export const normalizeTeamModelValues = (modelValues = {}, teamId = '') => ({
     count: DEFENSE_PAIR_COUNT,
     numberField: 'pairNumber',
     rows: modelValues?.defensePairs,
+    snapshotFields: DEFENSE_SNAPSHOT_FIELDS,
     slotFields: DEFENSE_SLOT_FIELDS,
   }),
   forwardLines: normalizeRows({
     count: FORWARD_LINE_COUNT,
     numberField: 'lineNumber',
     rows: modelValues?.forwardLines,
+    snapshotFields: FORWARD_SNAPSHOT_FIELDS,
     slotFields: FORWARD_SLOT_FIELDS,
   }),
   lineupNote:
@@ -81,10 +109,33 @@ export const normalizeTeamModelValues = (modelValues = {}, teamId = '') => ({
 
 export const getTeamModelValuesPayload = (modelValues) => {
   const normalized = normalizeTeamModelValues(modelValues, modelValues?.teamId)
+  const getSelectionRows = (
+    rows,
+    numberField,
+    slotFields,
+    snapshotFields,
+  ) =>
+    rows.map((row) => ({
+      [numberField]: row[numberField],
+      ...Object.fromEntries(slotFields.flatMap((field) => [
+        [field, row[field]],
+        [snapshotFields[field], row[snapshotFields[field]]],
+      ])),
+    }))
 
   return {
-    defensePairs: normalized.defensePairs,
-    forwardLines: normalized.forwardLines,
+    defensePairs: getSelectionRows(
+      normalized.defensePairs,
+      'pairNumber',
+      DEFENSE_SLOT_FIELDS,
+      DEFENSE_SNAPSHOT_FIELDS,
+    ),
+    forwardLines: getSelectionRows(
+      normalized.forwardLines,
+      'lineNumber',
+      FORWARD_SLOT_FIELDS,
+      FORWARD_SNAPSHOT_FIELDS,
+    ),
     lineupNote: normalized.lineupNote.trim(),
   }
 }
@@ -128,7 +179,11 @@ export const getRosterPlayer = (players, playerId) => {
   ) ?? null
 }
 
-export const getPlayerDisplayName = (players, playerId) => {
+export const getPlayerDisplayName = (
+  players,
+  playerId,
+  displayNameSnapshot = '',
+) => {
   const normalizedId = toPlayerId(playerId)
 
   if (!normalizedId) {
@@ -137,7 +192,7 @@ export const getPlayerDisplayName = (players, playerId) => {
 
   const player = getRosterPlayer(players, normalizedId)
 
-  return player?.fullName || player?.playerName ||
+  return player?.fullName || player?.playerName || displayNameSnapshot ||
     `Unavailable player · ID ${normalizedId}`
 }
 

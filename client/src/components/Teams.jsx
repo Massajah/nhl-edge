@@ -1,21 +1,22 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ChevronDown } from 'lucide-react'
+import { NHL_TEAMS } from '../data/teams.js'
 import { getTeamMetadata } from '../data/teamMetadata.js'
 import TeamModelValues from './TeamModelValues.jsx'
 import {
   deleteGoalieAdjustment,
   fetchGoalieStats,
-  fetchGoalieAdjustments,
-  fetchTeamGoalieSummaries,
-  fetchTeamRoster,
-  fetchTeamStats,
-  fetchTeams,
+  fetchSavedGoalieAdjustments,
   saveGoalieAdjustment,
 } from '../services/teamsApi.js'
+import { teamsDataCoordinator } from '../services/teamsDataCoordinator.js'
 import { getTeamInjurySummary } from '../utils/injuries.js'
 import {
   mergeProviderGoaliesWithAdjustments,
+  normalizeMaximumGoaliePenalty,
+  validateGoalieAdjustmentValue,
 } from '../utils/goalies.js'
+import { DEFAULT_MAXIMUM_GOALIE_PENALTY } from '../config/baseModel.js'
 import { getEffectiveBaseRating } from '../utils/powerRatings.js'
 
 const rosterGroups = [
@@ -140,44 +141,113 @@ const getUniqueValues = (items, key) =>
     a.localeCompare(b),
   )
 
+const getConferenceForDivision = (division) =>
+  ['Atlantic', 'Metropolitan'].includes(division) ? 'Eastern' : 'Western'
+
+const localTeams = NHL_TEAMS.map((team) => ({
+  ...team,
+  conference: getConferenceForDivision(team.division),
+  logo: getTeamMetadata(team.abbreviation).logo || '',
+}))
+
+const createProviderSectionState = () => ({
+  data: null,
+  error: '',
+  provider: null,
+  status: 'idle',
+})
+
+const isUnavailableProviderResult = (result) =>
+  !result?.data || ['rate_limited', 'unavailable'].includes(
+    result?.provider?.status,
+  )
+
+const useLoadNearViewport = (onVisible, key, enabled = true) => {
+  const elementRef = useRef(null)
+  const onVisibleRef = useRef(onVisible)
+  const loadedKeyRef = useRef('')
+
+  useEffect(() => {
+    onVisibleRef.current = onVisible
+  }, [onVisible])
+
+  useEffect(() => {
+    if (!enabled || loadedKeyRef.current === key) {
+      return undefined
+    }
+
+    const element = elementRef.current
+
+    if (!element || typeof IntersectionObserver === 'undefined') {
+      const timeout = window.setTimeout(() => {
+        loadedKeyRef.current = key
+        onVisibleRef.current()
+      }, 0)
+
+      return () => window.clearTimeout(timeout)
+    }
+
+    const observer = new IntersectionObserver((entries) => {
+      if (!entries.some((entry) => entry.isIntersecting)) {
+        return
+      }
+
+      loadedKeyRef.current = key
+      observer.disconnect()
+      onVisibleRef.current()
+
+      if (import.meta.env.DEV) {
+        console.debug('Teams provider section loaded lazily', { key })
+      }
+    }, { rootMargin: '500px 0px' })
+
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [enabled, key])
+
+  return elementRef
+}
+
 function Teams({
   injurySummaries,
   injurySummaryStatus,
+  maximumGoaliePenalty = DEFAULT_MAXIMUM_GOALIE_PENALTY,
   powerRatings,
   powerRatingsStatus,
 }) {
-  const [teams, setTeams] = useState([])
-  const [status, setStatus] = useState('loading')
+  const [teams, setTeams] = useState(localTeams)
+  const [status, setStatus] = useState('success')
   const [errorMessage, setErrorMessage] = useState('')
   const [searchTerm, setSearchTerm] = useState('')
   const [conferenceFilter, setConferenceFilter] = useState('all')
   const [divisionFilter, setDivisionFilter] = useState('all')
   const [selectedTeam, setSelectedTeam] = useState(null)
-  const [rostersByTeam, setRostersByTeam] = useState({})
-  const [rosterStatus, setRosterStatus] = useState('idle')
-  const [rosterError, setRosterError] = useState('')
-  const [statsByTeam, setStatsByTeam] = useState({})
-  const [statsStatus, setStatsStatus] = useState('idle')
-  const [statsError, setStatsError] = useState('')
+  const [rosterStateByTeam, setRosterStateByTeam] = useState({})
+  const [statsStateByTeam, setStatsStateByTeam] = useState({})
   const [goalieStatsByPlayerId, setGoalieStatsByPlayerId] = useState({})
   const [goalieStatsStatusByPlayerId, setGoalieStatsStatusByPlayerId] =
     useState({})
   const [goalieStatsErrorByPlayerId, setGoalieStatsErrorByPlayerId] = useState(
     {},
   )
-  const [goalieSummaryStatusByTeam, setGoalieSummaryStatusByTeam] = useState({})
-  const [goalieSummaryErrorByTeam, setGoalieSummaryErrorByTeam] = useState({})
+  const [goalieSummaryStateByTeam, setGoalieSummaryStateByTeam] = useState({})
 
   const loadTeams = useCallback(async () => {
-    setStatus('loading')
+    setStatus('refreshing')
     setErrorMessage('')
 
     try {
-      setTeams(await fetchTeams())
+      const { data: providerTeams } = await teamsDataCoordinator.loadTeams({
+        force: true,
+      })
+
+      if (providerTeams.length > 0) {
+        setTeams(providerTeams)
+      }
       setStatus('success')
     } catch (error) {
-      setStatus('error')
       setErrorMessage(error.message)
+      setStatus('success')
     }
   }, [])
 
@@ -186,21 +256,23 @@ function Teams({
 
     const loadInitialTeams = async () => {
       try {
-        const nextTeams = await fetchTeams()
+        const { data: nextTeams } = await teamsDataCoordinator.loadTeams()
 
         if (!isCurrent) {
           return
         }
 
-        setTeams(nextTeams)
+        if (nextTeams.length > 0) {
+          setTeams(nextTeams)
+        }
         setStatus('success')
       } catch (error) {
         if (!isCurrent) {
           return
         }
 
-        setStatus('error')
         setErrorMessage(error.message)
+        setStatus('success')
       }
     }
 
@@ -246,96 +318,156 @@ function Teams({
     })
   }, [conferenceFilter, divisionFilter, searchTerm, teams])
 
-  const loadRoster = useCallback(
-    async (team) => {
-      if (!team?.abbreviation) {
-        return
-      }
+  const loadRoster = useCallback(async (team, { force = false } = {}) => {
+    const teamKey = team?.abbreviation
 
-      if (rostersByTeam[team.abbreviation]) {
-        setRosterStatus('success')
-        setRosterError('')
-        return
-      }
+    if (!teamKey) {
+      return null
+    }
 
-      setRosterStatus('loading')
-      setRosterError('')
+    setRosterStateByTeam((currentStates) => ({
+      ...currentStates,
+      [teamKey]: {
+        ...(currentStates[teamKey] ?? createProviderSectionState()),
+        error: '',
+        status: currentStates[teamKey]?.data ? 'refreshing' : 'loading',
+      },
+    }))
 
-      try {
-        const roster = await fetchTeamRoster(team.abbreviation)
+    try {
+      const result = await teamsDataCoordinator.loadRoster(teamKey, { force })
 
-        setRostersByTeam((currentRosters) => ({
-          ...currentRosters,
-          [team.abbreviation]: roster,
+      if (isUnavailableProviderResult(result)) {
+        setRosterStateByTeam((currentStates) => ({
+          ...currentStates,
+          [teamKey]: {
+            ...(currentStates[teamKey] ?? createProviderSectionState()),
+            error: 'Current roster temporarily unavailable.',
+            provider: result?.provider ?? null,
+            status: currentStates[teamKey]?.data ? 'success' : 'error',
+          },
         }))
-        setRosterStatus('success')
-      } catch (error) {
-        setRosterStatus('error')
-        setRosterError(error.message)
-      }
-    },
-    [rostersByTeam],
-  )
-
-  const loadTeamStats = useCallback(
-    async (team) => {
-      if (!team?.abbreviation) {
-        return
+        return null
       }
 
-      if (statsByTeam[team.abbreviation]) {
-        setStatsStatus('success')
-        setStatsError('')
-        return
-      }
+      setRosterStateByTeam((currentStates) => ({
+        ...currentStates,
+        [teamKey]: {
+          data: result.data,
+          error: '',
+          provider: result.provider,
+          status: 'success',
+        },
+      }))
+      return result.data
+    } catch {
+      setRosterStateByTeam((currentStates) => ({
+        ...currentStates,
+        [teamKey]: {
+          ...(currentStates[teamKey] ?? createProviderSectionState()),
+          error: 'Current roster temporarily unavailable.',
+          status: currentStates[teamKey]?.data ? 'success' : 'error',
+        },
+      }))
+      return null
+    }
+  }, [])
 
-      setStatsStatus('loading')
-      setStatsError('')
+  const loadTeamStats = useCallback(async (team, { force = false } = {}) => {
+    const teamKey = team?.abbreviation
 
-      try {
-        const stats = await fetchTeamStats(team.abbreviation)
+    if (!teamKey) {
+      return null
+    }
 
-        setStatsByTeam((currentStats) => ({
-          ...currentStats,
-          [team.abbreviation]: stats,
+    setStatsStateByTeam((currentStates) => ({
+      ...currentStates,
+      [teamKey]: {
+        ...(currentStates[teamKey] ?? createProviderSectionState()),
+        error: '',
+        status: currentStates[teamKey]?.data ? 'refreshing' : 'loading',
+      },
+    }))
+
+    try {
+      const result = await teamsDataCoordinator.loadStats(teamKey, { force })
+
+      if (isUnavailableProviderResult(result)) {
+        setStatsStateByTeam((currentStates) => ({
+          ...currentStates,
+          [teamKey]: {
+            ...(currentStates[teamKey] ?? createProviderSectionState()),
+            error: 'Special Teams data temporarily unavailable.',
+            provider: result?.provider ?? null,
+            status: currentStates[teamKey]?.data ? 'success' : 'error',
+          },
         }))
-        setStatsStatus('success')
-      } catch (error) {
-        setStatsStatus('error')
-        setStatsError(error.message)
-      }
-    },
-    [statsByTeam],
-  )
-
-  const loadGoalieSummaries = useCallback(
-    async (team, { force = false } = {}) => {
-      if (!team?.abbreviation) {
-        return
+        return null
       }
 
-      const teamKey = team.abbreviation
-      const currentStatus = goalieSummaryStatusByTeam[teamKey]
-
-      if (
-        !force &&
-        (currentStatus === 'loading' || currentStatus === 'success')
-      ) {
-        return
-      }
-
-      setGoalieSummaryStatusByTeam((currentStatuses) => ({
-        ...currentStatuses,
-        [teamKey]: 'loading',
+      setStatsStateByTeam((currentStates) => ({
+        ...currentStates,
+        [teamKey]: {
+          data: result.data,
+          error: '',
+          provider: result.provider,
+          status: 'success',
+        },
       }))
-      setGoalieSummaryErrorByTeam((currentErrors) => ({
-        ...currentErrors,
-        [teamKey]: '',
+      return result.data
+    } catch {
+      setStatsStateByTeam((currentStates) => ({
+        ...currentStates,
+        [teamKey]: {
+          ...(currentStates[teamKey] ?? createProviderSectionState()),
+          error: 'Special Teams data temporarily unavailable.',
+          status: currentStates[teamKey]?.data ? 'success' : 'error',
+        },
       }))
+      return null
+    }
+  }, [])
 
-      try {
-        const goalieSummaries = await fetchTeamGoalieSummaries(teamKey)
-        const summaries = goalieSummaries.goalies ?? []
+  const loadGoalieSummaries = useCallback(async (
+    team,
+    { force = false } = {},
+  ) => {
+    const teamKey = team?.abbreviation
+
+    if (!teamKey) {
+      return null
+    }
+
+    setGoalieSummaryStateByTeam((currentStates) => ({
+      ...currentStates,
+      [teamKey]: {
+        ...(currentStates[teamKey] ?? createProviderSectionState()),
+        error: '',
+        status: currentStates[teamKey]?.data ? 'refreshing' : 'loading',
+      },
+    }))
+
+    try {
+      const result = await teamsDataCoordinator.loadGoalieSummaries(
+        teamKey,
+        { force },
+      )
+
+      if (isUnavailableProviderResult(result)) {
+        setGoalieSummaryStateByTeam((currentStates) => ({
+          ...currentStates,
+          [teamKey]: {
+            ...(currentStates[teamKey] ?? createProviderSectionState()),
+            error: 'Goalie statistics temporarily unavailable.',
+            provider: result?.provider ?? null,
+            status: currentStates[teamKey]?.data ? 'success' : 'error',
+          },
+        }))
+        return null
+      }
+
+      const goalieSummaries = result.data
+      const summaries = goalieSummaries.goalies ?? []
 
         setGoalieStatsByPlayerId((currentStats) => {
           const nextStats = { ...currentStats }
@@ -375,23 +507,28 @@ function Teams({
 
           return nextStatuses
         })
-        setGoalieSummaryStatusByTeam((currentStatuses) => ({
-          ...currentStatuses,
-          [teamKey]: 'success',
+        setGoalieSummaryStateByTeam((currentStates) => ({
+          ...currentStates,
+          [teamKey]: {
+            data: result.data,
+            error: '',
+            provider: result.provider,
+            status: 'success',
+          },
         }))
-      } catch (error) {
-        setGoalieSummaryStatusByTeam((currentStatuses) => ({
-          ...currentStatuses,
-          [teamKey]: 'error',
+        return result.data
+      } catch {
+        setGoalieSummaryStateByTeam((currentStates) => ({
+          ...currentStates,
+          [teamKey]: {
+            ...(currentStates[teamKey] ?? createProviderSectionState()),
+            error: 'Goalie statistics temporarily unavailable.',
+            status: currentStates[teamKey]?.data ? 'success' : 'error',
+          },
         }))
-        setGoalieSummaryErrorByTeam((currentErrors) => ({
-          ...currentErrors,
-          [teamKey]: error.message,
-        }))
+        return null
       }
-    },
-    [goalieSummaryStatusByTeam],
-  )
+  }, [])
 
   const loadGoalieStats = useCallback(
     async (playerId, { force = false } = {}) => {
@@ -445,25 +582,22 @@ function Teams({
 
   const handleSelectTeam = (team) => {
     setSelectedTeam(team)
-    loadRoster(team)
-    loadTeamStats(team)
-    loadGoalieSummaries(team)
   }
 
   const handleBackToTeams = () => {
     setSelectedTeam(null)
-    setRosterStatus('idle')
-    setRosterError('')
-    setStatsStatus('idle')
-    setStatsError('')
   }
 
-  const selectedRoster = selectedTeam
-    ? rostersByTeam[selectedTeam.abbreviation]
-    : null
-  const selectedStats = selectedTeam
-    ? statsByTeam[selectedTeam.abbreviation]
-    : null
+  const selectedTeamKey = selectedTeam?.abbreviation
+  const selectedRosterState = selectedTeamKey
+    ? rosterStateByTeam[selectedTeamKey] ?? createProviderSectionState()
+    : createProviderSectionState()
+  const selectedStatsState = selectedTeamKey
+    ? statsStateByTeam[selectedTeamKey] ?? createProviderSectionState()
+    : createProviderSectionState()
+  const selectedGoalieSummaryState = selectedTeamKey
+    ? goalieSummaryStateByTeam[selectedTeamKey] ?? createProviderSectionState()
+    : createProviderSectionState()
 
   return (
     <section className="teams-page" aria-label="Teams">
@@ -472,27 +606,29 @@ function Teams({
           key={selectedTeam.abbreviation}
           injurySummaries={injurySummaries}
           injurySummaryStatus={injurySummaryStatus}
+          maximumGoaliePenalty={maximumGoaliePenalty}
           onBack={handleBackToTeams}
-          onRetryRoster={() => loadRoster(selectedTeam)}
-          onRetryStats={() => loadTeamStats(selectedTeam)}
+          onLoadGoalieSummaries={loadGoalieSummaries}
           onLoadGoalieStats={loadGoalieStats}
+          onLoadRoster={loadRoster}
+          onLoadStats={loadTeamStats}
+          onRetryRoster={() => loadRoster(selectedTeam, { force: true })}
+          onRetryStats={() => loadTeamStats(selectedTeam, { force: true })}
           goalieStatsByPlayerId={goalieStatsByPlayerId}
           goalieStatsErrorByPlayerId={goalieStatsErrorByPlayerId}
           goalieStatsStatusByPlayerId={goalieStatsStatusByPlayerId}
-          goalieSummaryError={
-            goalieSummaryErrorByTeam[selectedTeam.abbreviation] ?? ''
-          }
-          goalieSummaryStatus={
-            goalieSummaryStatusByTeam[selectedTeam.abbreviation] ?? 'idle'
-          }
+          goalieSummaryError={selectedGoalieSummaryState.error}
+          goalieSummaryStatus={selectedGoalieSummaryState.status}
           powerRatings={powerRatings}
           powerRatingsStatus={powerRatingsStatus}
-          roster={selectedRoster}
-          rosterError={rosterError}
-          rosterStatus={rosterStatus}
-          stats={selectedStats}
-          statsError={statsError}
-          statsStatus={statsStatus}
+          roster={selectedRosterState.data}
+          rosterError={selectedRosterState.error}
+          rosterProvider={selectedRosterState.provider}
+          rosterStatus={selectedRosterState.status}
+          stats={selectedStatsState.data}
+          statsError={selectedStatsState.error}
+          statsProvider={selectedStatsState.provider}
+          statsStatus={selectedStatsState.status}
           team={selectedTeam}
         />
       ) : (
@@ -600,17 +736,23 @@ function TeamDetails({
   goalieSummaryStatus,
   injurySummaries,
   injurySummaryStatus,
+  maximumGoaliePenalty,
   onBack,
+  onLoadGoalieSummaries,
   onLoadGoalieStats,
+  onLoadRoster,
+  onLoadStats,
   onRetryRoster,
   onRetryStats,
   powerRatings,
   powerRatingsStatus,
   roster,
   rosterError,
+  rosterProvider,
   rosterStatus,
   stats,
   statsError,
+  statsProvider,
   statsStatus,
   team,
 }) {
@@ -622,6 +764,17 @@ function TeamDetails({
   const [goalieAdjustmentStatus, setGoalieAdjustmentStatus] =
     useState('loading')
   const [goalieAdjustmentError, setGoalieAdjustmentError] = useState('')
+  const rosterReady = Boolean(roster) &&
+    ['success', 'refreshing'].includes(rosterStatus)
+  const rosterBoundaryRef = useLoadNearViewport(
+    () => onLoadRoster(team),
+    `${team.abbreviation}:roster`,
+  )
+  const goalieBoundaryRef = useLoadNearViewport(
+    () => onLoadGoalieSummaries(team),
+    `${team.abbreviation}:goalie-summaries`,
+    rosterReady,
+  )
   const effectiveRating =
     powerRatingsStatus === 'success' && rating
       ? getEffectiveBaseRating(rating)
@@ -662,7 +815,7 @@ function TeamDetails({
   useEffect(() => {
     let isCurrent = true
 
-    fetchGoalieAdjustments(team.abbreviation)
+    fetchSavedGoalieAdjustments(team.abbreviation)
       .then((result) => {
         if (!isCurrent) {
           return
@@ -684,6 +837,14 @@ function TeamDetails({
       isCurrent = false
     }
   }, [team.abbreviation])
+
+  useEffect(() => {
+    const timeout = window.setTimeout(() => {
+      onLoadStats(team)
+    }, 100)
+
+    return () => window.clearTimeout(timeout)
+  }, [onLoadStats, team])
 
   const handleSaveGoalieAdjustment = async (goalie, draft) => {
     const result = await saveGoalieAdjustment(
@@ -737,16 +898,17 @@ function TeamDetails({
     [expandedGoalieId, onLoadGoalieStats],
   )
 
-  const handleManageGoalies = useCallback(() => {
-    const goalieSection = document.getElementById('team-goalies-section')
-
-    goalieSection?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  const handleManageGoalies = useCallback(async () => {
+    await onLoadRoster(team)
     window.setTimeout(() => {
+      const goalieSection = document.getElementById('team-goalies-section')
+
+      goalieSection?.scrollIntoView({ behavior: 'smooth', block: 'start' })
       goalieSection
         ?.querySelector('.goalie-adjustment-edit-button')
         ?.focus()
-    }, 350)
-  }, [])
+    }, 0)
+  }, [onLoadRoster, team])
 
   return (
     <div className="team-details-panel">
@@ -797,61 +959,81 @@ function TeamDetails({
         stats={stats}
         status={statsStatus}
         errorMessage={statsError}
+        provider={statsProvider}
       />
 
       <TeamModelValues
         goalieAdjustments={goalieAdjustments}
         goalieAdjustmentStatus={goalieAdjustmentStatus}
         onManageGoalies={handleManageGoalies}
+        onRequestRoster={() => onLoadRoster(team)}
         roster={roster}
+        rosterStatus={rosterStatus}
         team={team}
       />
 
-      {rosterStatus === 'loading' ? <RosterLoadingState /> : null}
+      <div ref={rosterBoundaryRef}>
+        {rosterStatus === 'idle' ? (
+          <p className="roster-lazy-state">
+            Current roster loads as this section approaches.
+          </p>
+        ) : null}
 
-      {rosterStatus === 'error' ? (
-        <div className="ratings-state error" role="alert">
-          <strong>Roster unavailable</strong>
-          <p>{rosterError}</p>
-          <button type="button" onClick={onRetryRoster}>
-            Try again
-          </button>
-        </div>
-      ) : null}
+        {rosterStatus === 'loading' ? <RosterLoadingState /> : null}
 
-      {rosterStatus === 'success' && roster ? (
-        <div className="roster-sections">
-          {rosterGroups.map((group) => (
-            <RosterSection
-              key={group.key}
-              groupKey={group.key}
-              label={group.label}
-              players={
-                group.key === 'goalies'
-                  ? sortedGoalies
-                  : (roster[group.key] ?? [])
-              }
-              expandedGoalieId={expandedGoalieId}
-              goalieStatsByPlayerId={goalieStatsByPlayerId}
-              goalieStatsErrorByPlayerId={goalieStatsErrorByPlayerId}
-              goalieStatsStatusByPlayerId={goalieStatsStatusByPlayerId}
-              goalieSummaryError={goalieSummaryError}
-              goalieSummaryStatus={goalieSummaryStatus}
-              goalieAdjustmentError={goalieAdjustmentError}
-              goalieAdjustmentStatus={goalieAdjustmentStatus}
-              onLoadGoalieStats={onLoadGoalieStats}
-              onDeleteGoalieAdjustment={handleDeleteGoalieAdjustment}
-              onSaveGoalieAdjustment={handleSaveGoalieAdjustment}
-              onToggleGoalie={handleToggleGoalie}
-            />
-          ))}
-        </div>
-      ) : null}
+        {rosterStatus === 'error' ? (
+          <div className="ratings-state error" role="alert">
+            <strong>Current roster temporarily unavailable.</strong>
+            <p>{rosterError}</p>
+            <button type="button" onClick={onRetryRoster}>
+              Try again
+            </button>
+          </div>
+        ) : null}
+
+        {rosterReady ? (
+          <div className="roster-sections">
+            {rosterProvider?.stale ? (
+              <p className="provider-stale-notice" role="status">
+                Showing cached roster data.
+              </p>
+            ) : null}
+            {rosterGroups.map((group) => (
+              <RosterSection
+                key={group.key}
+                groupKey={group.key}
+                label={group.label}
+                players={
+                  group.key === 'goalies'
+                    ? sortedGoalies
+                    : (roster[group.key] ?? [])
+                }
+                sectionRef={group.key === 'goalies'
+                  ? goalieBoundaryRef
+                  : undefined}
+                expandedGoalieId={expandedGoalieId}
+                goalieStatsByPlayerId={goalieStatsByPlayerId}
+                goalieStatsErrorByPlayerId={goalieStatsErrorByPlayerId}
+                goalieStatsStatusByPlayerId={goalieStatsStatusByPlayerId}
+                goalieSummaryError={goalieSummaryError}
+                goalieSummaryStatus={goalieSummaryStatus}
+                goalieAdjustmentError={goalieAdjustmentError}
+                goalieAdjustmentStatus={goalieAdjustmentStatus}
+                maximumGoaliePenalty={maximumGoaliePenalty}
+                onLoadGoalieStats={onLoadGoalieStats}
+                onDeleteGoalieAdjustment={handleDeleteGoalieAdjustment}
+                onSaveGoalieAdjustment={handleSaveGoalieAdjustment}
+                onToggleGoalie={handleToggleGoalie}
+              />
+            ))}
+          </div>
+        ) : null}
+      </div>
     </div>
   )
 }
 
-function SpecialTeamsSection({ errorMessage, onRetry, stats, status }) {
+function SpecialTeamsSection({ errorMessage, onRetry, provider, stats, status }) {
   return (
     <section className="special-teams-section" aria-label="Special Teams">
       <div className="special-teams-heading">
@@ -860,49 +1042,55 @@ function SpecialTeamsSection({ errorMessage, onRetry, stats, status }) {
 
       {status === 'error' ? (
         <div className="special-teams-error" role="alert">
-          <strong>Special teams unavailable</strong>
+          <strong>Special Teams data temporarily unavailable.</strong>
           <span>{errorMessage}</span>
           <button type="button" onClick={onRetry}>
             Try again
           </button>
         </div>
       ) : (
-        <table className="special-teams-table">
-          <thead>
-            <tr>
-              <th scope="col" aria-label="Season" />
-              <th scope="col">Power Play</th>
-              <th scope="col">Penalty Kill</th>
-            </tr>
-          </thead>
-          <tbody>
-            {specialTeamsRows.map((row) => {
-              const rowStats = stats?.[row.key]
-              const powerPlayValue =
-                status === 'loading'
+        <>
+          {provider?.stale ? (
+            <p className="provider-stale-notice" role="status">
+              Showing cached Special Teams data.
+            </p>
+          ) : null}
+          <table className="special-teams-table">
+            <thead>
+              <tr>
+                <th scope="col" aria-label="Season" />
+                <th scope="col">Power Play</th>
+                <th scope="col">Penalty Kill</th>
+              </tr>
+            </thead>
+            <tbody>
+              {specialTeamsRows.map((row) => {
+                const rowStats = stats?.[row.key]
+                const isLoading = status === 'idle' || status === 'loading'
+                const powerPlayValue = isLoading
                   ? 'Loading'
                   : formatSpecialTeamsValue(
                       rowStats?.[row.powerPlayPercentageKey],
                       rowStats?.[row.powerPlayRankKey],
                     )
-              const penaltyKillValue =
-                status === 'loading'
+                const penaltyKillValue = isLoading
                   ? 'Loading'
                   : formatSpecialTeamsValue(
                       rowStats?.[row.penaltyKillPercentageKey],
                       rowStats?.[row.penaltyKillRankKey],
                     )
 
-              return (
-                <tr key={row.key}>
-                  <th scope="row">{row.label}</th>
-                  <td>{powerPlayValue}</td>
-                  <td>{penaltyKillValue}</td>
-                </tr>
-              )
-            })}
-          </tbody>
-        </table>
+                return (
+                  <tr key={row.key}>
+                    <th scope="row">{row.label}</th>
+                    <td>{powerPlayValue}</td>
+                    <td>{penaltyKillValue}</td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </>
       )}
     </section>
   )
@@ -934,11 +1122,13 @@ function RosterSection({
   goalieSummaryStatus,
   groupKey,
   label,
+  maximumGoaliePenalty,
   onDeleteGoalieAdjustment,
   onLoadGoalieStats,
   onSaveGoalieAdjustment,
   onToggleGoalie,
   players,
+  sectionRef,
 }) {
   const isGoalieSection = groupKey === 'goalies'
 
@@ -947,6 +1137,7 @@ function RosterSection({
       aria-label={label}
       className="roster-section"
       id={isGoalieSection ? 'team-goalies-section' : undefined}
+      ref={sectionRef}
     >
       <div className="roster-section-header">
         <h3>{label}</h3>
@@ -965,6 +1156,7 @@ function RosterSection({
                 isExpanded={expandedGoalieId === String(player.id)}
                 adjustmentErrorMessage={goalieAdjustmentError}
                 adjustmentStatus={goalieAdjustmentStatus}
+                maximumGoaliePenalty={maximumGoaliePenalty}
                 onDeleteAdjustment={onDeleteGoalieAdjustment}
                 onLoadGoalieStats={onLoadGoalieStats}
                 onSaveAdjustment={onSaveGoalieAdjustment}
@@ -994,6 +1186,7 @@ export function GoalieRow({
   adjustmentStatus,
   errorMessage,
   isExpanded,
+  maximumGoaliePenalty = DEFAULT_MAXIMUM_GOALIE_PENALTY,
   onDeleteAdjustment,
   onLoadGoalieStats,
   onSaveAdjustment,
@@ -1034,26 +1227,30 @@ export function GoalieRow({
       note: player.note ?? '',
       ratingAdjustment: Number(player.ratingAdjustment ?? 0).toFixed(2),
     })
-    setAdjustmentMessage('')
+    setAdjustmentMessage(
+      validateGoalieAdjustmentValue(
+        player.ratingAdjustment ?? 0,
+        maximumGoaliePenalty,
+      ),
+    )
     setAdjustmentSaveStatus('idle')
     setIsEditingAdjustment(true)
   }
   const handleAdjustmentSave = async (event) => {
     event.preventDefault()
     event.stopPropagation()
+    const validationMessage = validateGoalieAdjustmentValue(
+      adjustmentDraft.ratingAdjustment,
+      maximumGoaliePenalty,
+    )
+
+    if (validationMessage) {
+      setAdjustmentSaveStatus('error')
+      setAdjustmentMessage(validationMessage)
+      return
+    }
+
     const adjustment = Number(adjustmentDraft.ratingAdjustment)
-
-    if (!Number.isFinite(adjustment) || adjustment < -5 || adjustment > 5) {
-      setAdjustmentSaveStatus('error')
-      setAdjustmentMessage('Use a finite adjustment from -5.00 to +5.00.')
-      return
-    }
-
-    if (Math.abs(adjustment / 0.05 - Math.round(adjustment / 0.05)) > 1e-8) {
-      setAdjustmentSaveStatus('error')
-      setAdjustmentMessage('Use 0.05 increments.')
-      return
-    }
 
     setAdjustmentSaveStatus('saving')
     setAdjustmentMessage('')
@@ -1145,17 +1342,19 @@ export function GoalieRow({
           errorMessage={adjustmentMessage || adjustmentErrorMessage}
           goalieName={player.fullName}
           isSaving={adjustmentSaveStatus === 'saving'}
+          maximumGoaliePenalty={maximumGoaliePenalty}
           onCancel={(event) => {
             event.stopPropagation()
             setIsEditingAdjustment(false)
             setAdjustmentMessage('')
           }}
-          onChange={(field, value) =>
+          onChange={(field, value) => {
+            setAdjustmentMessage('')
             setAdjustmentDraft((currentDraft) => ({
               ...currentDraft,
               [field]: value,
             }))
-          }
+          }}
           onSubmit={handleAdjustmentSave}
         />
       ) : null}
@@ -1181,10 +1380,15 @@ export function GoalieAdjustmentEditor({
   errorMessage,
   goalieName,
   isSaving,
+  maximumGoaliePenalty = DEFAULT_MAXIMUM_GOALIE_PENALTY,
   onCancel,
   onChange,
   onSubmit,
 }) {
+  const configuredMaximum = normalizeMaximumGoaliePenalty(
+    maximumGoaliePenalty,
+  )
+
   return (
     <form
       className="goalie-adjustment-editor"
@@ -1196,8 +1400,8 @@ export function GoalieAdjustmentEditor({
         <span>Goalie adjustment</span>
         <input
           inputMode="decimal"
-          max="5"
-          min="-5"
+          max="0"
+          min={configuredMaximum}
           required
           step="0.05"
           type="number"
@@ -1206,6 +1410,9 @@ export function GoalieAdjustmentEditor({
             onChange('ratingAdjustment', event.target.value)
           }
         />
+        <small>
+          Relative to the team's normal #1 goalie. 0.00 = baseline.
+        </small>
       </label>
       <label className="field">
         <span>Optional note</span>
@@ -1223,6 +1430,18 @@ export function GoalieAdjustmentEditor({
         <button disabled={isSaving} type="submit">
           {isSaving ? 'Saving...' : 'Save'}
         </button>
+      </div>
+      <div className="goalie-adjustment-scale" aria-label="Goalie adjustment guidance">
+        <small>Guidance only</small>
+        <dl>
+          <div><dt>0.00</dt><dd>Normal #1 / baseline</dd></div>
+          <div><dt>-0.25 to -0.75</dt><dd>Small downgrade</dd></div>
+          <div><dt>-1.00 to -2.00</dt><dd>Clear downgrade</dd></div>
+          <div><dt>-2.25 to -3.00</dt><dd>Major downgrade</dd></div>
+        </dl>
+        <p>
+          Maximum allowed: <strong>{configuredMaximum.toFixed(2)}</strong>
+        </p>
       </div>
       {errorMessage ? (
         <p className="field-error" role="alert">

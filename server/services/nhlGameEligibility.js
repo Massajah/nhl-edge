@@ -1,4 +1,5 @@
 const DAY_MS = 24 * 60 * 60 * 1000
+const { getNhlTeamIdentity } = require('./nhlTeamIdentity')
 
 const NHL_GAME_TYPE_CODES = Object.freeze({
   PRESEASON: 1,
@@ -110,7 +111,10 @@ const getGameTypeLabel = (gameType) =>
 
 const resolveTeam = ({ rawTeam, teamsById }) => {
   const abbreviation = getTeamAbbreviationFromApi(rawTeam)
-  const mappedTeam = teamsById?.get(abbreviation) ?? null
+  const canonicalAbbreviation =
+    getNhlTeamIdentity(abbreviation, getTeamNameFromApi(rawTeam)) ??
+    abbreviation
+  const mappedTeam = teamsById?.get(canonicalAbbreviation) ?? null
 
   return {
     abbreviation,

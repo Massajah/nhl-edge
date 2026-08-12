@@ -1,18 +1,27 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { getTeamMetadata } from '../data/teamMetadata.js'
 import { NHL_TEAMS } from '../data/teams.js'
+import { DEFAULT_MAXIMUM_PLAYER_INJURY_PENALTY } from '../config/baseModel.js'
 import {
+  clearTeamInjuryHistory,
   createInjury,
   deleteInjury,
   fetchInjuries,
   updateInjury,
 } from '../services/injuriesApi.js'
+import { teamsDataCoordinator } from '../services/teamsDataCoordinator.js'
 import {
   INJURY_DURATION_OPTIONS,
+  INJURY_POSITION_OPTIONS,
   INJURY_STATUS_OPTIONS,
+  buildClearHistoryConfirmation,
+  filterInjuryRosterPlayers,
   formatInjuryImpact,
+  getInjuryImpactOptions,
   getTeamInjurySummary,
+  isStandardInjuryImpact,
   normalizeInjuries,
+  normalizeInjuryRosterPlayers,
 } from '../utils/injuries.js'
 
 const sortOptions = [
@@ -28,8 +37,23 @@ const filterOptions = [
   { value: 'short-term', label: 'Short-term injuries' },
 ]
 
+const INJURY_IMPACT_GUIDANCE = Object.freeze([
+  { impact: 0, label: 'No meaningful downgrade / adequately replaceable' },
+  { impact: -0.5, label: 'Small downgrade' },
+  { impact: -1, label: 'Clear downgrade' },
+  { impact: -1.5, label: 'Major absence / difficult to replace' },
+  { impact: -2, label: 'Star-level absence' },
+  {
+    impact: -2.5,
+    label: 'Maximum default individual penalty / exceptional elite absence',
+  },
+])
+
 const emptyDraft = {
+  playerSelection: '',
   playerName: '',
+  providerPlayerId: null,
+  position: '',
   status: 'out',
   impact: '0',
   durationType: 'unknown',
@@ -47,7 +71,12 @@ const formatOptionLabel = (options, value) =>
 const getDraftFromInjury = (injury) =>
   injury
     ? {
+        playerSelection: injury.providerPlayerId
+          ? `provider:${injury.providerPlayerId}`
+          : 'manual',
         playerName: injury.playerName,
+        providerPlayerId: injury.providerPlayerId,
+        position: injury.position,
         status: injury.status,
         impact: String(injury.impact),
         durationType: injury.durationType,
@@ -60,6 +89,7 @@ const getDraftFromInjury = (injury) =>
 
 function InjuryManager({
   injurySummaries,
+  maximumPlayerInjuryPenalty = DEFAULT_MAXIMUM_PLAYER_INJURY_PENALTY,
   onInjuriesChanged,
   summaryError,
   summaryStatus,
@@ -210,6 +240,30 @@ function InjuryManager({
     setActionStatus('saving')
     setActionMessage('')
 
+    const activeDuplicate = injuries.find((injury) => {
+      if (
+        injury.teamId !== team.id ||
+        !isCountingInjury(injury)
+      ) {
+        return false
+      }
+
+      return payload.providerPlayerId
+        ? injury.providerPlayerId === payload.providerPlayerId
+        : !injury.providerPlayerId &&
+            injury.playerName.trim().toLowerCase() ===
+              payload.playerName.trim().toLowerCase()
+    })
+
+    if (activeDuplicate) {
+      setEditorState({ injury: activeDuplicate, mode: 'edit', team })
+      setActionStatus('idle')
+      setActionMessage(
+        `${activeDuplicate.playerName} already has an active record. Opened it for editing.`,
+      )
+      return
+    }
+
     try {
       await createInjury({
         ...payload,
@@ -268,6 +322,38 @@ function InjuryManager({
       setActionStatus('error')
       setActionMessage(error.message)
       throw error
+    }
+  }
+
+  const handleClearHistory = async (team, recordCount) => {
+    if (recordCount <= 0 || actionStatus === 'saving') {
+      return
+    }
+
+    const confirmed =
+      typeof window === 'undefined' ||
+      window.confirm(
+        buildClearHistoryConfirmation(team.name, recordCount),
+      )
+
+    if (!confirmed) {
+      return
+    }
+
+    setActionStatus('saving')
+    setActionMessage('')
+
+    try {
+      const result = await clearTeamInjuryHistory(team.id)
+
+      await refreshAfterMutation()
+      setActionStatus('success')
+      setActionMessage(
+        `Cleared ${result.deletedCount} historical injury ${result.deletedCount === 1 ? 'record' : 'records'}.`,
+      )
+    } catch (error) {
+      setActionStatus('error')
+      setActionMessage(error.message)
     }
   }
 
@@ -384,6 +470,7 @@ function InjuryManager({
             {visibleTeams.map((team) => (
               <TeamInjuryCard
                 key={team.id}
+                isSaving={actionStatus === 'saving'}
                 onAdd={() =>
                   setEditorState({
                     mode: 'add',
@@ -396,6 +483,9 @@ function InjuryManager({
                     mode: 'edit',
                     team,
                   })
+                }
+                onClearHistory={(recordCount) =>
+                  handleClearHistory(team, recordCount)
                 }
                 onMarkHealthy={handleMarkHealthy}
                 team={team}
@@ -411,8 +501,10 @@ function InjuryManager({
 
       {editorState ? (
         <InjuryEditorModal
+          key={`${editorState.mode}-${editorState.injury?.id ?? editorState.team.id}`}
           actionStatus={actionStatus}
           injury={editorState.injury}
+          maximumPlayerInjuryPenalty={maximumPlayerInjuryPenalty}
           mode={editorState.mode}
           onClose={() => setEditorState(null)}
           onDelete={handleDeleteInjury}
@@ -442,13 +534,23 @@ function InjuryLoadingState() {
   )
 }
 
-function TeamInjuryCard({ onAdd, onEdit, onMarkHealthy, team }) {
-  const [expanded, setExpanded] = useState(false)
-  const [showHistory, setShowHistory] = useState(false)
+export function TeamInjuryCard({
+  initialExpanded = false,
+  initialShowHistory = false,
+  isSaving = false,
+  onAdd,
+  onClearHistory,
+  onEdit,
+  onMarkHealthy,
+  team,
+}) {
+  const [expanded, setExpanded] = useState(initialExpanded)
+  const [showHistory, setShowHistory] = useState(initialShowHistory)
   const activeInjuries = team.injuries.filter(isCountingInjury)
   const historicalInjuries = team.injuries.filter((injury) => !isCountingInjury(injury))
-  const displayedInjuries = showHistory ? team.injuries : activeInjuries
   const hasHistory = historicalInjuries.length > 0
+  const showingHistory = showHistory && hasHistory
+  const displayedInjuries = showingHistory ? team.injuries : activeInjuries
 
   return (
     <article className={`injury-team-card ${expanded ? 'expanded' : ''}`}>
@@ -483,24 +585,38 @@ function TeamInjuryCard({ onAdd, onEdit, onMarkHealthy, team }) {
       {expanded ? (
         <div className="injury-team-body">
           <div className="injury-team-actions">
-            <button type="button" onClick={onAdd}>
+            <button type="button" disabled={isSaving} onClick={onAdd}>
               Add injured player
             </button>
-            <label className="injury-history-toggle">
-              <input
-                type="checkbox"
-                checked={showHistory}
-                disabled={!hasHistory}
-                onChange={(event) => setShowHistory(event.target.checked)}
-              />
-              <span>Show history</span>
-            </label>
+            <div className="injury-history-controls">
+              <label className="injury-history-toggle">
+                <input
+                  type="checkbox"
+                  checked={showingHistory}
+                  disabled={!hasHistory}
+                  onChange={(event) => setShowHistory(event.target.checked)}
+                />
+                <span>Show history</span>
+              </label>
+              {showingHistory ? (
+                <button
+                  className="injury-clear-history-button"
+                  type="button"
+                  disabled={isSaving}
+                  title={`Permanently delete ${historicalInjuries.length} historical injury ${historicalInjuries.length === 1 ? 'record' : 'records'}. Active injuries will not be affected.`}
+                  onClick={() => onClearHistory(historicalInjuries.length)}
+                >
+                  Clear history
+                </button>
+              ) : null}
+            </div>
           </div>
 
           {displayedInjuries.length > 0 ? (
             <div className="injury-player-table" role="table">
               <div className="injury-player-table-head" role="row">
                 <span>Player</span>
+                <span>Pos</span>
                 <span>Status</span>
                 <span>Duration</span>
                 <span>Type</span>
@@ -553,6 +669,9 @@ function InjuryPlayerRow({ injury, onEdit, onMarkHealthy }) {
           </span>
         ) : null}
       </div>
+      <span className="injury-position-value" role="cell">
+        {injury.position || 'Unknown'}
+      </span>
       <span role="cell">
         {formatOptionLabel(INJURY_STATUS_OPTIONS, injury.status)}
       </span>
@@ -562,7 +681,7 @@ function InjuryPlayerRow({ injury, onEdit, onMarkHealthy }) {
       <span role="cell">{injury.injuryType || 'None'}</span>
       <span role="cell">{injury.expectedReturn || 'TBD'}</span>
       <strong className="injury-impact-value" role="cell">
-        {formatInjuryImpact(injury.impact)}
+        {formatInjuryImpact(injury.isGoalie ? 0 : injury.impact)}
         {injury.isGoalie ? <small>Excluded from model</small> : null}
       </strong>
       <div className="injury-row-actions" role="cell">
@@ -586,9 +705,12 @@ function InjuryPlayerRow({ injury, onEdit, onMarkHealthy }) {
   )
 }
 
-function InjuryEditorModal({
+export function InjuryEditorModal({
   actionStatus,
+  initialComboboxOpen = false,
+  initialRoster = null,
   injury,
+  maximumPlayerInjuryPenalty,
   mode,
   onClose,
   onDelete,
@@ -598,8 +720,113 @@ function InjuryEditorModal({
   const [draft, setDraft] = useState(() => getDraftFromInjury(injury))
   const [showNotes, setShowNotes] = useState(() => Boolean(injury?.notes?.trim()))
   const [errorMessage, setErrorMessage] = useState('')
+  const [rosterSearch, setRosterSearch] = useState(() =>
+    injury
+      ? injury.providerPlayerId
+        ? injury.playerName
+        : 'Other / Unlisted player'
+      : '',
+  )
+  const [comboboxOpen, setComboboxOpen] = useState(initialComboboxOpen)
+  const [activeOptionIndex, setActiveOptionIndex] = useState(0)
+  const [comboboxSearchDirty, setComboboxSearchDirty] = useState(false)
+  const comboboxRef = useRef(null)
+  const comboboxInputRef = useRef(null)
+  const [rosterState, setRosterState] = useState(() => ({
+    error: '',
+    players: initialRoster ? normalizeInjuryRosterPlayers(initialRoster) : [],
+    status: initialRoster ? 'success' : 'loading',
+  }))
   const isEditing = mode === 'edit'
   const isSaving = actionStatus === 'saving'
+  const isManualPlayer = draft.playerSelection === 'manual'
+  const isGoalie = draft.position === 'G' || draft.isGoalie === true
+  const impactOptions = useMemo(
+    () => getInjuryImpactOptions(maximumPlayerInjuryPenalty),
+    [maximumPlayerInjuryPenalty],
+  )
+  const visibleRosterPlayers = useMemo(
+    () => filterInjuryRosterPlayers(rosterState.players, rosterSearch),
+    [rosterSearch, rosterState.players],
+  )
+  const selectedRosterPlayer = rosterState.players.find(
+    (player) => player.id === draft.providerPlayerId,
+  )
+  const hasMissingSavedPlayer = Boolean(
+    draft.providerPlayerId && !selectedRosterPlayer,
+  )
+  const savedSnapshotPlayer = hasMissingSavedPlayer
+    ? {
+        fullName: draft.playerName,
+        id: draft.providerPlayerId,
+        position: draft.position,
+        sweaterNumber: '',
+      }
+    : null
+  const visibleSavedSnapshot = savedSnapshotPlayer &&
+    filterInjuryRosterPlayers([savedSnapshotPlayer], rosterSearch).length > 0
+      ? savedSnapshotPlayer
+      : null
+  const comboboxOptions = [
+    ...visibleRosterPlayers.map((player) => ({
+      player,
+      selection: `provider:${player.id}`,
+      type: 'roster',
+    })),
+    ...(visibleSavedSnapshot
+      ? [
+          {
+            player: visibleSavedSnapshot,
+            selection: `provider:${visibleSavedSnapshot.id}`,
+            type: 'snapshot',
+          },
+        ]
+      : []),
+    { selection: 'manual', type: 'manual' },
+  ]
+  const currentImpact = Number(draft.impact)
+  const hasLegacyImpact = Boolean(
+    isEditing &&
+      !isGoalie &&
+      Number.isFinite(currentImpact) &&
+      !isStandardInjuryImpact(
+        currentImpact,
+        maximumPlayerInjuryPenalty,
+      ),
+  )
+
+  useEffect(() => {
+    let isCurrent = true
+
+    teamsDataCoordinator
+      .loadRoster(team.abbreviation)
+      .then((result) => {
+        if (!isCurrent) {
+          return
+        }
+
+        setRosterState({
+          error: '',
+          players: normalizeInjuryRosterPlayers(result?.data),
+          status: 'success',
+        })
+      })
+      .catch((error) => {
+        if (!isCurrent) {
+          return
+        }
+
+        setRosterState({
+          error: error.message,
+          players: [],
+          status: 'error',
+        })
+      })
+
+    return () => {
+      isCurrent = false
+    }
+  }, [team.abbreviation])
 
   const handleDraftChange = (field, value) => {
     setDraft((currentDraft) => ({
@@ -609,31 +836,198 @@ function InjuryEditorModal({
     setErrorMessage('')
   }
 
+  const handlePlayerSelectionChange = (selection, selectedPlayer = null) => {
+    if (selection === 'manual') {
+      setDraft((currentDraft) => ({
+        ...currentDraft,
+        isGoalie: currentDraft.position === 'G',
+        playerSelection: 'manual',
+        providerPlayerId: null,
+      }))
+      setErrorMessage('')
+      return
+    }
+
+    const providerPlayerId = Number(selection.replace('provider:', ''))
+    const player =
+      selectedPlayer ??
+      rosterState.players.find(
+        (rosterPlayer) => rosterPlayer.id === providerPlayerId,
+      )
+
+    if (!player) {
+      return
+    }
+
+    const goalie = player.position === 'G'
+    setDraft((currentDraft) => ({
+      ...currentDraft,
+      impact: goalie ? '0' : currentDraft.impact,
+      isGoalie: goalie,
+      playerName: player.fullName,
+      playerSelection: selection,
+      position: player.position,
+      providerPlayerId: player.id,
+    }))
+    setErrorMessage('')
+  }
+
+  const getSelectedComboboxLabel = () => {
+    if (draft.playerSelection === 'manual') {
+      return 'Other / Unlisted player'
+    }
+
+    return draft.playerSelection ? draft.playerName : ''
+  }
+
+  const selectComboboxOption = (option) => {
+    if (!option) {
+      return
+    }
+
+    if (option.type === 'manual') {
+      handlePlayerSelectionChange('manual')
+      setRosterSearch('Other / Unlisted player')
+    } else {
+      handlePlayerSelectionChange(option.selection, option.player)
+      setRosterSearch(option.player.fullName)
+    }
+
+    setComboboxOpen(false)
+    setActiveOptionIndex(0)
+    setComboboxSearchDirty(false)
+  }
+
+  const handleComboboxFocus = () => {
+    setComboboxOpen(true)
+    setActiveOptionIndex(0)
+
+    if (draft.playerSelection && !comboboxSearchDirty) {
+      setRosterSearch('')
+    }
+  }
+
+  const handleComboboxBlur = (event) => {
+    if (comboboxRef.current?.contains(event.relatedTarget)) {
+      return
+    }
+
+    setComboboxOpen(false)
+    if (!comboboxSearchDirty) {
+      setRosterSearch(getSelectedComboboxLabel())
+    }
+  }
+
+  const handleComboboxInputChange = (value) => {
+    setRosterSearch(value)
+    setComboboxOpen(true)
+    setActiveOptionIndex(0)
+    setComboboxSearchDirty(true)
+    setErrorMessage('')
+  }
+
+  const handleComboboxKeyDown = (event) => {
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      setComboboxOpen(false)
+      setRosterSearch(getSelectedComboboxLabel())
+      setComboboxSearchDirty(false)
+      return
+    }
+
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault()
+
+      if (!comboboxOpen) {
+        setComboboxOpen(true)
+        setRosterSearch('')
+        setActiveOptionIndex(
+          event.key === 'ArrowDown' ? 0 : comboboxOptions.length - 1,
+        )
+        return
+      }
+
+      const direction = event.key === 'ArrowDown' ? 1 : -1
+      setActiveOptionIndex((currentIndex) => {
+        const optionCount = comboboxOptions.length
+
+        if (optionCount === 0) {
+          return 0
+        }
+
+        return (currentIndex + direction + optionCount) % optionCount
+      })
+      return
+    }
+
+    if (event.key === 'Enter' && comboboxOpen) {
+      event.preventDefault()
+      selectComboboxOption(
+        comboboxOptions[Math.min(activeOptionIndex, comboboxOptions.length - 1)],
+      )
+    }
+  }
+
+  const handleManualPositionChange = (position) => {
+    const goalie = position === 'G'
+
+    setDraft((currentDraft) => ({
+      ...currentDraft,
+      impact: goalie ? '0' : currentDraft.impact,
+      isGoalie: goalie,
+      position,
+    }))
+    setErrorMessage('')
+  }
+
   const handleSubmit = async (event) => {
     event.preventDefault()
 
-    if (!draft.playerName.trim()) {
+    if (!draft.playerSelection) {
+      setErrorMessage('Select a roster player or Other / Unlisted player.')
+      return
+    }
+
+    if (comboboxSearchDirty) {
+      setErrorMessage('Choose a player from the filtered results before saving.')
+      return
+    }
+
+    if (isManualPlayer && !draft.playerName.trim()) {
       setErrorMessage('Player name is required.')
       return
     }
 
-    const impact = Number(draft.impact)
+    const impact = isGoalie ? 0 : Number(draft.impact)
 
     if (!Number.isFinite(impact)) {
       setErrorMessage('Impact must be a number.')
       return
     }
 
-    if (impact > 0) {
-      setErrorMessage('Impact cannot be positive.')
+    const unchangedLegacyImpact =
+      isEditing && impact === Number(injury?.impact) && hasLegacyImpact
+
+    if (
+      !isGoalie &&
+      !unchangedLegacyImpact &&
+      !isStandardInjuryImpact(impact, maximumPlayerInjuryPenalty)
+    ) {
+      setErrorMessage(
+        `Injury adjustment must use 0.50-point increments from ${Number(maximumPlayerInjuryPenalty).toFixed(2)} through 0.00.`,
+      )
       return
     }
 
     try {
+      const payloadDraft = { ...draft }
+      delete payloadDraft.playerSelection
+
       await onSave({
-        ...draft,
+        ...payloadDraft,
         active: draft.status !== 'healthy',
         impact,
+        isGoalie,
         notes: showNotes ? draft.notes : '',
       })
     } catch (error) {
@@ -669,16 +1063,150 @@ function InjuryEditorModal({
           </div>
 
           <div className="injury-modal-grid">
-            <label className="field">
-              <span>Player name</span>
-              <input
-                type="text"
-                value={draft.playerName}
-                onChange={(event) =>
-                  handleDraftChange('playerName', event.target.value)
-                }
-              />
-            </label>
+            <div className="field injury-player-combobox-field">
+              <label htmlFor="injury-player-combobox">Player</label>
+              <div className="injury-player-combobox" ref={comboboxRef}>
+                <input
+                  aria-activedescendant={
+                    comboboxOpen
+                      ? `injury-player-option-${activeOptionIndex}`
+                      : undefined
+                  }
+                  aria-autocomplete="list"
+                  aria-controls="injury-player-options"
+                  aria-expanded={comboboxOpen}
+                  aria-haspopup="listbox"
+                  autoComplete="off"
+                  id="injury-player-combobox"
+                  placeholder="Search or select player..."
+                  ref={comboboxInputRef}
+                  role="combobox"
+                  type="text"
+                  value={rosterSearch}
+                  onBlur={handleComboboxBlur}
+                  onClick={handleComboboxFocus}
+                  onChange={(event) =>
+                    handleComboboxInputChange(event.target.value)
+                  }
+                  onFocus={handleComboboxFocus}
+                  onKeyDown={handleComboboxKeyDown}
+                />
+
+                {comboboxOpen ? (
+                  <div
+                    className="injury-player-combobox-menu"
+                    id="injury-player-options"
+                    role="listbox"
+                  >
+                    {rosterState.status === 'loading' ? (
+                      <div className="injury-player-combobox-state" role="status">
+                        Loading current roster...
+                      </div>
+                    ) : null}
+
+                    {rosterState.status === 'success' &&
+                    visibleRosterPlayers.length === 0 &&
+                    !visibleSavedSnapshot ? (
+                      <div className="injury-player-combobox-state">
+                        No roster players found
+                      </div>
+                    ) : null}
+
+                    {rosterState.status === 'error' ? (
+                      <div className="injury-player-combobox-state error">
+                        Roster unavailable
+                      </div>
+                    ) : null}
+
+                    {comboboxOptions.map((option, optionIndex) => {
+                      const isManual = option.type === 'manual'
+                      const isActiveOption = optionIndex === activeOptionIndex
+                      const isSelected =
+                        option.selection === draft.playerSelection
+
+                      return (
+                        <button
+                          aria-selected={isSelected}
+                          className={`injury-player-combobox-option${
+                            isActiveOption ? ' active' : ''
+                          }${isManual ? ' manual' : ''}`}
+                          id={`injury-player-option-${optionIndex}`}
+                          key={option.selection}
+                          role="option"
+                          type="button"
+                          onClick={() => selectComboboxOption(option)}
+                          onMouseDown={(event) => event.preventDefault()}
+                          onMouseEnter={() => setActiveOptionIndex(optionIndex)}
+                        >
+                          {isManual ? (
+                            <strong>Other / Unlisted player</strong>
+                          ) : (
+                            <>
+                              <strong>{option.player.fullName}</strong>
+                              <span>
+                                {option.player.position || 'Unknown position'}
+                                {option.player.sweaterNumber
+                                  ? ` · #${option.player.sweaterNumber}`
+                                  : ''}
+                                {option.type === 'snapshot'
+                                  ? ' · saved snapshot'
+                                  : ''}
+                              </span>
+                            </>
+                          )}
+                        </button>
+                      )
+                    })}
+                  </div>
+                ) : null}
+              </div>
+              <small>
+                Search by player name, position, or jersey number.{' '}
+                {rosterState.status === 'error'
+                  ? 'Other / Unlisted player remains available.'
+                  : `${rosterState.players.length} current roster players.`}
+              </small>
+            </div>
+
+            {isManualPlayer ? (
+              <label className="field">
+                <span>Manual player name</span>
+                <input
+                  required
+                  type="text"
+                  value={draft.playerName}
+                  onChange={(event) =>
+                    handleDraftChange('playerName', event.target.value)
+                  }
+                />
+              </label>
+            ) : null}
+
+            {isManualPlayer ? (
+              <label className="field">
+                <span>Position (optional)</span>
+                <select
+                  value={draft.position}
+                  onChange={(event) =>
+                    handleManualPositionChange(event.target.value)
+                  }
+                >
+                  {INJURY_POSITION_OPTIONS.map((option) => (
+                    <option key={option.value || 'unknown'} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : draft.playerSelection ? (
+              <div className="injury-selected-player" aria-label="Selected player identity">
+                <span>Selected player</span>
+                <strong>{draft.playerName}</strong>
+                <small>
+                  {draft.position || 'Unknown position'} · Provider ID {draft.providerPlayerId}
+                </small>
+              </div>
+            ) : null}
 
             <label className="field">
               <span>Status</span>
@@ -697,17 +1225,28 @@ function InjuryEditorModal({
             </label>
 
             <label className="field">
-              <span>Impact</span>
-              <input
-                type="number"
-                max="0"
-                step="0.1"
+              <span>Injury adjustment</span>
+              <select
+                disabled={isGoalie}
                 value={draft.impact}
-                inputMode="decimal"
                 onChange={(event) =>
                   handleDraftChange('impact', event.target.value)
                 }
-              />
+              >
+                {hasLegacyImpact ? (
+                  <option value={draft.impact}>
+                    {Number(draft.impact).toFixed(2)} · current saved legacy value
+                  </option>
+                ) : null}
+                {impactOptions.map((impact) => (
+                  <option key={impact} value={String(impact)}>
+                    {impact.toFixed(2)}
+                  </option>
+                ))}
+              </select>
+              <small>
+                Single-skater range: {Number(maximumPlayerInjuryPenalty).toFixed(2)} to 0.00
+              </small>
             </label>
 
             <label className="field">
@@ -749,20 +1288,39 @@ function InjuryEditorModal({
             </label>
           </div>
 
-          <label className="toggle-field injury-goalie-flag">
-            <input
-              type="checkbox"
-              checked={draft.isGoalie}
-              onChange={(event) =>
-                handleDraftChange('isGoalie', event.target.checked)
-              }
-            />
-            <span>Goalie availability record</span>
-            <small>
-              Preserved for reference but excluded from injury model impact;
-              select the starting goalie in Analyzer instead.
-            </small>
-          </label>
+          {isGoalie ? (
+            <div className="injury-goalie-notice" role="note">
+              <strong>Goalie availability / reference-only</strong>
+              <span>
+                Goalie availability is tracked for reference only. Goalie
+                performance impact is handled through Starting Goalies in Game
+                Analyzer.
+              </span>
+            </div>
+          ) : null}
+
+          <div className="injury-impact-guidance" aria-label="Injury adjustment guidance">
+            <div>
+              <strong>Guidance only</strong>
+              <span>These are judgment anchors, not mandatory player tiers.</span>
+            </div>
+            <dl>
+              {INJURY_IMPACT_GUIDANCE.map((item) => (
+                <div key={item.impact}>
+                  <dt>{item.impact.toFixed(2)}</dt>
+                  <dd>{item.label}</dd>
+                </div>
+              ))}
+            </dl>
+            <p>
+              Consider the replacement player and current team depth. The same
+              roster role can have different impact on different teams.
+            </p>
+            <p>
+              Use Game injury adjustment in Analyzer for cumulative lineup
+              effects not fully captured by individual player records.
+            </p>
+          </div>
 
           <div className="injury-note-control">
             <button

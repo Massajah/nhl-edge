@@ -1,3 +1,5 @@
+import { BASE_MODEL_V1 } from '../config/baseModel.js'
+
 export const toNumber = (value) => {
   const parsedValue = Number(value)
   return Number.isFinite(parsedValue) ? parsedValue : 0
@@ -170,7 +172,11 @@ export const calculateMarketComparison = ({
   }
 }
 
-export function calculateGame(home, away) {
+export function calculateGame(
+  home,
+  away,
+  probabilityScale = BASE_MODEL_V1.probabilityScale,
+) {
   const homeInjuryAdjustment =
     toNumber(home.storedInjuryImpact) + toNumber(home.injuries)
   const awayInjuryAdjustment =
@@ -195,7 +201,13 @@ export function calculateGame(home, away) {
     toNumber(away.manualAdjustment)
 
   const ratingDifference = homeFinalRating - awayFinalRating
-  const homeWinProbability = 1 / (1 + Math.exp(-ratingDifference / 6))
+  const parsedProbabilityScale = Number(probabilityScale)
+  const normalizedProbabilityScale =
+    Number.isFinite(parsedProbabilityScale) && parsedProbabilityScale > 0
+      ? parsedProbabilityScale
+      : BASE_MODEL_V1.probabilityScale
+  const homeWinProbability =
+    1 / (1 + Math.exp(-ratingDifference / normalizedProbabilityScale))
   const awayWinProbability = 1 - homeWinProbability
   const homeMarket = calculateMarketComparison({
     marketOdds: home.marketOdds,
@@ -210,6 +222,7 @@ export function calculateGame(home, away) {
     homeFinalRating,
     awayFinalRating,
     ratingDifference,
+    probabilityScale: normalizedProbabilityScale,
     homeWinProbability,
     awayWinProbability,
     homeFairOdds: homeMarket.fairOdds,

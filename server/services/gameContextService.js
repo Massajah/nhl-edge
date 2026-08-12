@@ -467,6 +467,10 @@ const updateGameGoalieSelections = async (
           getRosterForTeam: options.getRosterForTeam,
           goalieAdjustmentModel: options.goalieAdjustmentModel,
           legacyTeamGoaliesModel: options.legacyTeamGoaliesModel,
+          maximumGoaliePenalty: options.maximumGoaliePenalty,
+          ratingEngineSettingsModel: options.ratingEngineSettingsModel,
+          settingsProvider:
+            options.ratingEngineSettingsProvider ?? options.settingsProvider,
           side,
         },
       )

@@ -23,7 +23,7 @@ const goalieAdjustmentSchema = new mongoose.Schema(
       type: Number,
       required: true,
       min: -5,
-      max: 5,
+      max: 0,
     },
     note: {
       type: String,

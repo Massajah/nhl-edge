@@ -7,6 +7,7 @@ const {
   getGoalieAdjustmentForPlayer,
   normalizeAdjustment,
   normalizeNhlPlayerId,
+  resolveMaximumGoaliePenalty,
 } = require('./goalieAdjustmentsService')
 
 const SELECTION_TYPES = ['custom', 'provider_goalie', 'unknown']
@@ -150,7 +151,30 @@ const normalizeTeamId = async (value, expectedTeamId = '') => {
 const getAdjustmentOptions = (options = {}) => ({
   goalieAdjustmentModel: options.goalieAdjustmentModel,
   legacyTeamGoaliesModel: options.legacyTeamGoaliesModel,
+  maximumGoaliePenalty: options.maximumGoaliePenalty,
+  ratingEngineSettingsModel: options.ratingEngineSettingsModel,
+  settingsProvider: options.settingsProvider,
 })
+
+const assertSavedAdjustmentWithinPolicy = (
+  adjustment,
+  maximumGoaliePenalty,
+) => {
+  if (adjustment >= maximumGoaliePenalty && adjustment <= 0) {
+    return
+  }
+
+  throw new GoalieAdjustmentsError(
+    `Saved team goalie adjustment ${adjustment.toFixed(2)} is outside the current ${maximumGoaliePenalty.toFixed(2)} to 0.00 range. Review the Goalie adjustment on the Teams page.`,
+    400,
+    {
+      field: 'teamDefaultAdjustment',
+      maximumGoaliePenalty,
+      ratingAdjustment: adjustment,
+      requiresGoalieReview: true,
+    },
+  )
+}
 
 const normalizeGameGoalieSelection = async (
   userId,
@@ -161,6 +185,9 @@ const normalizeGameGoalieSelection = async (
     getRosterForTeam = nhlApiService.getRosterForTeam,
     goalieAdjustmentModel,
     legacyTeamGoaliesModel,
+    maximumGoaliePenalty,
+    ratingEngineSettingsModel,
+    settingsProvider,
     side = 'team',
   } = {},
 ) => {
@@ -187,6 +214,18 @@ const normalizeGameGoalieSelection = async (
     return createUnknownGoalieSelection(team.teamId)
   }
 
+  const adjustmentOptions = getAdjustmentOptions({
+    goalieAdjustmentModel,
+    legacyTeamGoaliesModel,
+    maximumGoaliePenalty,
+    ratingEngineSettingsModel,
+    settingsProvider,
+  })
+  const configuredMaximumGoaliePenalty = await resolveMaximumGoaliePenalty(
+    userId,
+    adjustmentOptions,
+  )
+
   const confirmationStatus = normalizeSelectionStatus(
     selection.confirmationStatus,
     selectionType,
@@ -196,6 +235,7 @@ const normalizeGameGoalieSelection = async (
     const manualAdjustment = normalizeAdjustment(
       selection.manualAdjustment,
       'manualAdjustment',
+      configuredMaximumGoaliePenalty,
     )
     const displayName = normalizeDisplayName(
       selection.displayName ?? selection.goalieName,
@@ -244,10 +284,7 @@ const normalizeGameGoalieSelection = async (
         userId,
         team.teamId,
         playerId,
-        {
-          goalieAdjustmentModel,
-          legacyTeamGoaliesModel,
-        },
+        adjustmentOptions,
       )
     : null
   const teamDefaultAdjustment = providerGoalie
@@ -255,8 +292,19 @@ const normalizeGameGoalieSelection = async (
     : savedSelection.teamDefaultAdjustment ?? 0
   const overrideEnabled = selection.overrideEnabled === true
   const manualAdjustment = overrideEnabled
-    ? normalizeAdjustment(selection.manualAdjustment, 'manualAdjustment')
+    ? normalizeAdjustment(
+        selection.manualAdjustment,
+        'manualAdjustment',
+        configuredMaximumGoaliePenalty,
+      )
     : null
+
+  if (!overrideEnabled) {
+    assertSavedAdjustmentWithinPolicy(
+      teamDefaultAdjustment,
+      configuredMaximumGoaliePenalty,
+    )
+  }
   const displayName = providerGoalie
     ? normalizeDisplayName(providerGoalie.fullName ?? providerGoalie.playerName)
     : savedSelection.displayName

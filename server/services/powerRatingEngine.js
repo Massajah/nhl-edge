@@ -1,13 +1,15 @@
+const { BASE_MODEL_V1 } = require('../config/baseModel')
+
 const DEFAULT_RATING_ENGINE_CONFIGURATION = Object.freeze({
-  modelVersion: 'power-rating-v1',
-  kFactor: 1.2,
-  regulationMultiplier: 1.0,
-  overtimeMultiplier: 0.7,
-  shootoutMultiplier: 0.5,
+  modelVersion: BASE_MODEL_V1.modelVersion,
+  kFactor: BASE_MODEL_V1.kFactor,
+  regulationMultiplier: BASE_MODEL_V1.regulationMultiplier,
+  overtimeMultiplier: BASE_MODEL_V1.overtimeMultiplier,
+  shootoutMultiplier: BASE_MODEL_V1.shootoutMultiplier,
 })
 
 const DEFAULT_BASE_RATING = 50
-const PROBABILITY_SCALE = 6
+const PROBABILITY_SCALE = BASE_MODEL_V1.probabilityScale
 const PROBABILITY_TOLERANCE = 1e-9
 const RESULT_TYPES = Object.freeze({
   REGULATION: 'regulation',
@@ -183,8 +185,29 @@ const normalizeAutomaticAdjustments = (automaticAdjustments = {}) => {
   }
 }
 
-const calculateLogisticProbability = (ratingDifference) => {
-  const scaledDifference = ratingDifference / PROBABILITY_SCALE
+const calculateLogisticProbability = (
+  ratingDifference,
+  probabilityScale = PROBABILITY_SCALE,
+) => {
+  const normalizedRatingDifference = toFiniteNumber(
+    ratingDifference,
+    'ratingDifference',
+  )
+  const normalizedProbabilityScale = toFiniteNumber(
+    probabilityScale,
+    'probabilityScale',
+  )
+
+  if (normalizedProbabilityScale <= 0) {
+    throw new PowerRatingEngineError(
+      'probabilityScale must be greater than 0.',
+      400,
+      { field: 'probabilityScale' },
+    )
+  }
+
+  const scaledDifference =
+    normalizedRatingDifference / normalizedProbabilityScale
 
   if (scaledDifference >= 0) {
     const exponent = Math.exp(-scaledDifference)
@@ -245,6 +268,7 @@ const calculatePregameProbability = ({
   automaticAdjustments = {},
   homeAdvantage,
   homeRating,
+  probabilityScale = PROBABILITY_SCALE,
 }) => {
   const normalizedHomeRating = toFiniteNumber(homeRating, 'homeRating')
   const normalizedAwayRating = toFiniteNumber(awayRating, 'awayRating')
@@ -261,7 +285,14 @@ const calculatePregameProbability = ({
   const awayEffectiveRating =
     normalizedAwayRating + normalizedAdjustments.away.total
   const ratingDifference = homeEffectiveRating - awayEffectiveRating
-  const homeProbability = calculateLogisticProbability(ratingDifference)
+  const normalizedProbabilityScale = toFiniteNumber(
+    probabilityScale,
+    'probabilityScale',
+  )
+  const homeProbability = calculateLogisticProbability(
+    ratingDifference,
+    normalizedProbabilityScale,
+  )
   const awayProbability = 1 - homeProbability
 
   return {
@@ -273,7 +304,7 @@ const calculatePregameProbability = ({
     homeEffectiveRating,
     homeProbability,
     homeRating: normalizedHomeRating,
-    probabilityScale: PROBABILITY_SCALE,
+    probabilityScale: normalizedProbabilityScale,
     ratingDifference,
   }
 }
@@ -440,6 +471,7 @@ module.exports = {
   PowerRatingEngineError,
   RESULT_TYPES,
   WINNERS,
+  calculateLogisticProbability,
   calculatePregameProbability,
   calculateRatingUpdate,
   classifyCompletedGameResult,

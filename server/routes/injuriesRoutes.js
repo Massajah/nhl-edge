@@ -9,6 +9,10 @@ router.use(authenticate)
 router.get('/', injuriesController.getInjuries)
 router.get('/summary', injuriesController.getTeamInjurySummary)
 router.get('/team/:teamId', injuriesController.getTeamInjuries)
+router.delete(
+  '/team/:teamId/history',
+  injuriesController.clearTeamInjuryHistory,
+)
 router.post('/', injuriesController.createInjury)
 router.put('/:id', injuriesController.updateInjury)
 router.delete('/:id', injuriesController.deleteInjury)

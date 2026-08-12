@@ -1,17 +1,19 @@
 const NHL_API_BASE_URL = 'https://api-web.nhle.com/v1'
 const NHL_STATS_API_BASE_URL = 'https://api.nhle.com/stats/rest/en'
+const { getKnownTeamById } = require('./teamCatalogService')
+const { normalizeSeasonId } = require('./nhlSeasonIdentity')
 const NHL_TIME_ZONE = 'America/New_York'
 const REQUEST_TIMEOUT_MS = 8000
 const MS_PER_DAY = 24 * 60 * 60 * 1000
 const DEFAULT_NHL_API_CONCURRENCY_LIMIT = 3
-const DEFAULT_NHL_API_MAX_RETRIES = 2
+const DEFAULT_NHL_API_MAX_RETRIES = 1
 const NHL_API_RETRY_BASE_DELAY_MS = 250
 const NHL_API_RETRY_MAX_DELAY_MS = 5000
 const NHL_API_CACHE_TTLS_MS = Object.freeze({
   currentSchedule: 30 * 1000,
   default: 5 * 60 * 1000,
   futureSchedule: 15 * 60 * 1000,
-  historicalSchedule: 24 * 60 * 60 * 1000,
+  historicalSchedule: 30 * 24 * 60 * 60 * 1000,
 })
 const REGULAR_SEASON_GAME_TYPE_ID = 2
 const SPECIAL_TEAMS_CACHE_TTL_MS = 8 * 60 * 60 * 1000
@@ -29,6 +31,8 @@ const goalieSeasonStatsCache = new Map()
 const goalieSeasonStatsPromises = new Map()
 const nhlApiResponseCache = new Map()
 const nhlApiInFlightRequests = new Map()
+const historicalScheduleRangeCache = new Map()
+const historicalScheduleRangePromises = new Map()
 
 class NhlApiError extends Error {
   constructor(message, options = {}) {
@@ -189,6 +193,17 @@ const createNhlApiRequester = ({
     })
   }
 
+  const logDevelopmentEvent = (message, details) => {
+    if (
+      process.env.NODE_ENV === 'production' ||
+      process.env.NHL_EDGE_API_DEBUG !== 'true'
+    ) {
+      return
+    }
+
+    logger.debug?.(message, details)
+  }
+
   const executeFetch = async ({ baseUrl, path }) => {
     let attempt = 0
 
@@ -211,13 +226,18 @@ const createNhlApiRequester = ({
         const retryAfterMs = parseRetryAfterMs(response.headers)
 
         if (response.status === 429 && attempt < maxRetries) {
-          const delayMs =
-            retryAfterMs ??
-            Math.min(
-              NHL_API_RETRY_MAX_DELAY_MS,
-              NHL_API_RETRY_BASE_DELAY_MS * 2 ** attempt + jitterMs(),
-            )
+          const delayMs = retryAfterMs === null
+            ? Math.min(
+                NHL_API_RETRY_MAX_DELAY_MS,
+                NHL_API_RETRY_BASE_DELAY_MS * 2 ** attempt + jitterMs(),
+              )
+            : Math.min(retryAfterMs, NHL_API_RETRY_MAX_DELAY_MS)
 
+          logDevelopmentEvent('NHL API 429 retry', {
+            attempt: attempt + 1,
+            delayMs,
+            path,
+          })
           await sleepImpl(delayMs)
           attempt += 1
           continue
@@ -253,7 +273,38 @@ const createNhlApiRequester = ({
     throw new NhlApiError('NHL API returned an unsuccessful response.')
   }
 
-  return async (baseUrl, rawPath) => {
+  const selectResult = (result, includeMetadata) =>
+    includeMetadata ? result : result.data
+
+  const resolveRequest = async (
+    requestPromise,
+    cachedResponse,
+    { allowStale = false, includeMetadata = false } = {},
+  ) => {
+    try {
+      return selectResult(await requestPromise, includeMetadata)
+    } catch (error) {
+      if (
+        cachedResponse?.data &&
+        (allowStale || error.upstreamStatus === 429)
+      ) {
+        logDevelopmentEvent('NHL API stale-cache fallback', {
+          upstreamStatus: error.upstreamStatus,
+        })
+
+        return selectResult({
+          data: cachedResponse.data,
+          fetchedAt: cachedResponse.fetchedAt ?? null,
+          source: 'stale_cache',
+          stale: true,
+        }, includeMetadata)
+      }
+
+      throw error
+    }
+  }
+
+  return async (baseUrl, rawPath, options = {}) => {
     const path = normalizeRequestPath(rawPath)
     const key = `${baseUrl}${path}`
     const cachedResponse = cache.get(key)
@@ -261,12 +312,21 @@ const createNhlApiRequester = ({
 
     if (cachedResponse && cachedResponse.expiresAt > nowMs) {
       logDevelopmentRequest({ cacheStatus: 'hit', key, path })
-      return cachedResponse.data
+      return selectResult({
+        data: cachedResponse.data,
+        fetchedAt: cachedResponse.fetchedAt ?? null,
+        source: 'cache',
+        stale: false,
+      }, options.includeMetadata)
     }
 
     if (inFlightRequests.has(key)) {
       logDevelopmentRequest({ cacheStatus: 'in_flight', key, path })
-      return inFlightRequests.get(key)
+      return resolveRequest(
+        inFlightRequests.get(key),
+        cachedResponse,
+        options,
+      )
     }
 
     logDevelopmentRequest({
@@ -278,19 +338,20 @@ const createNhlApiRequester = ({
     const requestPromise = limiter
       .run(() => executeFetch({ baseUrl, path }))
       .then((data) => {
+        const fetchedAt = new Date(now()).toISOString()
+
         cache.set(key, {
           data,
           expiresAt: now() + getCacheTtlMs(path, new Date(now())),
+          fetchedAt,
         })
 
-        return data
-      })
-      .catch((error) => {
-        if (error.upstreamStatus === 429 && cachedResponse?.data) {
-          return cachedResponse.data
+        return {
+          data,
+          fetchedAt,
+          source: 'live',
+          stale: false,
         }
-
-        throw error
       })
       .finally(() => {
         inFlightRequests.delete(key)
@@ -298,7 +359,7 @@ const createNhlApiRequester = ({
 
     inFlightRequests.set(key, requestPromise)
 
-    return requestPromise
+    return resolveRequest(requestPromise, cachedResponse, options)
   }
 }
 
@@ -391,10 +452,14 @@ const getVenueCity = (game = {}) => {
 
 const simplifyGame = (game = {}) => ({
   gameId: game.id,
+  gameType: game.gameType ?? null,
+  season: game.season ?? null,
   startTimeUTC: game.startTimeUTC,
   homeTeam: simplifyTeam(game.homeTeam),
   awayTeam: simplifyTeam(game.awayTeam),
   gameState: game.gameState ?? 'UNKNOWN',
+  gameOutcome: game.gameOutcome ?? null,
+  periodDescriptor: game.periodDescriptor ?? null,
   status: getGameStatus(game),
   venueCity: getVenueCity(game),
   venueLocation: getLocalizedValue(game.venueLocation),
@@ -514,13 +579,40 @@ const normalizePlayerId = (playerId = '') => String(playerId).trim()
 const isValidPlayerId = (playerId) =>
   PLAYER_ID_PATTERN.test(normalizePlayerId(playerId))
 
-const requestNhlResource = async (baseUrl, path) =>
-  requestNhlResourceWithCache(baseUrl, path)
+const requestNhlResource = async (baseUrl, path, options) =>
+  requestNhlResourceWithCache(baseUrl, path, options)
 
-const requestNhlApi = async (path) => requestNhlResource(NHL_API_BASE_URL, path)
+const requestNhlApi = async (path, options) =>
+  requestNhlResource(NHL_API_BASE_URL, path, options)
 
-const requestNhlStatsApi = async (path) =>
-  requestNhlResource(NHL_STATS_API_BASE_URL, path)
+const requestNhlStatsApi = async (path, options) =>
+  requestNhlResource(NHL_STATS_API_BASE_URL, path, options)
+
+const getProviderStatus = (source) => {
+  if (source === 'cache') {
+    return 'cached'
+  }
+
+  if (source === 'stale_cache') {
+    return 'stale'
+  }
+
+  return 'ready'
+}
+
+const serializeProviderState = (data, metadata, includeProviderState) => {
+  if (!includeProviderState) {
+    return data
+  }
+
+  return {
+    data,
+    fetchedAt: metadata?.fetchedAt ?? null,
+    source: metadata?.source ?? 'live',
+    stale: Boolean(metadata?.stale),
+    status: getProviderStatus(metadata?.source),
+  }
+}
 
 const roundToOneDecimal = (value) => Number(value.toFixed(1))
 
@@ -643,7 +735,9 @@ const getStatsTeamDirectory = async () => {
 }
 
 const getCurrentSeasonContext = async () => {
-  const standings = await requestNhlApi('/standings/now')
+  const standings = await requestNhlApi('/standings/now', {
+    allowStale: true,
+  })
   const standingsTeams = Array.isArray(standings.standings)
     ? standings.standings
     : []
@@ -691,6 +785,113 @@ const getSeasonSpecialTeamsRows = async (seasonId, teamsById) => {
         teamAbbreviation,
         rawPowerPlayPercentage: toOptionalNumber(teamSummary.powerPlayPct),
         rawPenaltyKillPercentage: toOptionalNumber(teamSummary.penaltyKillPct),
+      }
+    })
+    .filter(Boolean)
+}
+
+const calculatePowerPlayPercentage = (goals, opportunities) => {
+  const normalizedGoals = toOptionalNumber(goals)
+  const normalizedOpportunities = toOptionalNumber(opportunities)
+
+  return Number.isFinite(normalizedGoals) &&
+    Number.isFinite(normalizedOpportunities) &&
+    normalizedOpportunities > 0
+    ? normalizedGoals / normalizedOpportunities
+    : null
+}
+
+const calculatePenaltyKillPercentage = (goalsAllowed, situations) => {
+  const normalizedGoalsAllowed = toOptionalNumber(goalsAllowed)
+  const normalizedSituations = toOptionalNumber(situations)
+
+  return Number.isFinite(normalizedGoalsAllowed) &&
+    Number.isFinite(normalizedSituations) &&
+    normalizedSituations > 0
+    ? 1 - normalizedGoalsAllowed / normalizedSituations
+    : null
+}
+
+const getHistoricalSeasonSpecialTeamsRows = async (seasonId) => {
+  const normalizedSeasonId = normalizeSeasonId(seasonId)
+
+  if (!normalizedSeasonId) {
+    throw new NhlApiError('Season must use canonical YYYYyyyy format.', {
+      statusCode: 400,
+    })
+  }
+
+  const cayenneExpression = encodeURIComponent(
+    `seasonId=${normalizedSeasonId} and gameTypeId=${REGULAR_SEASON_GAME_TYPE_ID}`,
+  )
+  const [teamsById, powerPlayResponse, penaltyKillResponse] = await Promise.all([
+    getStatsTeamDirectory(),
+    requestNhlStatsApi(
+      `/team/powerplay?limit=-1&cayenneExp=${cayenneExpression}`,
+    ),
+    requestNhlStatsApi(
+      `/team/penaltykill?limit=-1&cayenneExp=${cayenneExpression}`,
+    ),
+  ])
+  const powerPlayRows = Array.isArray(powerPlayResponse.data)
+    ? powerPlayResponse.data
+    : []
+  const penaltyKillByTeamId = new Map(
+    (Array.isArray(penaltyKillResponse.data) ? penaltyKillResponse.data : [])
+      .map((row) => [toOptionalNumber(row.teamId), row])
+      .filter(([teamId]) => Number.isFinite(teamId)),
+  )
+
+  return powerPlayRows
+    .map((powerPlay) => {
+      const teamId = toOptionalNumber(powerPlay.teamId)
+      const penaltyKill = penaltyKillByTeamId.get(teamId)
+      const teamAbbreviation = teamsById.get(teamId)
+      const powerPlayGoals = toOptionalNumber(powerPlay.powerPlayGoalsFor)
+      const powerPlayOpportunities = toOptionalNumber(
+        powerPlay.ppOpportunities,
+      )
+      const penaltyKillSituations = toOptionalNumber(
+        penaltyKill?.timesShorthanded,
+      )
+      const powerPlayGoalsAllowed = toOptionalNumber(
+        penaltyKill?.ppGoalsAgainst,
+      )
+      const rawPowerPlayPercentage = calculatePowerPlayPercentage(
+        powerPlayGoals,
+        powerPlayOpportunities,
+      )
+      const rawPenaltyKillPercentage = calculatePenaltyKillPercentage(
+        powerPlayGoalsAllowed,
+        penaltyKillSituations,
+      )
+
+      if (
+        !Number.isFinite(teamId) ||
+        !teamAbbreviation ||
+        !penaltyKill ||
+        !Number.isFinite(rawPowerPlayPercentage) ||
+        !Number.isFinite(rawPenaltyKillPercentage)
+      ) {
+        return null
+      }
+
+      return {
+        gamesPlayed: Math.max(
+          toOptionalNumber(powerPlay.gamesPlayed) ?? 0,
+          toOptionalNumber(penaltyKill.gamesPlayed) ?? 0,
+        ),
+        penaltyKillSituations,
+        powerPlayGoals,
+        powerPlayGoalsAllowed,
+        powerPlayOpportunities,
+        rawPenaltyKillPercentage,
+        rawPowerPlayPercentage,
+        seasonId: normalizedSeasonId,
+        sourceTeamAbbreviation: teamAbbreviation,
+        teamId,
+        teamName:
+          powerPlay.teamFullName ?? penaltyKill.teamFullName ?? teamAbbreviation,
       }
     })
     .filter(Boolean)
@@ -856,35 +1057,72 @@ const buildLeagueSpecialTeamsStats = async () => {
   }
 }
 
-const getLeagueSpecialTeamsStats = async () => {
+const getLeagueSpecialTeamsStats = async ({ includeProviderState = false } = {}) => {
   const now = Date.now()
 
   if (
     leagueSpecialTeamsStatsCache &&
     leagueSpecialTeamsStatsCache.expiresAt > now
   ) {
-    return leagueSpecialTeamsStatsCache.data
+    return serializeProviderState(
+      leagueSpecialTeamsStatsCache.data,
+      {
+        fetchedAt: leagueSpecialTeamsStatsCache.fetchedAt,
+        source: 'cache',
+        stale: false,
+      },
+      includeProviderState,
+    )
   }
 
   if (!leagueSpecialTeamsStatsPromise) {
     leagueSpecialTeamsStatsPromise = buildLeagueSpecialTeamsStats()
       .then((data) => {
+        const fetchedAt = new Date().toISOString()
+
         leagueSpecialTeamsStatsCache = {
           data,
           expiresAt: Date.now() + SPECIAL_TEAMS_CACHE_TTL_MS,
+          fetchedAt,
         }
 
-        return data
+        return {
+          data,
+          fetchedAt,
+          source: 'live',
+          stale: false,
+        }
       })
       .finally(() => {
         leagueSpecialTeamsStatsPromise = null
       })
   }
 
-  return leagueSpecialTeamsStatsPromise
+  try {
+    const result = await leagueSpecialTeamsStatsPromise
+
+    return includeProviderState ? {
+      ...result,
+      status: 'ready',
+    } : result.data
+  } catch (error) {
+    if (!leagueSpecialTeamsStatsCache?.data) {
+      throw error
+    }
+
+    return serializeProviderState(
+      leagueSpecialTeamsStatsCache.data,
+      {
+        fetchedAt: leagueSpecialTeamsStatsCache.fetchedAt,
+        source: 'stale_cache',
+        stale: true,
+      },
+      includeProviderState,
+    )
+  }
 }
 
-const getSpecialTeamsForTeam = async (teamAbbreviation) => {
+const getSpecialTeamsForTeam = async (teamAbbreviation, options = {}) => {
   const normalizedAbbreviation = normalizeTeamAbbreviation(teamAbbreviation)
 
   if (!isValidTeamAbbreviation(normalizedAbbreviation)) {
@@ -893,7 +1131,10 @@ const getSpecialTeamsForTeam = async (teamAbbreviation) => {
     })
   }
 
-  const leagueStats = await getLeagueSpecialTeamsStats()
+  const leagueState = await getLeagueSpecialTeamsStats({
+    includeProviderState: true,
+  })
+  const leagueStats = leagueState.data
 
   if (!leagueStats.currentTeamAbbreviations.includes(normalizedAbbreviation)) {
     throw new NhlApiError('Team not found.', {
@@ -901,7 +1142,7 @@ const getSpecialTeamsForTeam = async (teamAbbreviation) => {
     })
   }
 
-  return {
+  const specialTeams = {
     teamAbbreviation: normalizedAbbreviation,
     currentSeason: serializeSeasonSpecialTeams(
       leagueStats.currentSeasonStatsByTeam.get(normalizedAbbreviation),
@@ -918,6 +1159,45 @@ const getSpecialTeamsForTeam = async (teamAbbreviation) => {
       leagueStats.previousThreeSeasonIds,
     ),
   }
+
+  return serializeProviderState(
+    specialTeams,
+    leagueState,
+    options.includeProviderState,
+  )
+}
+
+const getLeagueSpecialTeamsMatchupData = async (options = {}) => {
+  const leagueState = await getLeagueSpecialTeamsStats({
+    includeProviderState: true,
+  })
+  const leagueStats = leagueState.data
+  const teams = leagueStats.currentTeamAbbreviations.map(
+    (teamAbbreviation) => {
+      const stats = leagueStats.previousThreeSeasonAverageStatsByTeam.get(
+        teamAbbreviation,
+      )
+
+      return {
+        penaltyKillLeagueRank:
+          stats?.averagePenaltyKillLeagueRank ?? null,
+        powerPlayLeagueRank:
+          stats?.averagePowerPlayLeagueRank ?? null,
+        teamAbbreviation,
+      }
+    },
+  )
+  const matchupData = {
+    leagueTeamCount: leagueStats.currentTeamAbbreviations.length,
+    previousThreeSeasonIds: leagueStats.previousThreeSeasonIds,
+    teams,
+  }
+
+  return serializeProviderState(
+    matchupData,
+    leagueState,
+    options.includeProviderState,
+  )
 }
 
 const getPlayerLanding = async (playerId) => {
@@ -1090,6 +1370,13 @@ const getGoalieSeasonStatsCached = async ({ playerId, playerName, seasonId }) =>
 
         return data
       })
+      .catch((error) => {
+        if (cachedStats?.data) {
+          return cachedStats.data
+        }
+
+        throw error
+      })
       .finally(() => {
         goalieSeasonStatsPromises.delete(cacheKey)
       })
@@ -1100,7 +1387,7 @@ const getGoalieSeasonStatsCached = async ({ playerId, playerName, seasonId }) =>
   return goalieSeasonStatsPromises.get(cacheKey)
 }
 
-const getGoalieSummariesForTeam = async (teamAbbreviation) => {
+const getGoalieSummariesForTeam = async (teamAbbreviation, options = {}) => {
   const normalizedAbbreviation = normalizeTeamAbbreviation(teamAbbreviation)
 
   if (!isValidTeamAbbreviation(normalizedAbbreviation)) {
@@ -1109,10 +1396,11 @@ const getGoalieSummariesForTeam = async (teamAbbreviation) => {
     })
   }
 
-  const [roster, { currentSeasonId }] = await Promise.all([
-    getRosterForTeam(normalizedAbbreviation),
+  const [rosterState, { currentSeasonId }] = await Promise.all([
+    getRosterForTeam(normalizedAbbreviation, { includeProviderState: true }),
     getCurrentSeasonContext(),
   ])
+  const roster = rosterState.data
   const rosterGoalies = (roster.goalies ?? []).filter(
     (player) => player.position === 'G',
   )
@@ -1143,11 +1431,17 @@ const getGoalieSummariesForTeam = async (teamAbbreviation) => {
       }),
     )
 
-    return {
+    const summaries = {
       teamAbbreviation: normalizedAbbreviation,
       season: currentSeasonId,
       goalies,
     }
+
+    return serializeProviderState(
+      summaries,
+      rosterState,
+      options.includeProviderState,
+    )
   } catch (error) {
     throw new NhlApiError('Unable to load goalie summaries.', {
       cause: error,
@@ -1235,6 +1529,13 @@ const getGoalieStatsForPlayer = async (playerId) => {
 
         return data
       })
+      .catch((error) => {
+        if (cachedStats?.data) {
+          return cachedStats.data
+        }
+
+        throw error
+      })
       .finally(() => {
         goalieStatsPromises.delete(cacheKey)
       })
@@ -1245,7 +1546,8 @@ const getGoalieStatsForPlayer = async (playerId) => {
   return goalieStatsPromises.get(cacheKey)
 }
 
-const getScheduleForDate = async (date) => requestNhlApi(`/schedule/${date}`)
+const getScheduleForDate = async (date, options) =>
+  requestNhlApi(`/schedule/${date}`, options)
 
 const getClubScheduleSeason = async (teamAbbreviation, seasonId) => {
   const normalizedAbbreviation = normalizeTeamAbbreviation(teamAbbreviation)
@@ -1339,7 +1641,10 @@ const extractScheduleGamesForDateRange = (
 
       ;(Array.isArray(scheduleDay.games) ? scheduleDay.games : []).forEach(
         (game) => {
-          const simplifiedGame = simplifyGame(game)
+          const simplifiedGame = {
+            ...simplifyGame(game),
+            __replayScheduleDate: scheduleDay.date,
+          }
 
           if (simplifiedGame.gameId) {
             gamesById.set(String(simplifiedGame.gameId), simplifiedGame)
@@ -1356,11 +1661,149 @@ const extractScheduleGamesForDateRange = (
   )
 }
 
-const getScheduleGamesForDateRange = async (dateFrom, dateTo) => {
-  const requestDates = buildScheduleDateRequests(dateFrom, dateTo)
-  const schedules = await Promise.all(requestDates.map(getScheduleForDate))
+const getHistoricalScheduleRangeCacheKey = (seasonId, dateFrom, dateTo) => {
+  const normalizedSeasonId = normalizeSeasonId(seasonId)
 
-  return extractScheduleGamesForDateRange(schedules, dateFrom, dateTo)
+  return normalizedSeasonId
+    ? `/historical-schedule-season/${normalizedSeasonId}/${dateFrom}/${dateTo}`
+    : ''
+}
+
+const getScheduleRangeSource = (scheduleStates) => {
+  const sources = new Set(scheduleStates.map((state) => state.source))
+
+  if (sources.has('live')) {
+    return sources.size === 1 ? 'live' : 'mixed'
+  }
+
+  if (sources.has('stale_cache')) {
+    return 'stale_cache'
+  }
+
+  return 'cache'
+}
+
+const loadScheduleGamesForDateRange = async (dateFrom, dateTo, options = {}) => {
+  const requestDates = buildScheduleDateRequests(dateFrom, dateTo)
+  const scheduleStates = []
+  const batchSize = Math.max(1, Math.min(2, Number(options.batchSize) || 2))
+  const scheduleProvider =
+    options.getScheduleForDateProvider ?? getScheduleForDate
+
+  for (let index = 0; index < requestDates.length; index += batchSize) {
+    const batchDates = requestDates.slice(index, index + batchSize)
+    const batch = await Promise.all(
+      batchDates.map(async (date) => {
+        const state = await scheduleProvider(date, {
+          allowStale: options.allowStale === true,
+          includeMetadata: true,
+        })
+
+        return state?.data
+          ? state
+          : {
+              data: state,
+              fetchedAt: null,
+              source: 'live',
+              stale: false,
+            }
+      }),
+    )
+
+    scheduleStates.push(...batch)
+  }
+
+  const schedules = scheduleStates.map((state) => state.data)
+
+  return {
+    cacheKey: getHistoricalScheduleRangeCacheKey(
+      options.seasonId,
+      dateFrom,
+      dateTo,
+    ),
+    fetchedAt: scheduleStates
+      .map((state) => state.fetchedAt)
+      .filter(Boolean)
+      .sort()
+      .at(-1) ?? null,
+    games: extractScheduleGamesForDateRange(schedules, dateFrom, dateTo),
+    requestCount: requestDates.length,
+    source: getScheduleRangeSource(scheduleStates),
+    stale: scheduleStates.some((state) => state.stale),
+  }
+}
+
+const selectScheduleRangeResult = (state, includeProviderState) =>
+  includeProviderState ? state : state.games
+
+const getScheduleGamesForDateRange = async (dateFrom, dateTo, options = {}) => {
+  const cacheKey = getHistoricalScheduleRangeCacheKey(
+    options.seasonId,
+    dateFrom,
+    dateTo,
+  )
+  const cached = cacheKey ? historicalScheduleRangeCache.get(cacheKey) : null
+  const now = Date.now()
+
+  if (cached && cached.expiresAt > now) {
+    return selectScheduleRangeResult(
+      {
+        ...cached.data,
+        source: 'season_cache',
+        stale: false,
+      },
+      options.includeProviderState,
+    )
+  }
+
+  if (cacheKey && historicalScheduleRangePromises.has(cacheKey)) {
+    return selectScheduleRangeResult(
+      await historicalScheduleRangePromises.get(cacheKey),
+      options.includeProviderState,
+    )
+  }
+
+  const requestPromise = loadScheduleGamesForDateRange(dateFrom, dateTo, {
+    ...options,
+    allowStale: options.allowStale !== false,
+  }).then((state) => {
+    if (cacheKey) {
+      historicalScheduleRangeCache.set(cacheKey, {
+        data: state,
+        expiresAt: Date.now() + NHL_API_CACHE_TTLS_MS.historicalSchedule,
+      })
+    }
+
+    return state
+  })
+
+  if (cacheKey) {
+    historicalScheduleRangePromises.set(cacheKey, requestPromise)
+  }
+
+  try {
+    return selectScheduleRangeResult(
+      await requestPromise,
+      options.includeProviderState,
+    )
+  } catch (error) {
+    if (cached?.data && options.allowStale !== false) {
+      return selectScheduleRangeResult(
+        {
+          ...cached.data,
+          source: 'season_stale_cache',
+          stale: true,
+        },
+        options.includeProviderState,
+      )
+    }
+
+    throw error
+  } finally {
+    if (cacheKey) {
+      historicalScheduleRangePromises.delete(cacheKey)
+    }
+  }
 }
 
 const getGamesForDate = async (date) => {
@@ -1388,7 +1831,7 @@ const getTeams = async () => {
     .sort((teamA, teamB) => teamA.name.localeCompare(teamB.name))
 }
 
-const getRosterForTeam = async (teamAbbreviation) => {
+const getRosterForTeam = async (teamAbbreviation, options = {}) => {
   const normalizedAbbreviation = normalizeTeamAbbreviation(teamAbbreviation)
 
   if (!isValidTeamAbbreviation(normalizedAbbreviation)) {
@@ -1397,29 +1840,40 @@ const getRosterForTeam = async (teamAbbreviation) => {
     })
   }
 
-  const teams = await getTeams()
-  const team = teams.find(
-    (candidateTeam) => candidateTeam.abbreviation === normalizedAbbreviation,
-  )
+  const knownTeam = getKnownTeamById(normalizedAbbreviation)
 
-  if (!team) {
+  if (!knownTeam) {
     throw new NhlApiError('Team not found.', {
       statusCode: 404,
     })
   }
 
   try {
-    const roster = await requestNhlApi(
+    const requestRoster = options.requestRoster ?? requestNhlApi
+    const rosterState = await requestRoster(
       `/roster/${encodeURIComponent(normalizedAbbreviation)}/current`,
+      {
+        allowStale: true,
+        includeMetadata: true,
+      },
     )
-
-    return {
-      team,
+    const roster = rosterState.data
+    const normalizedRoster = {
+      team: {
+        abbreviation: knownTeam.teamAbbreviation,
+        name: knownTeam.teamName,
+      },
       teamAbbreviation: normalizedAbbreviation,
       forwards: normalizeRosterGroup(roster.forwards),
       defensemen: normalizeRosterGroup(roster.defensemen),
       goalies: normalizeRosterGroup(roster.goalies),
     }
+
+    return serializeProviderState(
+      normalizedRoster,
+      rosterState,
+      options.includeProviderState,
+    )
   } catch (error) {
     if (error instanceof NhlApiError && error.upstreamStatus === 404) {
       throw new NhlApiError('Roster not found for that team.', {
@@ -1445,6 +1899,9 @@ module.exports = {
   getGamesForDate,
   getGoalieSummariesForTeam,
   getGoalieStatsForPlayer,
+  getHistoricalSeasonSpecialTeamsRows,
+  getHistoricalScheduleRangeCacheKey,
+  getLeagueSpecialTeamsMatchupData,
   getRosterForTeam,
   getScheduleGamesForDateRange,
   getScheduleForDate,
@@ -1456,4 +1913,5 @@ module.exports = {
   isValidScheduleDate,
   isValidTeamAbbreviation,
   parseRetryAfterMs,
+  loadScheduleGamesForDateRange,
 }

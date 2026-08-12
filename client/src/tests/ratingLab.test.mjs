@@ -169,10 +169,10 @@ test('preview API sends the correct protected request payload', async () => {
   assert.equal(capturedRequest.headers.get('Authorization'), 'Bearer test-token')
   assert.deepEqual(capturedRequest.body, {
     configuration: {
-      kFactor: 1.2,
-      overtimeMultiplier: 0.7,
+      kFactor: 1.3,
+      overtimeMultiplier: 0.4,
       regulationMultiplier: 1,
-      shootoutMultiplier: 0.5,
+      shootoutMultiplier: 0.1,
     },
     dateFrom: '2024-10-04',
     dateTo: '2025-04-17',
@@ -259,10 +259,10 @@ test('reset defaults restore default values', () => {
   )
   assert.deepEqual(ratingLabUtils.createRatingLabDefaultForm(), {
     configuration: {
-      kFactor: '1.2',
-      overtimeMultiplier: '0.7',
+      kFactor: '1.3',
+      overtimeMultiplier: '0.4',
       regulationMultiplier: '1',
-      shootoutMultiplier: '0.5',
+      shootoutMultiplier: '0.1',
     },
     dateFrom: '',
     dateTo: '',

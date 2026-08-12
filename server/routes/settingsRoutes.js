@@ -13,6 +13,14 @@ router.get('/bookmakers', settingsController.getBookmakerPreferences)
 router.put('/bookmakers', settingsController.updateBookmakerPreferences)
 router.get('/rating-engine', settingsController.getRatingEngineSettings)
 router.put('/rating-engine', settingsController.updateRatingEngineSettings)
+router.put(
+  '/rating-engine/engine',
+  settingsController.updateRatingEngineParameters,
+)
+router.put(
+  '/rating-engine/model-adjustments',
+  settingsController.updateRatingEngineModelAdjustments,
+)
 router.post(
   '/rating-engine/reset',
   settingsController.resetRatingEngineSettings,

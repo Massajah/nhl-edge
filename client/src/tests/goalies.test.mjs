@@ -30,7 +30,7 @@ const providerGoalie = {
   nhlPlayerId: 8480280,
   note: 'User adjustment',
   position: 'G',
-  ratingAdjustment: 1.25,
+  ratingAdjustment: -1.25,
 }
 
 before(async () => {
@@ -102,8 +102,8 @@ test('provider default and game override resolve to one effective adjustment', (
     [providerGoalie],
   )
 
-  assert.equal(values.goalieAdjustment, 1.25)
-  assert.equal(values.goalieTeamDefaultAdjustment, 1.25)
+  assert.equal(values.goalieAdjustment, -1.25)
+  assert.equal(values.goalieTeamDefaultAdjustment, -1.25)
   assert.equal(values.goalieOverrideEnabled, false)
   assert.equal(values.goalieSelectionType, 'provider_goalie')
 
@@ -131,7 +131,7 @@ test('provider default and game override resolve to one effective adjustment', (
     true,
     [providerGoalie],
   )
-  assert.equal(values.goalieAdjustment, 1.25)
+  assert.equal(values.goalieAdjustment, -1.25)
   assert.equal(values.goalieOverrideEnabled, false)
 })
 
@@ -147,7 +147,7 @@ test('custom goalie requires one valid adjustment while name stays optional', ()
     'Game-specific goalie adjustment is required.',
   )
 
-  values = goalieUtils.updateGoalieInputs(values, 'manualAdjustment', '0.03')
+  values = goalieUtils.updateGoalieInputs(values, 'manualAdjustment', '-1.03')
   assert.match(goalieUtils.validateGoalieSelectionInputs(values), /0\.05 increments/)
 
   values = goalieUtils.updateGoalieInputs(values, 'manualAdjustment', '-1.50')
@@ -158,6 +158,56 @@ test('custom goalie requires one valid adjustment while name stays optional', ()
   assert.equal(payload.customNote, '')
   assert.equal(payload.effectiveAdjustment, -1.5)
   assert.equal(payload.selectionType, 'custom')
+})
+
+test('goalie validation enforces zero-or-negative values and the configured maximum', () => {
+  const values = {
+    ...modelAnalysis.defaultGameInputs.away,
+    goalieManualAdjustment: '0.25',
+    goalieOverrideEnabled: true,
+    goalieSelectionType: 'custom',
+  }
+
+  assert.match(
+    goalieUtils.validateGoalieSelectionInputs(values, -3.5),
+    /0\.00 or negative/,
+  )
+  assert.match(
+    goalieUtils.validateGoalieSelectionInputs(
+      { ...values, goalieManualAdjustment: '-3.55' },
+      -3.5,
+    ),
+    /between -3\.50 and 0\.00/,
+  )
+  assert.equal(
+    goalieUtils.validateGoalieSelectionInputs(
+      { ...values, goalieManualAdjustment: '0.00' },
+      -3.5,
+    ),
+    '',
+  )
+  assert.equal(
+    goalieUtils.validateGoalieSelectionInputs(
+      { ...values, goalieManualAdjustment: '-3.50' },
+      -3.5,
+    ),
+    '',
+  )
+})
+
+test('out-of-policy saved team defaults are preserved and require review', () => {
+  const values = goalieUtils.goalieSelectionToInputFields(
+    goalieUtils.createProviderGoalieSelection(
+      { ...providerGoalie, ratingAdjustment: -4.5 },
+      'BOS',
+    ),
+  )
+
+  assert.equal(values.goalieAdjustment, -4.5)
+  assert.match(
+    goalieUtils.validateGoalieSelectionInputs(values, -4),
+    /Saved team goalie adjustment -4\.50.*Review it on the Teams page/,
+  )
 })
 
 test('persisted provider selection drives inputs without auto-selecting another goalie', () => {
@@ -179,7 +229,7 @@ test('persisted provider selection drives inputs without auto-selecting another 
   )
 
   assert.equal(inputs.home.goalieNhlPlayerId, 8480280)
-  assert.equal(inputs.home.goalieAdjustment, 1.25)
+  assert.equal(inputs.home.goalieAdjustment, -1.25)
   assert.equal(inputs.away.goalieSelectionType, 'unknown')
 
   const edited = {
@@ -212,7 +262,7 @@ test('saved bet normalization preserves provider provenance and legacy snapshots
     'BOS',
   )
   const normalized = savedAnalyses.normalizeBet({
-    adjustments: { homeGoalie: 1.25, homeGoalieName: 'Legacy Name' },
+    adjustments: { homeGoalie: -1.25, homeGoalieName: 'Legacy Name' },
     goalieSelectionSnapshot: snapshot,
     marketOdds: 2,
     selectedSide: { homeAway: 'home', teamId: 'BOS' },
@@ -240,7 +290,7 @@ test('saved bet normalization preserves provider provenance and legacy snapshots
   assert.equal(normalized.goalieSelectionSnapshot.selectionType, 'provider_goalie')
   assert.equal(normalized.goalieSelectionSnapshot.source, 'provider_goalie')
   assert.equal(normalized.goalieSelectionSnapshot.displayName, 'Jeremy Swayman')
-  assert.equal(normalized.goalieSelectionSnapshot.effectiveAdjustment, 1.25)
+  assert.equal(normalized.goalieSelectionSnapshot.effectiveAdjustment, -1.25)
   assert.equal(legacyProvider.goalieSelectionSnapshot.selectionType, 'provider_goalie')
   assert.equal(legacyProvider.goalieSelectionSnapshot.nhlPlayerId, 8470001)
   assert.equal(legacyCustom.goalieSelectionSnapshot.selectionType, 'custom')
@@ -271,6 +321,7 @@ test('Teams renders provider goalie rows with one compact adjustment editor', ()
       errorMessage: '',
       goalieName: 'Jeremy Swayman',
       isSaving: false,
+      maximumGoaliePenalty: -3.5,
       onCancel: () => {},
       onChange: () => {},
       onSubmit: () => {},
@@ -305,10 +356,13 @@ test('Teams renders provider goalie rows with one compact adjustment editor', ()
 
   assert.match(rowMarkup, /Jeremy Swayman/)
   assert.match(rowMarkup, /Adjustment/)
-  assert.match(rowMarkup, /\+1\.25/)
+  assert.match(rowMarkup, /-1\.25/)
   assert.match(rowMarkup, />Edit</)
   assert.doesNotMatch(rowMarkup, /Add goalie|Mark inactive|Remove/)
   assert.match(editorMarkup, /Goalie adjustment/)
+  assert.match(editorMarkup, /Relative to the team&#x27;s normal #1 goalie/)
+  assert.match(editorMarkup, /Guidance only/)
+  assert.match(editorMarkup, /Maximum allowed:.*-3\.50/)
   assert.match(editorMarkup, /Optional note/)
   assert.match(editorMarkup, />Cancel</)
   assert.match(editorMarkup, />Save</)
@@ -347,7 +401,7 @@ test('provider, custom, and unknown snapshot labels retain their source', () => 
     goalieUtils.formatGoalieSelectionSnapshot(unknown),
     /Unknown starter.*No goalie selected.*Unconfirmed/,
   )
-  assert.equal(savedProvider.effectiveAdjustment, 1.25)
+  assert.equal(savedProvider.effectiveAdjustment, -1.25)
   assert.equal(changedProvider.effectiveAdjustment, -3)
 })
 
@@ -374,6 +428,7 @@ test('Analyzer lists every provider goalie plus custom and unknown with simplifi
       hasUnsavedChanges: false,
       homeTeam: { name: 'Boston Bruins' },
       inputs: { away: awayValues, home: homeValues },
+      maximumGoaliePenalty: -3.5,
       onChange: () => {},
       onRetry: { away: () => {}, home: () => {} },
       onSave: () => {},
@@ -381,11 +436,61 @@ test('Analyzer lists every provider goalie plus custom and unknown with simplifi
   )
 
   assert.match(markup, /Unknown starter/)
-  assert.match(markup, /Jeremy Swayman \(1\.25\)/)
+  assert.match(markup, /Jeremy Swayman \(-1\.25\)/)
   assert.match(markup, /Other \/ Unlisted goalie/)
+  assert.match(markup, /Maximum penalty: -3\.50/)
   assert.match(markup, /Save Goalie Selections/)
+  assert.doesNotMatch(markup, /id="analyzer-away-goalie-adjustment"/)
+  assert.doesNotMatch(markup, /id="analyzer-home-goalie-adjustment"/)
   assert.doesNotMatch(markup, /Confirmation status|Additional note/)
   assert.doesNotMatch(markup, /Effective goalie adjustment/)
+})
+
+test('Analyzer unlisted goalie keeps its required game-only field within the configured maximum', () => {
+  const awayValues = goalieUtils.updateGoalieInputs(
+    {
+      ...modelAnalysis.defaultGameInputs.away,
+      goalieTeamId: 'TOR',
+    },
+    'selection',
+    'custom',
+  )
+  const homeValues = {
+    ...modelAnalysis.defaultGameInputs.home,
+    goalieTeamId: 'BOS',
+  }
+  const markup = renderToStaticMarkup(
+    React.createElement(AdjustmentComparisonModule.GoalieSelectionPanel, {
+      awayTeam: { name: 'Toronto Maple Leafs' },
+      canPersist: true,
+      errorMessages: {
+        away: goalieUtils.validateGoalieSelectionInputs(awayValues, -2.75),
+        home: '',
+      },
+      goalieErrors: { away: '', home: '' },
+      goalieSaveMessage: '',
+      goalieSaveStatus: 'idle',
+      goalieStatsByPlayerId: {},
+      goalieStatuses: { away: 'success', home: 'success' },
+      goalies: { away: [], home: [] },
+      hasUnsavedChanges: true,
+      homeTeam: { name: 'Boston Bruins' },
+      inputs: { away: awayValues, home: homeValues },
+      maximumGoaliePenalty: -2.75,
+      onChange: () => {},
+      onRetry: { away: () => {}, home: () => {} },
+      onSave: () => {},
+    }),
+  )
+
+  assert.match(markup, /Other \/ Unlisted goalie/)
+  assert.match(markup, /Name \/ note \(optional\)/)
+  assert.match(markup, /Applies to this game only/)
+  assert.match(
+    markup,
+    /id="analyzer-away-goalie-adjustment"[^>]*max="0"[^>]*min="-2\.75"[^>]*required/,
+  )
+  assert.match(markup, /Game-specific goalie adjustment is required/)
 })
 
 test('goalie adjustment API uses canonical LAK route and never sends userId', async () => {
@@ -397,7 +502,7 @@ test('goalie adjustment API uses canonical LAK route and never sends userId', as
     return new Response(JSON.stringify({
       adjustment: {
         nhlPlayerId: 8475311,
-        ratingAdjustment: 0.5,
+        ratingAdjustment: -0.5,
         teamId: 'LAK',
       },
       goalies: [],
@@ -409,10 +514,11 @@ test('goalie adjustment API uses canonical LAK route and never sends userId', as
 
   try {
     await teamsApi.fetchGoalieAdjustments('LAK')
+    await teamsApi.fetchSavedGoalieAdjustments('LAK')
     await teamsApi.saveGoalieAdjustment('LAK', 8475311, {
       activeOverride: null,
       note: '',
-      ratingAdjustment: 0.5,
+      ratingAdjustment: -0.5,
     })
   } finally {
     globalThis.fetch = originalFetch
@@ -421,8 +527,12 @@ test('goalie adjustment API uses canonical LAK route and never sends userId', as
   assert.match(calls[0].url, /\/api\/teams\/LAK\/goalie-adjustments$/)
   assert.match(
     calls[1].url,
+    /\/api\/teams\/LAK\/goalie-adjustments\?localOnly=true$/,
+  )
+  assert.match(
+    calls[2].url,
     /\/api\/teams\/LAK\/goalie-adjustments\/8475311$/,
   )
-  assert.equal(calls[1].options.method, 'PUT')
-  assert.equal(Object.hasOwn(JSON.parse(calls[1].options.body), 'userId'), false)
+  assert.equal(calls[2].options.method, 'PUT')
+  assert.equal(Object.hasOwn(JSON.parse(calls[2].options.body), 'userId'), false)
 })

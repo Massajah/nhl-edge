@@ -105,6 +105,7 @@ const normalizeEngineSettingsSnapshot = (snapshot) => {
     modelVersion:
       typeof snapshot.modelVersion === 'string' ? snapshot.modelVersion : '',
     overtimeMultiplier: toOptionalNumber(snapshot.overtimeMultiplier),
+    probabilityScale: toOptionalNumber(snapshot.probabilityScale),
     regulationMultiplier: toOptionalNumber(snapshot.regulationMultiplier),
     shootoutMultiplier: toOptionalNumber(snapshot.shootoutMultiplier),
   }
@@ -694,6 +695,11 @@ export const getPowerRatingHistoryAuditRows = (item = {}) => {
       key: 'kFactor',
       label: 'K Factor',
       value: formatDetailNumber(snapshot.kFactor),
+    }),
+    makeDetailRow({
+      key: 'probabilityScale',
+      label: 'Probability Scale',
+      value: formatDetailNumber(snapshot.probabilityScale),
     }),
     makeDetailRow({
       key: 'baseHomeAdvantage',

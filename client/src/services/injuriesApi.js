@@ -43,3 +43,9 @@ export const deleteInjury = async (id) => {
 
   return data.injury
 }
+
+export const clearTeamInjuryHistory = async (teamId) =>
+  requestInjuries(
+    `/api/injuries/team/${encodeURIComponent(teamId)}/history`,
+    { method: 'DELETE' },
+  )

@@ -8,6 +8,7 @@ const INJURY_STATUSES = [
   'healthy',
 ]
 const DURATION_TYPES = ['short-term', 'long-term', 'unknown']
+const PLAYER_POSITIONS = ['', 'C', 'LW', 'RW', 'D', 'G']
 
 const injurySchema = new mongoose.Schema(
   {
@@ -38,6 +39,16 @@ const injurySchema = new mongoose.Schema(
       type: String,
       required: true,
       trim: true,
+    },
+    providerPlayerId: {
+      type: Number,
+      default: null,
+      min: 1,
+    },
+    position: {
+      type: String,
+      enum: PLAYER_POSITIONS,
+      default: '',
     },
     status: {
       type: String,
@@ -98,3 +109,4 @@ injurySchema.index({ userId: 1, teamId: 1, active: -1, playerName: 1 })
 module.exports = mongoose.model('Injury', injurySchema)
 module.exports.INJURY_STATUSES = INJURY_STATUSES
 module.exports.DURATION_TYPES = DURATION_TYPES
+module.exports.PLAYER_POSITIONS = PLAYER_POSITIONS

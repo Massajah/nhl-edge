@@ -253,6 +253,8 @@ test('team identity mapper handles abbreviations, aliases, punctuation, and Utah
   assert.equal(getNhlTeamIdentity('St. Louis Blues'), 'STL')
   assert.equal(getNhlTeamIdentity('Utah Hockey Club'), 'UTA')
   assert.equal(getNhlTeamIdentity('Utah Mammoth'), 'UTA')
+  assert.equal(getNhlTeamIdentity('ARI'), 'UTA')
+  assert.equal(getNhlTeamIdentity('Arizona Coyotes'), 'UTA')
 })
 
 test('matching requires home-away order and time tolerance', () => {

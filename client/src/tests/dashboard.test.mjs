@@ -221,6 +221,54 @@ const marketOdds = {
   },
 }
 
+const specialTeamsData = (overrides = {}) => ({
+  leagueTeamCount: 32,
+  previousThreeSeasonIds: [20222023, 20232024, 20242025],
+  teams: [
+    {
+      penaltyKillLeagueRank: 4,
+      powerPlayLeagueRank: 5,
+      teamAbbreviation: 'BOS',
+    },
+    {
+      penaltyKillLeagueRank: 29,
+      powerPlayLeagueRank: 28,
+      teamAbbreviation: 'TOR',
+    },
+    {
+      penaltyKillLeagueRank: 16,
+      powerPlayLeagueRank: 16,
+      teamAbbreviation: 'CAR',
+    },
+    {
+      penaltyKillLeagueRank: 16,
+      powerPlayLeagueRank: 16,
+      teamAbbreviation: 'NYR',
+    },
+    {
+      penaltyKillLeagueRank: 16,
+      powerPlayLeagueRank: 7,
+      teamAbbreviation: 'DAL',
+    },
+    {
+      penaltyKillLeagueRank: 25,
+      powerPlayLeagueRank: 16,
+      teamAbbreviation: 'COL',
+    },
+    {
+      penaltyKillLeagueRank: 4,
+      powerPlayLeagueRank: 5,
+      teamAbbreviation: 'LAK',
+    },
+    {
+      penaltyKillLeagueRank: 28,
+      powerPlayLeagueRank: 29,
+      teamAbbreviation: 'NYI',
+    },
+  ],
+  ...overrides,
+})
+
 const automaticUpdateResult = (overrides = {}) => ({
   dateRange: {
     from: '2026-01-14',
@@ -566,6 +614,7 @@ test('preliminary analysis reuses the Analyzer calculation service', () => {
     },
     marketOdds,
     powerRatings: createRatings(),
+    probabilityScale: 14,
   })
   const analyzerInputs = modelAnalysisUtils.createInputsForTeams(
     createRatings(),
@@ -584,6 +633,12 @@ test('preliminary analysis reuses the Analyzer calculation service', () => {
   const analyzerResult = calculateGameUtils.calculateGame(
     analyzerInputs.home,
     analyzerInputs.away,
+    14,
+  )
+  const safeFallbackResult = calculateGameUtils.calculateGame(
+    analyzerInputs.home,
+    analyzerInputs.away,
+    Number.NaN,
   )
 
   assert.equal(analysis.available, true)
@@ -596,6 +651,9 @@ test('preliminary analysis reuses the Analyzer calculation service', () => {
   assert.equal(analysis.inputs.away.marketOdds, analyzerInputs.away.marketOdds)
   assert.equal(analysis.homeMarket.modelProbability, analyzerResult.homeWinProbability)
   assert.equal(analysis.awayMarket.modelProbability, analyzerResult.awayWinProbability)
+  assert.equal(analyzerResult.probabilityScale, 14)
+  assert.equal(safeFallbackResult.probabilityScale, 20)
+  assert.equal(Number.isFinite(safeFallbackResult.homeWinProbability), true)
 })
 
 test('preliminary analysis reports missing core model data without defaults', () => {
@@ -946,6 +1004,12 @@ test('Dashboard renders one-sided no-value odds neutrally', () => {
 test('Dashboard renders below-minimum value as Worth Reviewing without Kelly amount', () => {
   const html = renderDashboard({
     initialBets: [],
+    initialMarketOdds: {
+      'game-candidate': {
+        away: '2.75',
+        home: '1.35',
+      },
+    },
     initialBettingSettings: {
       ...bettingSettings,
       minimumEdgePercent: 10,
@@ -1676,4 +1740,144 @@ test('GameAnalyzer exposes explicit latest-odds action for provider prefill', ()
   assert.match(html, /View All Bookmakers/)
   assert.match(html, /Manual edits remain unchanged/)
   assertNoInvalidNumbers(html)
+})
+
+test('Dashboard renders positive and negative Special Teams alerts independently', () => {
+  const html = renderDashboard({
+    initialSpecialTeams: specialTeamsData(),
+    initialSpecialTeamsStatus: 'success',
+  })
+
+  assert.match(html, /Boston Bruins special teams edge/)
+  assert.match(html, /PP #5 vs TOR PK #29/)
+  assert.match(html, /Strong PP vs Weak PK/)
+  assert.match(html, /Toronto Maple Leafs special teams disadvantage/)
+  assert.match(html, /PP #28 vs BOS PK #4/)
+  assert.match(html, /Weak PP vs Strong PK/)
+})
+
+test('Dashboard keeps neutral, disabled, and missing Special Teams states quiet', () => {
+  const neutral = renderDashboard({
+    initialSpecialTeams: specialTeamsData(),
+    initialSpecialTeamsStatus: 'success',
+  })
+  const disabled = renderDashboard({
+    initialSpecialTeams: specialTeamsData(),
+    initialSpecialTeamsStatus: 'success',
+    specialTeamsAlertsEnabled: false,
+  })
+  const missing = renderDashboard({
+    initialSpecialTeams: specialTeamsData({ teams: [] }),
+    initialSpecialTeamsStatus: 'success',
+  })
+
+  assert.doesNotMatch(neutral, /Dallas Stars special teams edge/)
+  assert.doesNotMatch(disabled, /special teams (edge|disadvantage)/i)
+  assert.doesNotMatch(missing, /special teams (edge|disadvantage)/i)
+  assert.match(missing, /Analyze Game/)
+})
+
+test('Dashboard threshold changes the signal without changing model probabilities', () => {
+  const baseline = renderDashboard({
+    initialSpecialTeams: specialTeamsData(),
+    initialSpecialTeamsStatus: 'success',
+    specialTeamsAlertsEnabled: false,
+  })
+  const thresholdSix = renderDashboard({
+    initialSpecialTeams: specialTeamsData(),
+    initialSpecialTeamsStatus: 'success',
+    specialTeamsRankThreshold: 6,
+  })
+  const thresholdEight = renderDashboard({
+    initialSpecialTeams: specialTeamsData(),
+    initialSpecialTeamsStatus: 'success',
+    specialTeamsRankThreshold: 8,
+  })
+  const getModelProbabilities = (html) => html.match(/Model \d+\.\d%/g) ?? []
+
+  assert.doesNotMatch(thresholdSix, /Dallas Stars special teams edge/)
+  assert.match(thresholdEight, /Dallas Stars special teams edge/)
+  assert.match(thresholdEight, /PP #7 vs COL PK #25/)
+  assert.deepEqual(
+    getModelProbabilities(thresholdEight),
+    getModelProbabilities(baseline),
+  )
+})
+
+test('Game Analyzer uses the shared positive, negative, and neutral matchup logic', () => {
+  const signals = renderGameAnalyzer({}, {
+    initialSpecialTeams: specialTeamsData(),
+    initialSpecialTeamsStatus: 'success',
+  })
+  const neutralStats = specialTeamsData({
+    teams: [
+      {
+        penaltyKillLeagueRank: 16,
+        powerPlayLeagueRank: 16,
+        teamAbbreviation: 'LAK',
+      },
+      {
+        penaltyKillLeagueRank: 16,
+        powerPlayLeagueRank: 16,
+        teamAbbreviation: 'NYI',
+      },
+    ],
+  })
+  const neutral = renderGameAnalyzer({}, {
+    initialSpecialTeams: neutralStats,
+    initialSpecialTeamsStatus: 'success',
+  })
+
+  assert.match(signals, /Special Teams Matchup/)
+  assert.match(signals, /PP #5 vs NYI PK #28/)
+  assert.match(signals, /Strong PP vs Weak PK/)
+  assert.match(signals, /PP #29 vs LAK PK #4/)
+  assert.match(signals, /Weak PP vs Strong PK/)
+  assert.equal(
+    countMatches(neutral, /No strong special teams mismatch/g),
+    2,
+  )
+})
+
+test('Game Analyzer handles disabled and missing Special Teams data without adjustments', () => {
+  const disabled = renderGameAnalyzer({}, {
+    initialSpecialTeams: specialTeamsData(),
+    initialSpecialTeamsStatus: 'success',
+    specialTeamsAlertsEnabled: false,
+  })
+  const missing = renderGameAnalyzer({}, {
+    initialSpecialTeams: specialTeamsData({ teams: [] }),
+    initialSpecialTeamsStatus: 'success',
+  })
+
+  assert.doesNotMatch(disabled, /Special Teams Matchup/)
+  assert.match(missing, /Special teams data unavailable/)
+  assert.doesNotMatch(missing, /Special Teams Rating Adjustment/)
+})
+
+test('Dashboard and Game Analyzer show consistent signals for the same game', () => {
+  const data = specialTeamsData()
+  const dashboard = renderDashboard({
+    initialSpecialTeams: data,
+    initialSpecialTeamsStatus: 'success',
+  })
+  const analyzer = renderGameAnalyzer({}, {
+    initialSpecialTeams: data,
+    initialSpecialTeamsStatus: 'success',
+    prefillMatchup: {
+      away: 'TOR',
+      home: 'BOS',
+      marketOdds: { away: '2.10', home: '1.80' },
+    },
+  })
+
+  for (const detail of [
+    'PP #5 vs TOR PK #29',
+    'PP #28 vs BOS PK #4',
+    'Strong PP vs Weak PK',
+    'Weak PP vs Strong PK',
+  ]) {
+    assert.match(dashboard, new RegExp(detail))
+    assert.match(analyzer, new RegExp(detail))
+  }
 })

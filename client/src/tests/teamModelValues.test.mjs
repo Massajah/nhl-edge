@@ -100,7 +100,7 @@ test('read-only summary has one shared action and renders all saved values', () 
     React.createElement(components.ModelValuesCard, {
       feedbackMessage: 'Lines saved.',
       goalieAdjustments: [
-        { cachedDisplayName: 'Goalie One', nhlPlayerId: 301, ratingAdjustment: 1.25 },
+        { cachedDisplayName: 'Goalie One', nhlPlayerId: 301, ratingAdjustment: -1.25 },
         { cachedDisplayName: 'Goalie Two', nhlPlayerId: 302, ratingAdjustment: -0.5 },
         { cachedDisplayName: 'Goalie Three', nhlPlayerId: 303, ratingAdjustment: 0 },
       ],
@@ -116,7 +116,7 @@ test('read-only summary has one shared action and renders all saved values', () 
   assert.match(markup, /Optional personal lineup notes\. Does not affect model calculations\./)
   assert.match(markup, /3 configured/)
   assert.match(markup, /Goalie One/)
-  assert.match(markup, /\+1\.25/)
+  assert.match(markup, /-1\.25/)
   assert.match(markup, /L1/)
   assert.match(markup, /Forward One/)
   assert.match(markup, /L2/)
@@ -164,6 +164,89 @@ test('empty summary reports optional lineup sections as not configured', () => {
   assert.match(markup, /0 configured/)
 })
 
+test('saved snapshot names render while the provider roster is unavailable', () => {
+  const modelValues = utils.normalizeTeamModelValues({
+    forwardLines: [
+      {
+        centerDisplayNameSnapshot: 'Saved Center',
+        centerPlayerId: 999001,
+        lineNumber: 1,
+      },
+    ],
+  }, 'DAL')
+  const markup = renderToStaticMarkup(
+    React.createElement(components.ModelValuesCard, {
+      goalieAdjustments: [],
+      goalieAdjustmentStatus: 'success',
+      loadStatus: 'success',
+      modelValues,
+      onManageModelValues() {},
+      onRetry() {},
+      roster: null,
+      rosterStatus: 'error',
+    }),
+  )
+
+  assert.match(markup, /Saved Center/)
+  assert.match(
+    markup,
+    /Current roster unavailable\. Showing saved lineup names\./,
+  )
+  assert.doesNotMatch(markup, /Unavailable player|Failed/)
+  assert.doesNotMatch(markup, /model-values-manage-button" disabled/)
+})
+
+test('editor preserves saved players and keeps notes editable during outage', () => {
+  const modelValues = utils.normalizeTeamModelValues({
+    forwardLines: [
+      {
+        centerDisplayNameSnapshot: 'Saved Center',
+        centerPlayerId: 999001,
+        lineNumber: 1,
+      },
+    ],
+    lineupNote: 'Editable note',
+  }, 'DAL')
+  const markup = renderToStaticMarkup(
+    React.createElement(components.LineupEditorModal, {
+      actionStatus: 'idle',
+      initialValues: modelValues,
+      onCancel() {},
+      onClear() {},
+      onSave() {},
+      roster: null,
+      rosterStatus: 'error',
+      teamName: 'Dallas Stars',
+    }),
+  )
+
+  assert.match(markup, /Saved Center/)
+  assert.match(markup, /player replacement is disabled/)
+  assert.match(markup, /<select[^>]*disabled=""[^>]*>/)
+  assert.match(markup, /<textarea[^>]*>Editable note<\/textarea>/)
+  assert.doesNotMatch(markup, /<textarea[^>]*disabled/)
+  assert.doesNotMatch(markup, /type="submit" disabled/)
+})
+
+test('Teams stages Special Teams and lazy-loads the shared roster once', async () => {
+  const source = await readFile(
+    new URL('../components/Teams.jsx', import.meta.url),
+    'utf8',
+  )
+  const selectTeamSource = source.slice(
+    source.indexOf('const handleSelectTeam'),
+    source.indexOf('const handleBackToTeams'),
+  )
+
+  assert.match(selectTeamSource, /setSelectedTeam\(team\)/)
+  assert.doesNotMatch(selectTeamSource, /loadRoster|loadTeamStats|loadGoalie/)
+  assert.match(source, /new IntersectionObserver/)
+  assert.match(source, /rootMargin: '500px 0px'/)
+  assert.match(source, /window\.setTimeout\(\(\) => \{\s*onLoadStats\(team\)/s)
+  assert.match(source, /rosterGroups\.map/)
+  assert.match(source, /roster\[group\.key\]/)
+})
+
 test('the shared card action is wired to the existing modal', async () => {
   const source = await readFile(
     new URL('../components/TeamModelValues.jsx', import.meta.url),
@@ -182,7 +265,7 @@ test('shared editor renders four forward lines, three defense pairs, provider se
         {
           cachedDisplayName: 'Configured Goalie',
           nhlPlayerId: 301,
-          ratingAdjustment: 0.5,
+          ratingAdjustment: -0.5,
         },
       ],
       goalieAdjustmentStatus: 'success',

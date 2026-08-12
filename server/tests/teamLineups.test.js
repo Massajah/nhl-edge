@@ -309,6 +309,148 @@ test('saved player IDs survive provider roster changes and remain editable', asy
   assert.equal(resaved.modelValues.forwardLines[0].centerPlayerId, 8471001)
 })
 
+test('saved lineup snapshots render without any provider request', async () => {
+  const store = createLineupStore()
+  const options = createOptions(store)
+  const saved = await saveTeamLineup(
+    'user-a',
+    'BOS',
+    {
+      defensePairs: [
+        { leftDefensePlayerId: 8481001, pairNumber: 1 },
+      ],
+      forwardLines: [
+        { centerPlayerId: 8471001, lineNumber: 1 },
+      ],
+    },
+    options,
+  )
+  let providerCalls = 0
+  const read = await getTeamLineup('user-a', 'BOS', {
+    getRosterForTeam: async () => {
+      providerCalls += 1
+      throw new Error('provider unavailable')
+    },
+    teamLineupModel: store.model,
+  })
+
+  assert.equal(
+    saved.modelValues.forwardLines[0].centerDisplayNameSnapshot,
+    'Boston Forward One',
+  )
+  assert.equal(
+    read.modelValues.defensePairs[0].leftDefenseDisplayNameSnapshot,
+    'Boston Defense One',
+  )
+  assert.equal(providerCalls, 0)
+})
+
+test('old lineup documents without snapshots still read safely', async () => {
+  const store = createLineupStore()
+
+  store.documents.set('user-a:BOS', {
+    defensePairs: [],
+    forwardLines: [
+      { centerPlayerId: 8471001, lineNumber: 1 },
+    ],
+    lineupNote: 'Legacy lineup',
+    teamId: 'BOS',
+    userId: 'user-a',
+  })
+
+  const read = await getTeamLineup('user-a', 'BOS', {
+    teamLineupModel: store.model,
+  })
+
+  assert.equal(read.modelValues.forwardLines[0].centerPlayerId, 8471001)
+  assert.equal(
+    read.modelValues.forwardLines[0].centerDisplayNameSnapshot,
+    '',
+  )
+})
+
+test('note-only saves preserve players and succeed during provider outage', async () => {
+  const store = createLineupStore()
+  const options = createOptions(store)
+
+  await saveTeamLineup(
+    'user-a',
+    'BOS',
+    {
+      forwardLines: [
+        { centerPlayerId: 8471001, lineNumber: 1 },
+      ],
+    },
+    options,
+  )
+  let providerCalls = 0
+  const updated = await saveTeamLineup(
+    'user-a',
+    'BOS',
+    { lineupNote: 'Provider-independent note' },
+    {
+      getRosterForTeam: async () => {
+        providerCalls += 1
+        throw new Error('rate limited')
+      },
+      teamLineupModel: store.model,
+    },
+  )
+
+  assert.equal(updated.modelValues.lineupNote, 'Provider-independent note')
+  assert.equal(updated.modelValues.forwardLines[0].centerPlayerId, 8471001)
+  assert.equal(
+    updated.modelValues.forwardLines[0].centerDisplayNameSnapshot,
+    'Boston Forward One',
+  )
+  assert.equal(providerCalls, 0)
+})
+
+test('provider outage rejects new selections without mutating saved lineup', async () => {
+  const store = createLineupStore()
+  const options = createOptions(store)
+
+  await saveTeamLineup(
+    'user-a',
+    'BOS',
+    {
+      forwardLines: [
+        { centerPlayerId: 8471001, lineNumber: 1 },
+      ],
+    },
+    options,
+  )
+
+  await assert.rejects(
+    saveTeamLineup(
+      'user-a',
+      'BOS',
+      {
+        forwardLines: [
+          { centerPlayerId: 8471002, lineNumber: 1 },
+        ],
+      },
+      {
+        getRosterForTeam: async () => {
+          throw new Error('NHL 429')
+        },
+        teamLineupModel: store.model,
+      },
+    ),
+    (error) =>
+      error.statusCode === 503 &&
+      error.details?.errorCode === 'PROVIDER_UNAVAILABLE',
+  )
+
+  const read = await getTeamLineup('user-a', 'BOS', options)
+
+  assert.equal(read.modelValues.forwardLines[0].centerPlayerId, 8471001)
+  assert.equal(
+    read.modelValues.forwardLines[0].centerDisplayNameSnapshot,
+    'Boston Forward One',
+  )
+})
+
 test('clear removes positions and note without touching another team', async () => {
   const store = createLineupStore()
   const options = createOptions(store)

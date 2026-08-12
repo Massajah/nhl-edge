@@ -63,6 +63,11 @@ import {
 import { getGoalieSelectionForSide } from '../utils/goalies.js'
 import { createLatestRequestTracker } from '../utils/requestTracker.js'
 import { AUTOMATIC_POWER_RATING_UPDATE_STATUSES } from '../utils/powerRatingUpdates.js'
+import { teamsDataCoordinator } from '../services/teamsDataCoordinator.js'
+import {
+  SPECIAL_TEAMS_MATCHUP_STATUSES,
+  getSpecialTeamsMatchupForTeams,
+} from '../utils/specialTeamsMatchups.js'
 import MarketOddsDetails from './MarketOddsDetails.jsx'
 
 const formatScheduleDate = (date) => {
@@ -219,6 +224,7 @@ const getProfitTone = (value) => {
 
 function Dashboard({
   baseHomeAdvantage = 0,
+  probabilityScale,
   injurySummaries,
   injurySummaryError,
   injurySummaryStatus,
@@ -243,6 +249,8 @@ function Dashboard({
   initialPreviousError = '',
   initialPreviousStatus = null,
   initialSchedule = null,
+  initialSpecialTeams = null,
+  initialSpecialTeamsStatus = null,
   onAutoUpdatePowerRatings,
   onAnalyzeGame,
   onNavigate,
@@ -255,6 +263,8 @@ function Dashboard({
   powerRatingsStatus,
   ratingEngineSettingsError,
   ratingEngineSettingsStatus,
+  specialTeamsAlertsEnabled = true,
+  specialTeamsRankThreshold = 6,
   todayDateValue = toLocalDateValue(new Date()),
 }) {
   const [selectedDate, setSelectedDate] = useState(initialSchedule?.date ?? '')
@@ -305,6 +315,11 @@ function Dashboard({
   )
   const [gameContextError, setGameContextError] = useState(
     initialGameContextsError,
+  )
+  const [specialTeams, setSpecialTeams] = useState(initialSpecialTeams)
+  const [specialTeamsStatus, setSpecialTeamsStatus] = useState(
+    initialSpecialTeamsStatus ??
+      (initialSpecialTeams ? 'success' : 'idle'),
   )
   const [marketOddsByGame, setMarketOddsByGame] = useState(() =>
     initialMarketOdds ?? loadDashboardMarketOdds(),
@@ -671,6 +686,50 @@ function Dashboard({
   }, [schedule.games, status])
 
   useEffect(() => {
+    let isCurrent = true
+
+    if (!specialTeamsAlertsEnabled) {
+      return () => {
+        isCurrent = false
+      }
+    }
+
+    const loadSpecialTeams = async () => {
+      setSpecialTeamsStatus((currentStatus) =>
+        currentStatus === 'success' ? currentStatus : 'loading',
+      )
+
+      try {
+        const result = await teamsDataCoordinator.loadLeagueSpecialTeams()
+
+        if (!isCurrent) {
+          return
+        }
+
+        if (!result?.data) {
+          setSpecialTeams(null)
+          setSpecialTeamsStatus('unavailable')
+          return
+        }
+
+        setSpecialTeams(result.data)
+        setSpecialTeamsStatus('success')
+      } catch {
+        if (isCurrent) {
+          setSpecialTeams(null)
+          setSpecialTeamsStatus('unavailable')
+        }
+      }
+    }
+
+    loadSpecialTeams()
+
+    return () => {
+      isCurrent = false
+    }
+  }, [specialTeamsAlertsEnabled])
+
+  useEffect(() => {
     if (status !== 'success' || !schedule.date) {
       return undefined
     }
@@ -742,6 +801,7 @@ function Dashboard({
                 injurySummaries,
                 marketOdds: normalizedMarketOdds,
                 powerRatings,
+                probabilityScale,
               })
             : null
         const savedBets = betsByGameId[String(game.gameId)] ?? []
@@ -778,6 +838,7 @@ function Dashboard({
       injurySummaries,
       marketOddsByGame,
       powerRatings,
+      probabilityScale,
       providerOddsByGame,
       schedule.games,
     ],
@@ -1033,6 +1094,10 @@ function Dashboard({
                     injurySummaries={injurySummaries}
                     injurySummaryStatus={injurySummaryStatus}
                     scheduleDate={displayDate}
+                    specialTeams={specialTeams}
+                    specialTeamsAlertsEnabled={specialTeamsAlertsEnabled}
+                    specialTeamsRankThreshold={specialTeamsRankThreshold}
+                    specialTeamsStatus={specialTeamsStatus}
                   />
                 ))}
               </div>
@@ -1467,6 +1532,10 @@ function GameCard({
   onMarketOddsChange,
   onViewBets,
   scheduleDate,
+  specialTeams,
+  specialTeamsAlertsEnabled,
+  specialTeamsRankThreshold,
+  specialTeamsStatus,
 }) {
   const {
     canAnalyze,
@@ -1565,6 +1634,14 @@ function GameCard({
         gameContextStatus={gameContextStatus}
       />
 
+      <SpecialTeamsAlertSummary
+        enabled={specialTeamsAlertsEnabled}
+        game={game}
+        specialTeams={specialTeams}
+        status={specialTeamsStatus}
+        threshold={specialTeamsRankThreshold}
+      />
+
       {!isCompletedGame ? <GameMarketOdds marketOdds={marketOdds} /> : null}
 
       {preliminaryAnalysis?.available ? (
@@ -1603,6 +1680,79 @@ function GameCard({
         ) : null}
       </div>
     </article>
+  )
+}
+
+function SpecialTeamsAlertSummary({
+  enabled,
+  game,
+  specialTeams,
+  status,
+  threshold,
+}) {
+  if (!enabled || status !== 'success' || !specialTeams) {
+    return null
+  }
+
+  const matchup = getSpecialTeamsMatchupForTeams({
+    awayTeam: game.awayTeam.abbreviation,
+    homeTeam: game.homeTeam.abbreviation,
+    specialTeams,
+    threshold,
+  })
+  const signals = [
+    {
+      matchup: matchup.away,
+      opponent: game.homeTeam,
+      team: game.awayTeam,
+    },
+    {
+      matchup: matchup.home,
+      opponent: game.awayTeam,
+      team: game.homeTeam,
+    },
+  ].filter(({ matchup: teamMatchup }) =>
+    [
+      SPECIAL_TEAMS_MATCHUP_STATUSES.POSITIVE,
+      SPECIAL_TEAMS_MATCHUP_STATUSES.NEGATIVE,
+    ].includes(teamMatchup.status),
+  )
+
+  if (signals.length === 0) {
+    return null
+  }
+
+  return (
+    <div
+      className="special-teams-alert-summary"
+      aria-label="Special Teams matchup alerts"
+    >
+      {signals.map(({ matchup: teamMatchup, opponent, team }) => {
+        const isPositive =
+          teamMatchup.status === SPECIAL_TEAMS_MATCHUP_STATUSES.POSITIVE
+
+        return (
+          <div
+            className={`special-teams-alert-row ${teamMatchup.status}`}
+            key={team.abbreviation}
+          >
+            <span>
+              {team.name} special teams{' '}
+              {isPositive ? 'edge' : 'disadvantage'}
+            </span>
+            <strong>
+              PP #{teamMatchup.ppRank} vs {opponent.abbreviation} PK #
+              {teamMatchup.opponentPkRank}
+            </strong>
+            <small>
+              {isPositive
+                ? 'Strong PP vs Weak PK'
+                : 'Weak PP vs Strong PK'}
+            </small>
+          </div>
+        )
+      })}
+    </div>
   )
 }
 

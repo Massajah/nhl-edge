@@ -22,6 +22,7 @@ const {
 const {
   deleteGoalieAdjustment,
   getProviderGoalieAdjustments,
+  getSavedGoalieAdjustments,
   normalizeAdjustment,
   saveGoalieAdjustment,
 } = require('../services/goalieAdjustmentsService')
@@ -116,6 +117,7 @@ const createOptions = ({ adjustments, legacy }) => ({
   getRosterForTeam,
   goalieAdjustmentModel: adjustments.model,
   legacyTeamGoaliesModel: legacy.model,
+  maximumGoaliePenalty: -4,
 })
 
 const request = async (path, options = {}) => {
@@ -220,6 +222,64 @@ test('provider goalies merge implicit defaults and saved user adjustments', asyn
   assert.equal(result.goalies[1].hasSavedAdjustment, true)
 })
 
+test('saved goalie adjustments remain available during provider outage', async () => {
+  const adjustments = createAdjustmentStore()
+  const legacy = createLegacyStore()
+  const options = createOptions({ adjustments, legacy })
+
+  await saveGoalieAdjustment(
+    'user-a',
+    'LAK',
+    8475831,
+    {
+      activeOverride: null,
+      note: 'Keep this local value',
+      ratingAdjustment: -0.75,
+    },
+    options,
+  )
+  const result = await getProviderGoalieAdjustments('user-a', 'LAK', {
+    ...options,
+    getRosterForTeam: async () => {
+      throw new Error('NHL provider rate limited')
+    },
+  })
+
+  assert.equal(result.adjustments.length, 1)
+  assert.equal(result.adjustments[0].nhlPlayerId, 8475831)
+  assert.equal(result.adjustments[0].cachedDisplayName, 'David Rittich')
+  assert.equal(result.adjustments[0].ratingAdjustment, -0.75)
+  assert.equal(result.goalies.length, 0)
+  assert.equal(result.provider.status, 'unavailable')
+})
+
+test('local-only goalie adjustment reads never request provider data', async () => {
+  const adjustments = createAdjustmentStore()
+  const legacy = createLegacyStore()
+  const options = createOptions({ adjustments, legacy })
+
+  await saveGoalieAdjustment(
+    'user-a',
+    'LAK',
+    8475311,
+    { note: '', ratingAdjustment: -0.5 },
+    options,
+  )
+  let providerCalls = 0
+  const result = await getSavedGoalieAdjustments('user-a', 'LAK', {
+    ...options,
+    getRosterForTeam: async () => {
+      providerCalls += 1
+      throw new Error('must not be called')
+    },
+  })
+
+  assert.equal(result.adjustments.length, 1)
+  assert.equal(result.adjustments[0].nhlPlayerId, 8475311)
+  assert.equal(result.provider.status, 'not_requested')
+  assert.equal(providerCalls, 0)
+})
+
 test('adjustments edit, delete to implicit zero, and remain user/team isolated', async () => {
   const adjustments = createAdjustmentStore()
   const legacy = createLegacyStore()
@@ -284,14 +344,14 @@ test('LAK abbreviation and Los Angeles Kings name resolve to one canonical team'
     'user-a',
     'Los Angeles Kings',
     8475311,
-    { note: '', ratingAdjustment: 0.5 },
+    { note: '', ratingAdjustment: -0.5 },
     options,
   )
   const result = await getProviderGoalieAdjustments('user-a', 'LAK', options)
 
   assert.equal(result.teamId, 'LAK')
   assert.equal(result.teamAbbreviation, 'LAK')
-  assert.equal(result.goalies[0].ratingAdjustment, 0.5)
+  assert.equal(result.goalies[0].ratingAdjustment, -0.5)
 })
 
 test('adjustment validation rejects invalid teams, IDs, values, and ownership fields', async () => {
@@ -299,8 +359,12 @@ test('adjustment validation rejects invalid teams, IDs, values, and ownership fi
   const legacy = createLegacyStore()
   const options = createOptions({ adjustments, legacy })
 
-  for (const value of [Number.NaN, Number.POSITIVE_INFINITY, -5.01, 5.01, 0.03]) {
+  for (const value of [Number.NaN, Number.POSITIVE_INFINITY, -4.01, 0.01, 0.03]) {
     assert.throws(() => normalizeAdjustment(value), { statusCode: 400 })
+  }
+
+  for (const value of [0, -0.5, -1.5, -4]) {
+    assert.equal(normalizeAdjustment(value), value)
   }
 
   await assert.rejects(
@@ -345,6 +409,49 @@ test('adjustment validation rejects invalid teams, IDs, values, and ownership fi
     ),
     { statusCode: 404 },
   )
+})
+
+test('saved goalie adjustments obey the configured Maximum Goalie Penalty', async () => {
+  const adjustments = createAdjustmentStore()
+  const legacy = createLegacyStore()
+  const options = {
+    ...createOptions({ adjustments, legacy }),
+    maximumGoaliePenalty: -3,
+  }
+
+  const zero = await saveGoalieAdjustment(
+    'user-a',
+    'LAK',
+    8475311,
+    { note: 'Baseline', ratingAdjustment: 0 },
+    options,
+  )
+  const penalty = await saveGoalieAdjustment(
+    'user-a',
+    'LAK',
+    8475831,
+    { note: '', ratingAdjustment: -3 },
+    options,
+  )
+
+  assert.equal(zero.adjustment.ratingAdjustment, 0)
+  assert.equal(penalty.adjustment.ratingAdjustment, -3)
+
+  for (const ratingAdjustment of [0.25, -3.05]) {
+    await assert.rejects(
+      () =>
+        saveGoalieAdjustment(
+          'user-a',
+          'LAK',
+          8475311,
+          { note: '', ratingAdjustment },
+          options,
+        ),
+      (error) =>
+        error.statusCode === 400 &&
+        error.details.maximumGoaliePenalty === -3,
+    )
+  }
 })
 
 test('legacy matching NHL IDs normalize while unmatched manual goalies stay hidden', async () => {
@@ -507,6 +614,90 @@ test('provider, custom, unknown, and game-specific override selections normalize
   })
 })
 
+test('unlisted goalies reject positive and over-limit game adjustments', async () => {
+  const adjustments = createAdjustmentStore()
+  const legacy = createLegacyStore()
+  const options = {
+    ...createOptions({ adjustments, legacy }),
+    maximumGoaliePenalty: -2.5,
+  }
+
+  for (const manualAdjustment of [0.25, -2.55]) {
+    await assert.rejects(
+      () =>
+        normalizeGameGoalieSelection(
+          'user-a',
+          {
+            manualAdjustment,
+            selectionType: 'custom',
+            teamId: 'LAK',
+          },
+          { expectedTeamId: 'LAK', ...options },
+        ),
+      (error) =>
+        error.statusCode === 400 &&
+        error.details.maximumGoaliePenalty === -2.5,
+    )
+  }
+
+  const valid = await normalizeGameGoalieSelection(
+    'user-a',
+    {
+      manualAdjustment: -2.5,
+      selectionType: 'custom',
+      teamId: 'LAK',
+    },
+    { expectedTeamId: 'LAK', ...options },
+  )
+
+  assert.equal(valid.effectiveAdjustment, -2.5)
+})
+
+test('Analyzer policy preserves but blocks an out-of-range saved team default', async () => {
+  const adjustments = createAdjustmentStore()
+  const legacy = createLegacyStore()
+  const permissiveOptions = {
+    ...createOptions({ adjustments, legacy }),
+    maximumGoaliePenalty: -5,
+  }
+
+  await saveGoalieAdjustment(
+    'user-a',
+    'LAK',
+    8475311,
+    { note: 'Legacy value', ratingAdjustment: -4.5 },
+    permissiveOptions,
+  )
+
+  const currentOptions = {
+    ...permissiveOptions,
+    maximumGoaliePenalty: -4,
+  }
+  const loaded = await getProviderGoalieAdjustments(
+    'user-a',
+    'LAK',
+    currentOptions,
+  )
+
+  assert.equal(loaded.goalies[0].ratingAdjustment, -4.5)
+  await assert.rejects(
+    () =>
+      normalizeGameGoalieSelection(
+        'user-a',
+        {
+          nhlPlayerId: 8475311,
+          selectionType: 'provider_goalie',
+          teamId: 'LAK',
+        },
+        { expectedTeamId: 'LAK', ...currentOptions },
+      ),
+    (error) =>
+      error.statusCode === 400 &&
+      error.details.requiresGoalieReview === true &&
+      error.details.ratingAdjustment === -4.5,
+  )
+})
+
 test('saved provider snapshot remains stable after the team default changes', async () => {
   const adjustments = createAdjustmentStore()
   const legacy = createLegacyStore()
@@ -533,7 +724,7 @@ test('saved provider snapshot remains stable after the team default changes', as
     'user-a',
     'LAK',
     8475311,
-    { note: '', ratingAdjustment: 1.25 },
+    { note: '', ratingAdjustment: -1.25 },
     options,
   )
 
@@ -623,9 +814,15 @@ test('goalie injury flag remains informational and excluded from injury impact',
 
   assert.equal(normalized.isGoalie, true)
   assert.deepEqual(group.totalImpact.$sum.$cond, [
-    { $eq: ['$isGoalie', true] },
-    0,
+    {
+      $and: [
+        { $ne: ['$isGoalie', true] },
+        { $ne: ['$position', 'G'] },
+        { $lt: ['$impact', 0] },
+      ],
+    },
     '$impact',
+    0,
   ])
 })
 
@@ -640,4 +837,5 @@ test('goalie adjustments enforce one user-team-player record', () => {
     )
 
   assert.ok(uniqueIndex)
+  assert.equal(GoalieAdjustment.schema.path('ratingAdjustment').options.max, 0)
 })

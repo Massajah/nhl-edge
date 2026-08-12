@@ -55,6 +55,12 @@ import {
   validateGoalieSelectionInputs,
 } from '../utils/goalies.js'
 import MarketOddsDetails from './MarketOddsDetails.jsx'
+import { teamsDataCoordinator } from '../services/teamsDataCoordinator.js'
+import {
+  SPECIAL_TEAMS_MATCHUP_STATUSES,
+  getSpecialTeamsMatchupForTeams,
+} from '../utils/specialTeamsMatchups.js'
+import { DEFAULT_MAXIMUM_GOALIE_PENALTY } from '../config/baseModel.js'
 
 const findTeamById = (teamId) => NHL_TEAMS.find((team) => team.id === teamId)
 
@@ -223,9 +229,13 @@ const areGameContextDraftsEqual = (leftDraft, rightDraft) =>
 
 function GameAnalyzer({
   baseHomeAdvantage = 0,
+  probabilityScale,
   injurySummaries,
   injurySummaryError,
   injurySummaryStatus,
+  initialSpecialTeams = null,
+  initialSpecialTeamsStatus = null,
+  maximumGoaliePenalty = DEFAULT_MAXIMUM_GOALIE_PENALTY,
   onRetryInjuries,
   onRetryPowerRatings,
   onRetryRatingEngineSettings,
@@ -236,6 +246,8 @@ function GameAnalyzer({
   prefillMatchup,
   ratingEngineSettingsError,
   ratingEngineSettingsStatus,
+  specialTeamsAlertsEnabled = true,
+  specialTeamsRankThreshold = 6,
 }) {
   const initialGameContext = normalizeGameContext(prefillMatchup?.gameContext)
   const [matchup, setMatchup] = useState(() => {
@@ -287,6 +299,11 @@ function GameAnalyzer({
   const [bankrollSummary, setBankrollSummary] = useState(null)
   const [bankrollStatus, setBankrollStatus] = useState('loading')
   const [bankrollError, setBankrollError] = useState('')
+  const [specialTeams, setSpecialTeams] = useState(initialSpecialTeams)
+  const [specialTeamsStatus, setSpecialTeamsStatus] = useState(
+    initialSpecialTeamsStatus ??
+      (initialSpecialTeams ? 'success' : 'idle'),
+  )
   const { teams, inputs } = matchup
 
   const homeTeam = findTeam(teams.home)
@@ -330,6 +347,50 @@ function GameAnalyzer({
     isUsingPrefilledGameTeams,
     prefillMatchup,
   ])
+
+  useEffect(() => {
+    let isCurrent = true
+
+    if (!specialTeamsAlertsEnabled) {
+      return () => {
+        isCurrent = false
+      }
+    }
+
+    const loadSpecialTeams = async () => {
+      setSpecialTeamsStatus((currentStatus) =>
+        currentStatus === 'success' ? currentStatus : 'loading',
+      )
+
+      try {
+        const result = await teamsDataCoordinator.loadLeagueSpecialTeams()
+
+        if (!isCurrent) {
+          return
+        }
+
+        if (!result?.data) {
+          setSpecialTeams(null)
+          setSpecialTeamsStatus('unavailable')
+          return
+        }
+
+        setSpecialTeams(result.data)
+        setSpecialTeamsStatus('success')
+      } catch {
+        if (isCurrent) {
+          setSpecialTeams(null)
+          setSpecialTeamsStatus('unavailable')
+        }
+      }
+    }
+
+    loadSpecialTeams()
+
+    return () => {
+      isCurrent = false
+    }
+  }, [specialTeamsAlertsEnabled])
   const hasUnsavedGameContextChanges = useMemo(
     () =>
       Boolean(gameContext) &&
@@ -348,10 +409,16 @@ function GameAnalyzer({
   )
   const goalieValidationErrors = useMemo(
     () => ({
-      away: validateGoalieSelectionInputs(inputs.away),
-      home: validateGoalieSelectionInputs(inputs.home),
+      away: validateGoalieSelectionInputs(
+        inputs.away,
+        maximumGoaliePenalty,
+      ),
+      home: validateGoalieSelectionInputs(
+        inputs.home,
+        maximumGoaliePenalty,
+      ),
     }),
-    [inputs.away, inputs.home],
+    [inputs.away, inputs.home, maximumGoaliePenalty],
   )
   const hasGoalieValidationErrors = Boolean(
     goalieValidationErrors.away || goalieValidationErrors.home,
@@ -379,8 +446,8 @@ function GameAnalyzer({
   ])
 
   const result = useMemo(
-    () => calculateGame(inputs.home, inputs.away),
-    [inputs],
+    () => calculateGame(inputs.home, inputs.away, probabilityScale),
+    [inputs, probabilityScale],
   )
 
   useEffect(() => {
@@ -587,7 +654,7 @@ function GameAnalyzer({
     isStakeValid &&
     !hasGoalieValidationErrors
   const saveDisabledReason = hasGoalieValidationErrors
-    ? 'Complete the required game-specific goalie adjustment.'
+    ? 'Review the goalie adjustment validation messages.'
     : !selectedMarketOdds
     ? 'Add valid market odds for the selected side.'
     : !hasValidModelProbability
@@ -1050,7 +1117,7 @@ function GameAnalyzer({
     if (hasGoalieValidationErrors) {
       setGoalieSaveStatus('error')
       setGoalieSaveMessage(
-        'Complete the required game-specific goalie adjustments.',
+        'Review invalid goalie adjustments before saving.',
       )
       return
     }
@@ -1243,6 +1310,15 @@ function GameAnalyzer({
                 effectiveRating={result.homeFinalRating}
               />
             </div>
+
+            <SpecialTeamsMatchupPanel
+              awayTeam={awayTeam}
+              enabled={specialTeamsAlertsEnabled}
+              homeTeam={homeTeam}
+              specialTeams={specialTeams}
+              status={specialTeamsStatus}
+              threshold={specialTeamsRankThreshold}
+            />
           </div>
 
           <AdjustmentComparison
@@ -1263,11 +1339,13 @@ function GameAnalyzer({
             goalieSaveMessage={goalieSaveMessage}
             goalieSaveStatus={goalieSaveStatus}
             goalieValidationErrors={goalieValidationErrors}
+            maximumGoaliePenalty={maximumGoaliePenalty}
             goalies={{
               away: awayGoalies,
               home: homeGoalies,
             }}
             homeTeam={homeTeam}
+            injurySummaries={injurySummaries}
             inputs={inputs}
             isGameContextManaged={Boolean(gameContext)}
             onChange={handleInputChange}
@@ -1420,6 +1498,100 @@ function MatchupTeamCard({ baseRating, effectiveRating, label, team }) {
         </div>
       </div>
     </article>
+  )
+}
+
+function SpecialTeamsMatchupPanel({
+  awayTeam,
+  enabled,
+  homeTeam,
+  specialTeams,
+  status,
+  threshold,
+}) {
+  if (!enabled || status === 'idle' || status === 'disabled') {
+    return null
+  }
+
+  if (status === 'loading') {
+    return (
+      <section className="analyzer-special-teams compact" role="status">
+        Loading 3-season Special Teams matchup...
+      </section>
+    )
+  }
+
+  if (status !== 'success' || !specialTeams) {
+    return (
+      <section className="analyzer-special-teams compact" role="status">
+        Special teams data unavailable
+      </section>
+    )
+  }
+
+  const matchup = getSpecialTeamsMatchupForTeams({
+    awayTeam: awayTeam.abbreviation,
+    homeTeam: homeTeam.abbreviation,
+    specialTeams,
+    threshold,
+  })
+  const rows = [
+    {
+      label: 'Away',
+      matchup: matchup.away,
+      opponent: homeTeam,
+      team: awayTeam,
+    },
+    {
+      label: 'Home',
+      matchup: matchup.home,
+      opponent: awayTeam,
+      team: homeTeam,
+    },
+  ]
+  const getStatusLabel = (teamMatchup) => {
+    if (teamMatchup.status === SPECIAL_TEAMS_MATCHUP_STATUSES.POSITIVE) {
+      return 'Strong PP vs Weak PK'
+    }
+
+    if (teamMatchup.status === SPECIAL_TEAMS_MATCHUP_STATUSES.NEGATIVE) {
+      return 'Weak PP vs Strong PK'
+    }
+
+    if (teamMatchup.status === SPECIAL_TEAMS_MATCHUP_STATUSES.UNAVAILABLE) {
+      return 'Special teams data unavailable'
+    }
+
+    return 'No strong special teams mismatch'
+  }
+
+  return (
+    <section
+      className="analyzer-special-teams"
+      aria-label="Special Teams matchup alerts"
+    >
+      <div className="analyzer-special-teams-heading">
+        <strong>Special Teams Matchup</strong>
+        <span>Previous 3 seasons</span>
+      </div>
+      <div className="analyzer-special-teams-grid">
+        {rows.map(({ label, matchup: teamMatchup, opponent, team }) => (
+          <div
+            className={`analyzer-special-teams-row ${teamMatchup.status}`}
+            key={label}
+          >
+            <span>
+              {label} · {team.abbreviation}
+            </span>
+            <strong>
+              PP #{teamMatchup.ppRank ?? '--'} vs {opponent.abbreviation} PK #
+              {teamMatchup.opponentPkRank ?? '--'}
+            </strong>
+            <small>{getStatusLabel(teamMatchup)}</small>
+          </div>
+        ))}
+      </div>
+    </section>
   )
 }
 

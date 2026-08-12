@@ -7,6 +7,7 @@ const test = require('node:test')
 const {
   RESULT_TYPES,
   WINNERS,
+  calculateLogisticProbability,
   calculatePregameProbability,
   calculateRatingUpdate,
   classifyCompletedGameResult,
@@ -66,7 +67,33 @@ test('home advantage increases home probability', () => {
   assert.equal(advantagedHome.homeProbability > neutralHome.homeProbability, true)
 })
 
-test('50/50 regulation winner gets +0.60', () => {
+test('production probability scale defaults to the calibrated value and accepts explicit overrides', () => {
+  const defaultProbability = calculatePregameProbability({
+    awayRating: 50,
+    homeAdvantage: 0,
+    homeRating: 56,
+  })
+  const widerScaleProbability = calculatePregameProbability({
+    awayRating: 50,
+    homeAdvantage: 0,
+    homeRating: 56,
+    probabilityScale: 30,
+  })
+
+  assert.equal(defaultProbability.probabilityScale, 20)
+  assert.equal(widerScaleProbability.probabilityScale, 30)
+  assert.equal(
+    widerScaleProbability.homeProbability < defaultProbability.homeProbability,
+    true,
+  )
+  assertAlmostEqual(calculateLogisticProbability(0, 12), 0.5)
+  assert.throws(
+    () => calculateLogisticProbability(1, 0),
+    /probabilityScale must be greater than 0/,
+  )
+})
+
+test('50/50 regulation winner gets +0.65 with calibrated K', () => {
   const update = calculateRatingUpdate({
     awayExpectedProbability: 0.5,
     homeExpectedProbability: 0.5,
@@ -74,11 +101,11 @@ test('50/50 regulation winner gets +0.60', () => {
     winner: WINNERS.HOME,
   })
 
-  assertAlmostEqual(update.homeDelta, 0.6)
-  assertAlmostEqual(update.awayDelta, -0.6)
+  assertAlmostEqual(update.homeDelta, 0.65)
+  assertAlmostEqual(update.awayDelta, -0.65)
 })
 
-test('30% underdog regulation winner gets +0.84', () => {
+test('30% underdog regulation winner gets +0.91 with calibrated K', () => {
   const update = calculateRatingUpdate({
     awayExpectedProbability: 0.7,
     homeExpectedProbability: 0.3,
@@ -86,10 +113,10 @@ test('30% underdog regulation winner gets +0.84', () => {
     winner: WINNERS.HOME,
   })
 
-  assertAlmostEqual(update.homeDelta, 0.84)
+  assertAlmostEqual(update.homeDelta, 0.91)
 })
 
-test('90% favorite regulation winner gets +0.12', () => {
+test('90% favorite regulation winner gets +0.13 with calibrated K', () => {
   const update = calculateRatingUpdate({
     awayExpectedProbability: 0.1,
     homeExpectedProbability: 0.9,
@@ -97,10 +124,10 @@ test('90% favorite regulation winner gets +0.12', () => {
     winner: WINNERS.HOME,
   })
 
-  assertAlmostEqual(update.homeDelta, 0.12)
+  assertAlmostEqual(update.homeDelta, 0.13)
 })
 
-test('overtime multiplier produces +0.588 in the 30% underdog example', () => {
+test('calibrated overtime multiplier produces +0.364 for a 30% underdog', () => {
   const update = calculateRatingUpdate({
     awayExpectedProbability: 0.7,
     homeExpectedProbability: 0.3,
@@ -108,10 +135,10 @@ test('overtime multiplier produces +0.588 in the 30% underdog example', () => {
     winner: WINNERS.HOME,
   })
 
-  assertAlmostEqual(update.homeDelta, 0.588)
+  assertAlmostEqual(update.homeDelta, 0.364)
 })
 
-test('shootout multiplier produces +0.42 in the 30% underdog example', () => {
+test('calibrated shootout multiplier produces +0.091 for a 30% underdog', () => {
   const update = calculateRatingUpdate({
     awayExpectedProbability: 0.7,
     homeExpectedProbability: 0.3,
@@ -119,7 +146,7 @@ test('shootout multiplier produces +0.42 in the 30% underdog example', () => {
     winner: WINNERS.HOME,
   })
 
-  assertAlmostEqual(update.homeDelta, 0.42)
+  assertAlmostEqual(update.homeDelta, 0.091)
 })
 
 test('rating deltas are equal and opposite', () => {

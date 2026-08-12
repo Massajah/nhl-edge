@@ -6,6 +6,10 @@ import {
   RotateCcw,
 } from 'lucide-react'
 import { getTeamMetadata } from '../data/teamMetadata.js'
+import BaseModelCalibration from './BaseModelCalibration.jsx'
+import TeamHomeAdvantageCalibration from './TeamHomeAdvantageCalibration.jsx'
+import ScheduleContextCalibration from './ScheduleContextCalibration.jsx'
+import SpecialTeamsCalibration from './SpecialTeamsCalibration.jsx'
 import { previewPowerRatingSimulation } from '../services/powerRatingSimulationsApi.js'
 import {
   RATING_LAB_CONFIGURATION_FIELDS,
@@ -102,12 +106,27 @@ const formatSimulationError = (error) => {
 }
 
 function RatingLab({
+  initialCalibrationOptions = null,
+  initialCalibrationRuns = [],
+  initialCalibrationErrorMessage = '',
+  initialCalibrationStatus = 'idle',
+  initialHomeAdvantageErrorMessage = '',
+  initialHomeAdvantageOptions = null,
+  initialHomeAdvantageResult = null,
+  initialScheduleContextErrorMessage = '',
+  initialScheduleContextOptions = null,
+  initialScheduleContextResult = null,
+  initialSpecialTeamsErrorMessage = '',
+  initialSpecialTeamsOptions = null,
+  initialSpecialTeamsResult = null,
   initialErrorMessage = '',
   initialForm,
+  initialMode = 'replay',
   initialResult = null,
   initialStatus = 'idle',
   previewSimulation = previewPowerRatingSimulation,
 } = {}) {
+  const [mode, setMode] = useState(initialMode)
   const [form, setForm] = useState(() => initialForm ?? createRatingLabDefaultForm())
   const [result, setResult] = useState(initialResult)
   const [status, setStatus] = useState(initialResult ? 'success' : initialStatus)
@@ -204,6 +223,80 @@ function RatingLab({
 
   return (
     <section className="rating-lab-page" aria-label="Rating Lab">
+      <div className="rating-lab-mode-switcher" role="tablist" aria-label="Rating Lab mode">
+        <button
+          aria-selected={mode === 'replay'}
+          className={mode === 'replay' ? 'active' : ''}
+          role="tab"
+          type="button"
+          onClick={() => setMode('replay')}
+        >
+          Historical Replay
+        </button>
+        <button
+          aria-selected={mode === 'calibration'}
+          className={mode === 'calibration' ? 'active' : ''}
+          role="tab"
+          type="button"
+          onClick={() => setMode('calibration')}
+        >
+          Base Model Calibration
+        </button>
+        <button
+          aria-selected={mode === 'home-advantage'}
+          className={mode === 'home-advantage' ? 'active' : ''}
+          role="tab"
+          type="button"
+          onClick={() => setMode('home-advantage')}
+        >
+          Team Home Advantage
+        </button>
+        <button
+          aria-selected={mode === 'schedule-context'}
+          className={mode === 'schedule-context' ? 'active' : ''}
+          role="tab"
+          type="button"
+          onClick={() => setMode('schedule-context')}
+        >
+          Schedule &amp; Context
+        </button>
+        <button
+          aria-selected={mode === 'special-teams'}
+          className={mode === 'special-teams' ? 'active' : ''}
+          role="tab"
+          type="button"
+          onClick={() => setMode('special-teams')}
+        >
+          Special Teams
+        </button>
+      </div>
+
+      {mode === 'special-teams' ? (
+        <SpecialTeamsCalibration
+          initialErrorMessage={initialSpecialTeamsErrorMessage}
+          initialOptions={initialSpecialTeamsOptions}
+          initialResult={initialSpecialTeamsResult}
+        />
+      ) : mode === 'schedule-context' ? (
+        <ScheduleContextCalibration
+          initialErrorMessage={initialScheduleContextErrorMessage}
+          initialOptions={initialScheduleContextOptions}
+          initialResult={initialScheduleContextResult}
+        />
+      ) : mode === 'home-advantage' ? (
+        <TeamHomeAdvantageCalibration
+          initialErrorMessage={initialHomeAdvantageErrorMessage}
+          initialOptions={initialHomeAdvantageOptions}
+          initialResult={initialHomeAdvantageResult}
+        />
+      ) : mode === 'calibration' ? (
+        <BaseModelCalibration
+          initialErrorMessage={initialCalibrationErrorMessage}
+          initialOptions={initialCalibrationOptions}
+          initialRuns={initialCalibrationRuns}
+          initialRunStatus={initialCalibrationStatus}
+        />
+      ) : (
       <div className="rating-lab-layout">
         <aside className="rating-lab-controls-panel" aria-label="Simulation controls">
           <div className="section-heading">
@@ -380,6 +473,7 @@ function RatingLab({
           ) : null}
         </section>
       </div>
+      )}
     </section>
   )
 }

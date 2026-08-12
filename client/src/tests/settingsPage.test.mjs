@@ -85,12 +85,17 @@ test('Model Adjustments exposes current global automatic model point adjustments
   assert.doesNotMatch(html, /manual X-factor/i)
 })
 
-test('Home Advantage is editable once through the rating-engine setting path', () => {
+test('Home Advantage is editable once and owned by Model Adjustments', () => {
   const html = renderSettings()
   const matches = html.match(/id="engine-setting-homeAdvantage"/g) ?? []
 
   assert.equal(matches.length, 1)
-  assert.match(html, /Save ownership: use Save Rating Engine/)
+  assert.match(html, /Save ownership: Base Home Advantage is saved with Model/)
+  assert.match(
+    html,
+    /id="engine-setting-homeAdvantage"[^>]*form="settings-model-adjustments-form"/,
+  )
+  assert.match(html, /Save Model Adjustments/)
   assert.match(html, /Team Home Adjustment remains on the/)
 })
 
@@ -112,8 +117,66 @@ test('Rest and Quick Rematch explanatory behavior renders compactly', () => {
   )
 })
 
-test('Power Rating Engine no longer duplicates Base Home Advantage below', () => {
+test('Model Adjustments exposes informational Special Teams alert controls', () => {
   const html = renderSettings()
+
+  assert.match(html, /Special Teams Matchup Alerts/)
+  assert.match(html, /Enable Special Teams Matchup Alerts/)
+  assert.match(
+    html,
+    /id="special-teams-rank-threshold"[^>]*min="3"[^>]*max="12"[^>]*value="6"/,
+  )
+  assert.match(html, /Top\/Bottom 6 means ranks 1–6 and 27–32/)
+  assert.match(html, /top-ranked 3-season power play/)
+  assert.match(html, /Alerts do not change Power Ratings, model probability/)
+  assert.doesNotMatch(html, /Special Teams Rating Adjustment/)
+})
+
+test('Maximum Goalie Penalty is a dedicated Model Adjustments card', () => {
+  const html = renderSettings()
+  const modelIndex = indexOfText(html, 'Model Adjustments')
+  const goalieIndex = indexOfText(html, '>Goalie</h3>')
+  const engineIndex = indexOfText(html, 'Power Rating Engine')
+
+  assert.ok(modelIndex < goalieIndex)
+  assert.ok(goalieIndex < engineIndex)
+  assert.match(html, /Global safety limit for goalie downgrades/)
+  assert.match(html, /Save ownership: Maximum Goalie Penalty is saved with Model/)
+  assert.match(
+    html,
+    /id="engine-setting-maximumGoaliePenalty"[^>]*form="settings-model-adjustments-form"[^>]*min="-5"[^>]*max="0"[^>]*value="-4\.00"/,
+  )
+  assert.match(html, /0\.00 is the team baseline/)
+  assert.match(html, /Power Rating is assumed to already reflect its normal #1 goalie/)
+})
+
+test('Maximum Player Injury Penalty is a dedicated Model Adjustments card', () => {
+  const html = renderSettings()
+  const modelIndex = indexOfText(html, 'Model Adjustments')
+  const injuryIndex = indexOfText(html, '>Injury</h3>')
+  const engineIndex = indexOfText(html, 'Power Rating Engine')
+
+  assert.ok(modelIndex < injuryIndex)
+  assert.ok(injuryIndex < engineIndex)
+  assert.match(html, /Individual skater injury guardrail/)
+  assert.match(
+    html,
+    /id="engine-setting-maximumPlayerInjuryPenalty"[^>]*form="settings-model-adjustments-form"[^>]*min="-5"[^>]*max="0"[^>]*step="0.5"[^>]*value="-2.50"/,
+  )
+  assert.match(html, /downgrade caused by the player/)
+  assert.match(html, /Use 0\.00 when the player is adequately replaceable/)
+  assert.match(html, /Multiple active injuries may sum beyond this value/)
+  assert.match(
+    html,
+    /Save ownership: Maximum Player Injury Penalty is saved with/,
+  )
+})
+
+test('Power Rating Engine keeps only Probability Scale in Advanced Model Settings', () => {
+  const html = renderSettings()
+  const advancedMarkup = html.match(
+    /<details class="settings-advanced-model">[\s\S]*?<\/details>/,
+  )?.[0]
 
   assert.match(html, /Rating Update Sensitivity/)
   assert.match(html, /Result Multipliers/)
@@ -121,6 +184,41 @@ test('Power Rating Engine no longer duplicates Base Home Advantage below', () =>
   assert.match(html, /Regulation Multiplier/)
   assert.match(html, /Overtime Multiplier/)
   assert.match(html, /Shootout Multiplier/)
+  assert.match(html, /id="engine-setting-homeAdvantage"[^>]*value="3\.50"/)
+  assert.match(html, /id="engine-setting-kFactor"[^>]*value="1\.30"/)
+  assert.match(html, /id="engine-setting-regulationMultiplier"[^>]*value="1\.00"/)
+  assert.match(html, /id="engine-setting-overtimeMultiplier"[^>]*value="0\.40"/)
+  assert.match(html, /id="engine-setting-shootoutMultiplier"[^>]*value="0\.10"/)
+  assert.match(html, /Calibrated Base Model v1/)
+  assert.match(html, /Defaults were calibrated using multi-season historical Rating/)
+  assert.match(html, /<details class="settings-advanced-model">/)
+  assert.match(html, /Advanced Model Settings/)
+  assert.ok(advancedMarkup)
+  assert.match(advancedMarkup, /Probability Scale/)
+  assert.doesNotMatch(advancedMarkup, /Maximum Goalie Penalty/)
+  assert.doesNotMatch(advancedMarkup, /Maximum Player Injury Penalty/)
+  assert.match(html, /value="20"/)
+  assert.doesNotMatch(html, /<details class="settings-advanced-model" open/)
+})
+
+test('Settings source keeps Model Adjustments and engine save ownership separate', async () => {
+  const source = await import('node:fs/promises').then((fs) =>
+    fs.readFile(new URL('../components/Settings.jsx', import.meta.url), 'utf8'),
+  )
+
+  assert.match(source, /updateRatingEngineModelAdjustments/)
+  assert.match(source, /updateRatingEngineParameters/)
+  assert.match(source, /hasUnsavedRatingModelAdjustments/)
+  assert.match(source, /hasUnsavedModelAdjustmentChanges/)
+  assert.match(
+    source,
+    /updateRatingEngineModelAdjustments\(\{[\s\S]*?maximumGoaliePenalty:/,
+  )
+  assert.match(
+    source,
+    /updateRatingEngineModelAdjustments\(\{[\s\S]*?maximumPlayerInjuryPenalty:/,
+  )
+  assert.doesNotMatch(source, /updateRatingEngineSettings\(parsedDraft\.settings\)/)
 })
 
 test('schedule adjustment draft validation rejects unsafe numeric values', () => {

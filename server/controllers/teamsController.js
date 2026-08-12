@@ -2,6 +2,40 @@ const nhlApiService = require('../services/nhlApiService')
 const goalieAdjustmentsService = require('../services/goalieAdjustmentsService')
 const teamLineupsService = require('../services/teamLineupsService')
 
+const getUnavailableProviderState = (error) => ({
+  errorCode: error?.upstreamStatus === 429
+    ? 'NHL_RATE_LIMITED'
+    : 'NHL_PROVIDER_UNAVAILABLE',
+  fetchedAt: null,
+  source: null,
+  stale: false,
+  status: error?.upstreamStatus === 429 ? 'rate_limited' : 'unavailable',
+})
+
+const sendProviderResult = (response, key, result) => {
+  const { data, ...provider } = result
+
+  response.json({
+    [key]: data,
+    provider,
+  })
+}
+
+const handleProviderSectionError = (response, next, key, error) => {
+  if (
+    error?.name !== 'NhlApiError' ||
+    ((error.statusCode ?? 500) < 500 && error.upstreamStatus !== 429)
+  ) {
+    next(error)
+    return
+  }
+
+  response.json({
+    [key]: null,
+    provider: getUnavailableProviderState(error),
+  })
+}
+
 const getTeamModelValues = async (request, response, next) => {
   try {
     const result = await teamLineupsService.getTeamLineup(
@@ -44,10 +78,15 @@ const clearTeamModelValues = async (request, response, next) => {
 
 const getGoalieAdjustments = async (request, response, next) => {
   try {
-    const result = await goalieAdjustmentsService.getProviderGoalieAdjustments(
-      request.user.id,
-      request.params.teamId,
-    )
+    const result = request.query.localOnly === 'true'
+      ? await goalieAdjustmentsService.getSavedGoalieAdjustments(
+          request.user.id,
+          request.params.teamId,
+        )
+      : await goalieAdjustmentsService.getProviderGoalieAdjustments(
+          request.user.id,
+          request.params.teamId,
+        )
 
     response.json(result)
   } catch (error) {
@@ -108,11 +147,13 @@ const getTeamRoster = async (request, response, next) => {
   }
 
   try {
-    const roster = await nhlApiService.getRosterForTeam(teamAbbreviation)
+    const roster = await nhlApiService.getRosterForTeam(teamAbbreviation, {
+      includeProviderState: true,
+    })
 
-    response.json({ roster })
+    sendProviderResult(response, 'roster', roster)
   } catch (error) {
-    next(error)
+    handleProviderSectionError(response, next, 'roster', error)
   }
 }
 
@@ -130,11 +171,26 @@ const getTeamStats = async (request, response, next) => {
   }
 
   try {
-    const stats = await nhlApiService.getSpecialTeamsForTeam(teamAbbreviation)
+    const stats = await nhlApiService.getSpecialTeamsForTeam(
+      teamAbbreviation,
+      { includeProviderState: true },
+    )
 
-    response.json({ stats })
+    sendProviderResult(response, 'stats', stats)
   } catch (error) {
-    next(error)
+    handleProviderSectionError(response, next, 'stats', error)
+  }
+}
+
+const getLeagueSpecialTeams = async (_request, response, next) => {
+  try {
+    const specialTeams = await nhlApiService.getLeagueSpecialTeamsMatchupData({
+      includeProviderState: true,
+    })
+
+    sendProviderResult(response, 'specialTeams', specialTeams)
+  } catch (error) {
+    handleProviderSectionError(response, next, 'specialTeams', error)
   }
 }
 
@@ -152,12 +208,14 @@ const getTeamGoalieSummaries = async (request, response, next) => {
   }
 
   try {
-    const goalieSummaries =
-      await nhlApiService.getGoalieSummariesForTeam(teamAbbreviation)
+    const goalieSummaries = await nhlApiService.getGoalieSummariesForTeam(
+      teamAbbreviation,
+      { includeProviderState: true },
+    )
 
-    response.json({ goalieSummaries })
+    sendProviderResult(response, 'goalieSummaries', goalieSummaries)
   } catch (error) {
-    next(error)
+    handleProviderSectionError(response, next, 'goalieSummaries', error)
   }
 }
 
@@ -165,6 +223,7 @@ module.exports = {
   clearTeamModelValues,
   deleteGoalieAdjustment,
   getGoalieAdjustments,
+  getLeagueSpecialTeams,
   getTeamModelValues,
   getTeamGoalieSummaries,
   getTeamRoster,
@@ -172,4 +231,5 @@ module.exports = {
   getTeams,
   saveTeamModelValues,
   saveGoalieAdjustment,
+  getUnavailableProviderState,
 }

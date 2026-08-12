@@ -2,10 +2,19 @@ const GoalieAdjustment = require('../models/GoalieAdjustment')
 const LegacyTeamGoalies = require('../models/TeamGoalies')
 const nhlApiService = require('./nhlApiService')
 const { getKnownTeamById } = require('./teamCatalogService')
+const {
+  DEFAULT_PRODUCTION_RATING_ENGINE_SETTINGS,
+  MAXIMUM_GOALIE_PENALTY_LIMITS,
+} = require('../config/baseModel')
+const {
+  getRatingEngineSettings,
+} = require('./ratingEngineSettingsService')
 
 const ADJUSTMENT_MIN = -5
 const ADJUSTMENT_MAX = 5
 const ADJUSTMENT_STEP = 0.05
+const DEFAULT_MAXIMUM_GOALIE_PENALTY =
+  DEFAULT_PRODUCTION_RATING_ENGINE_SETTINGS.maximumGoaliePenalty
 const NOTE_MAX_LENGTH = 300
 const UPDATE_FIELDS = ['activeOverride', 'note', 'ratingAdjustment']
 
@@ -51,7 +60,39 @@ const normalizeNhlPlayerId = (value) => {
   return playerId
 }
 
-const normalizeAdjustment = (value, field = 'ratingAdjustment') => {
+const normalizeMaximumGoaliePenalty = (value) => {
+  const maximumGoaliePenalty = Number(value)
+
+  return Number.isFinite(maximumGoaliePenalty) &&
+    maximumGoaliePenalty >= MAXIMUM_GOALIE_PENALTY_LIMITS.min &&
+    maximumGoaliePenalty <= MAXIMUM_GOALIE_PENALTY_LIMITS.max
+    ? maximumGoaliePenalty
+    : DEFAULT_MAXIMUM_GOALIE_PENALTY
+}
+
+const resolveMaximumGoaliePenalty = async (userId, options = {}) => {
+  if (
+    options.maximumGoaliePenalty !== undefined &&
+    options.maximumGoaliePenalty !== null
+  ) {
+    return normalizeMaximumGoaliePenalty(options.maximumGoaliePenalty)
+  }
+
+  const settingsProvider = options.settingsProvider ?? getRatingEngineSettings
+  const result = await settingsProvider(userId, {
+    settingsModel: options.ratingEngineSettingsModel,
+  })
+
+  return normalizeMaximumGoaliePenalty(
+    result?.settings?.maximumGoaliePenalty,
+  )
+}
+
+const normalizeAdjustment = (
+  value,
+  field = 'ratingAdjustment',
+  maximumGoaliePenalty = DEFAULT_MAXIMUM_GOALIE_PENALTY,
+) => {
   if (value === '' || value === null || value === undefined) {
     throw new GoalieAdjustmentsError(`${field} is required.`, 400, { field })
   }
@@ -64,11 +105,15 @@ const normalizeAdjustment = (value, field = 'ratingAdjustment') => {
     })
   }
 
-  if (adjustment < ADJUSTMENT_MIN || adjustment > ADJUSTMENT_MAX) {
+  const normalizedMaximumPenalty = normalizeMaximumGoaliePenalty(
+    maximumGoaliePenalty,
+  )
+
+  if (adjustment < normalizedMaximumPenalty || adjustment > 0) {
     throw new GoalieAdjustmentsError(
-      `${field} must be between ${ADJUSTMENT_MIN} and ${ADJUSTMENT_MAX}.`,
+      `${field} must be between ${normalizedMaximumPenalty.toFixed(2)} and 0.00.`,
       400,
-      { field },
+      { field, maximumGoaliePenalty: normalizedMaximumPenalty },
     )
   }
 
@@ -132,7 +177,10 @@ const normalizeActiveOverride = (value) => {
   return value
 }
 
-const normalizeUpdatePayload = (payload = {}) => {
+const normalizeUpdatePayload = (
+  payload = {},
+  maximumGoaliePenalty = DEFAULT_MAXIMUM_GOALIE_PENALTY,
+) => {
   if (!payload || Array.isArray(payload) || typeof payload !== 'object') {
     throw new GoalieAdjustmentsError('Request body must be an object.', 400)
   }
@@ -152,7 +200,11 @@ const normalizeUpdatePayload = (payload = {}) => {
   return {
     activeOverride: normalizeActiveOverride(payload.activeOverride),
     note: normalizeNote(payload.note),
-    ratingAdjustment: normalizeAdjustment(payload.ratingAdjustment),
+    ratingAdjustment: normalizeAdjustment(
+      payload.ratingAdjustment,
+      'ratingAdjustment',
+      maximumGoaliePenalty,
+    ),
   }
 }
 
@@ -254,6 +306,27 @@ const loadAdjustmentState = async (userId, team, options = {}) => {
   }
 }
 
+const getSavedGoalieAdjustments = async (
+  userId,
+  teamIdentity,
+  options = {},
+) => {
+  assertUserId(userId)
+  const team = await requireKnownTeam(teamIdentity)
+  const state = await loadAdjustmentState(userId, team, options)
+
+  return {
+    adjustments: state.adjustments,
+    goalies: [],
+    provider: {
+      status: 'not_requested',
+    },
+    teamAbbreviation: team.teamAbbreviation,
+    teamId: team.teamId,
+    teamName: team.teamName,
+  }
+}
+
 const normalizeProviderGoalie = (goalie, adjustment = null) => {
   const nhlPlayerId = normalizeNhlPlayerId(goalie.id ?? goalie.playerId)
   const displayName = toText(
@@ -280,10 +353,23 @@ const getProviderGoalieAdjustments = async (
 ) => {
   assertUserId(userId)
   const team = await requireKnownTeam(teamIdentity)
-  const [state, roster] = await Promise.all([
-    loadAdjustmentState(userId, team, options),
-    getRosterProvider(options)(team.teamAbbreviation),
-  ])
+  const state = await loadAdjustmentState(userId, team, options)
+  let roster
+
+  try {
+    roster = await getRosterProvider(options)(team.teamAbbreviation)
+  } catch {
+    return {
+      adjustments: state.adjustments,
+      goalies: [],
+      provider: {
+        status: 'unavailable',
+      },
+      teamAbbreviation: team.teamAbbreviation,
+      teamId: team.teamId,
+      teamName: team.teamName,
+    }
+  }
   const providerGoalies = (Array.isArray(roster?.goalies) ? roster.goalies : [])
     .filter((goalie) => {
       const playerId = Number(goalie.id ?? goalie.playerId)
@@ -304,6 +390,9 @@ const getProviderGoalieAdjustments = async (
       providerPlayerIds.has(adjustment.nhlPlayerId),
     ),
     goalies: providerGoalies,
+    provider: {
+      status: 'ready',
+    },
     teamAbbreviation: team.teamAbbreviation,
     teamId: team.teamId,
     teamName: team.teamName,
@@ -338,7 +427,11 @@ const saveGoalieAdjustment = async (
   assertUserId(userId)
   const team = await requireKnownTeam(teamIdentity)
   const playerId = normalizeNhlPlayerId(nhlPlayerId)
-  const updates = normalizeUpdatePayload(payload)
+  const maximumGoaliePenalty = await resolveMaximumGoaliePenalty(
+    userId,
+    options,
+  )
+  const updates = normalizeUpdatePayload(payload, maximumGoaliePenalty)
   const roster = await getRosterProvider(options)(team.teamAbbreviation)
   const providerGoalie = (roster?.goalies ?? []).find(
     (goalie) => Number(goalie.id ?? goalie.playerId) === playerId,
@@ -449,15 +542,19 @@ module.exports = {
   ADJUSTMENT_MAX,
   ADJUSTMENT_MIN,
   ADJUSTMENT_STEP,
+  DEFAULT_MAXIMUM_GOALIE_PENALTY,
   GoalieAdjustmentsError,
   deleteGoalieAdjustment,
   getGoalieAdjustmentForPlayer,
   getProviderGoalieAdjustments,
+  getSavedGoalieAdjustments,
   normalizeAdjustment,
+  normalizeMaximumGoaliePenalty,
   normalizeNhlPlayerId,
   normalizeProviderGoalie,
   normalizeStoredAdjustment,
   normalizeUpdatePayload,
+  resolveMaximumGoaliePenalty,
   saveGoalieAdjustment,
   serializeAdjustment,
 }

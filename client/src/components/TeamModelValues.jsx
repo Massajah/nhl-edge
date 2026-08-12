@@ -12,7 +12,9 @@ import {
 } from '../services/teamsApi.js'
 import {
   DEFENSE_SLOT_FIELDS,
+  DEFENSE_SNAPSHOT_FIELDS,
   FORWARD_SLOT_FIELDS,
+  FORWARD_SNAPSHOT_FIELDS,
   LINEUP_NOTE_MAX_LENGTH,
   formatModelValuesUpdatedDate,
   formatPlayerOption,
@@ -26,13 +28,33 @@ import {
 } from '../utils/teamModelValues.js'
 
 const forwardPositionFields = [
-  { field: 'leftWingPlayerId', label: 'LW' },
-  { field: 'centerPlayerId', label: 'C' },
-  { field: 'rightWingPlayerId', label: 'RW' },
+  {
+    field: 'leftWingPlayerId',
+    label: 'LW',
+    snapshotField: FORWARD_SNAPSHOT_FIELDS.leftWingPlayerId,
+  },
+  {
+    field: 'centerPlayerId',
+    label: 'C',
+    snapshotField: FORWARD_SNAPSHOT_FIELDS.centerPlayerId,
+  },
+  {
+    field: 'rightWingPlayerId',
+    label: 'RW',
+    snapshotField: FORWARD_SNAPSHOT_FIELDS.rightWingPlayerId,
+  },
 ]
 const defensePositionFields = [
-  { field: 'leftDefensePlayerId', label: 'LD' },
-  { field: 'rightDefensePlayerId', label: 'RD' },
+  {
+    field: 'leftDefensePlayerId',
+    label: 'LD',
+    snapshotField: DEFENSE_SNAPSHOT_FIELDS.leftDefensePlayerId,
+  },
+  {
+    field: 'rightDefensePlayerId',
+    label: 'RD',
+    snapshotField: DEFENSE_SNAPSHOT_FIELDS.rightDefensePlayerId,
+  },
 ]
 
 const formatAdjustment = (value) => {
@@ -52,10 +74,16 @@ const getDuplicateNames = (rows, slotFields, players) =>
     getPlayerDisplayName(players, playerId),
   )
 
-function SummaryLine({ label, playerIds, players }) {
+function SummaryLine({ displayNameSnapshots, label, playerIds, players }) {
   const hasConfiguredPlayer = playerIds.some(Boolean)
-  const playerNames = playerIds.map((playerId) =>
-    playerId ? getPlayerDisplayName(players, playerId) : '—',
+  const playerNames = playerIds.map((playerId, index) =>
+    playerId
+      ? getPlayerDisplayName(
+          players,
+          playerId,
+          displayNameSnapshots[index],
+        )
+      : '—',
   )
 
   return (
@@ -72,7 +100,11 @@ function SummaryLine({ label, playerIds, players }) {
 
 function SummaryLoadState({ loadStatus }) {
   if (loadStatus === 'loading') {
-    return <p className="model-values-section-state">Loading</p>
+    return (
+      <p className="model-values-section-state">
+        Loading saved model values…
+      </p>
+    )
   }
 
   if (loadStatus === 'error') {
@@ -84,7 +116,6 @@ function SummaryLoadState({ loadStatus }) {
 
 export function ModelValuesCard({
   errorMessage,
-  editorReady = true,
   feedbackMessage,
   goalieAdjustments = [],
   goalieAdjustmentStatus = 'idle',
@@ -93,10 +124,13 @@ export function ModelValuesCard({
   onManageModelValues,
   onRetry,
   roster,
+  rosterStatus = 'idle',
 }) {
   const normalized = normalizeTeamModelValues(modelValues)
   const updatedDate = formatModelValuesUpdatedDate(normalized.updatedAt)
-  const editorDisabled = loadStatus !== 'success' || !editorReady
+  const editorDisabled = loadStatus !== 'success'
+  const hasSavedPlayers = getConfiguredForwardLines(normalized).length > 0 ||
+    getConfiguredDefensePairs(normalized).length > 0
 
   return (
     <section className="model-values-card" aria-labelledby="model-values-title">
@@ -128,6 +162,12 @@ export function ModelValuesCard({
       {feedbackMessage ? (
         <p className="model-values-feedback" role="status">
           {feedbackMessage}
+        </p>
+      ) : null}
+
+      {loadStatus === 'success' && rosterStatus === 'error' && hasSavedPlayers ? (
+        <p className="model-values-provider-notice" role="status">
+          Current roster unavailable. Showing saved lineup names.
         </p>
       ) : null}
 
@@ -173,6 +213,9 @@ export function ModelValuesCard({
                   {normalized.forwardLines.map((line) => (
                     <SummaryLine
                       key={line.lineNumber}
+                      displayNameSnapshots={FORWARD_SLOT_FIELDS.map(
+                        (field) => line[FORWARD_SNAPSHOT_FIELDS[field]],
+                      )}
                       label={`L${line.lineNumber}`}
                       playerIds={FORWARD_SLOT_FIELDS.map((field) => line[field])}
                       players={roster?.forwards ?? []}
@@ -197,6 +240,9 @@ export function ModelValuesCard({
                   {normalized.defensePairs.map((pair) => (
                     <SummaryLine
                       key={pair.pairNumber}
+                      displayNameSnapshots={DEFENSE_SLOT_FIELDS.map(
+                        (field) => pair[DEFENSE_SNAPSHOT_FIELDS[field]],
+                      )}
                       label={`D${pair.pairNumber}`}
                       playerIds={DEFENSE_SLOT_FIELDS.map((field) => pair[field])}
                       players={roster?.defensemen ?? []}
@@ -225,6 +271,8 @@ export function ModelValuesCard({
 }
 
 function PlayerSelector({
+  disabled,
+  displayNameSnapshot,
   duplicatePlayerIds,
   field,
   id,
@@ -244,6 +292,7 @@ function PlayerSelector({
       <span>{label}</span>
       <select
         aria-invalid={hasDuplicate || undefined}
+        disabled={disabled}
         id={id}
         ref={selectRef}
         value={selectedPlayerId ?? ''}
@@ -256,7 +305,8 @@ function PlayerSelector({
         <option value="">Empty</option>
         {missingPlayer ? (
           <option value={selectedPlayerId}>
-            {`Unavailable player · ID ${selectedPlayerId}`}
+            {displayNameSnapshot ||
+              `Unavailable player · ID ${selectedPlayerId}`}
           </option>
         ) : null}
         {players.map((player) => (
@@ -294,6 +344,7 @@ export function LineupEditorModal({
   onManageGoalies,
   onSave,
   roster,
+  rosterStatus = roster ? 'success' : 'idle',
   teamName,
 }) {
   const [draft, setDraft] = useState(() =>
@@ -310,6 +361,8 @@ export function LineupEditorModal({
   const draftPayload = getTeamModelValuesPayload(draft)
   const isDirty = JSON.stringify(draftPayload) !== initialPayload
   const isSaving = actionStatus === 'saving' || actionStatus === 'clearing'
+  const providerRosterReady = Boolean(roster) &&
+    ['success', 'refreshing'].includes(rosterStatus)
   const forwardDuplicateIds = getDuplicatePlayerIds(
     draft.forwardLines,
     FORWARD_SLOT_FIELDS,
@@ -444,6 +497,14 @@ export function LineupEditorModal({
           </header>
 
           <div className="lineup-modal-content">
+            {!providerRosterReady ? (
+              <p className="model-values-provider-notice" role="status">
+                {rosterStatus === 'loading'
+                  ? 'Loading current roster for player selectors…'
+                  : 'Current roster unavailable. Saved players are preserved; player replacement is disabled.'}
+              </p>
+            ) : null}
+
             <section className="lineup-editor-section" aria-labelledby="forward-lines-title">
               <div className="lineup-editor-section-heading">
                 <div>
@@ -457,9 +518,15 @@ export function LineupEditorModal({
                   <fieldset className="lineup-row" key={line.lineNumber}>
                     <legend>Line {line.lineNumber}</legend>
                     <div className="forward-line-grid">
-                      {forwardPositionFields.map(({ field, label }, fieldIndex) => (
+                      {forwardPositionFields.map(({
+                        field,
+                        label,
+                        snapshotField,
+                      }, fieldIndex) => (
                         <PlayerSelector
                           key={field}
+                          disabled={!providerRosterReady}
+                          displayNameSnapshot={line[snapshotField]}
                           duplicatePlayerIds={forwardDuplicateIds}
                           field={field}
                           id={`forward-line-${line.lineNumber}-${field}`}
@@ -501,9 +568,15 @@ export function LineupEditorModal({
                   <fieldset className="lineup-row" key={pair.pairNumber}>
                     <legend>Pair {pair.pairNumber}</legend>
                     <div className="defense-pair-grid">
-                      {defensePositionFields.map(({ field, label }) => (
+                      {defensePositionFields.map(({
+                        field,
+                        label,
+                        snapshotField,
+                      }) => (
                         <PlayerSelector
                           key={field}
+                          disabled={!providerRosterReady}
+                          displayNameSnapshot={pair[snapshotField]}
                           duplicatePlayerIds={defenseDuplicateIds}
                           field={field}
                           id={`defense-pair-${pair.pairNumber}-${field}`}
@@ -600,7 +673,7 @@ export function LineupEditorModal({
 
               <button
                 className="lineup-manage-goalies-button"
-                disabled={isSaving}
+                disabled={isSaving || !providerRosterReady}
                 type="button"
                 onClick={onManageGoalies}
               >
@@ -645,7 +718,9 @@ function TeamModelValues({
   goalieAdjustments,
   goalieAdjustmentStatus,
   onManageGoalies,
+  onRequestRoster,
   roster,
+  rosterStatus,
   team,
 }) {
   const [modelValues, setModelValues] = useState(() =>
@@ -731,6 +806,7 @@ function TeamModelValues({
     setActionError('')
     setActionStatus('idle')
     setIsEditorOpen(true)
+    onRequestRoster?.()
   }
 
   const handleManageGoaliesFromEditor = () => {
@@ -808,7 +884,6 @@ function TeamModelValues({
     <>
       <ModelValuesCard
         errorMessage={errorMessage}
-        editorReady={Boolean(roster)}
         feedbackMessage={feedbackMessage}
         goalieAdjustments={goalieAdjustments}
         goalieAdjustmentStatus={goalieAdjustmentStatus}
@@ -817,6 +892,7 @@ function TeamModelValues({
         onManageModelValues={openEditor}
         onRetry={loadModelValues}
         roster={roster}
+        rosterStatus={rosterStatus}
       />
 
       {isEditorOpen ? (
@@ -832,6 +908,7 @@ function TeamModelValues({
           onManageGoalies={handleManageGoaliesFromEditor}
           onSave={handleSave}
           roster={roster}
+          rosterStatus={rosterStatus}
           teamName={team.name}
         />
       ) : null}

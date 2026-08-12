@@ -70,8 +70,22 @@ const deleteInjury = async (request, response, next) => {
   }
 }
 
+const clearTeamInjuryHistory = async (request, response, next) => {
+  try {
+    const result = await injuriesService.clearTeamInjuryHistory(
+      request.user.id,
+      request.params.teamId,
+    )
+
+    response.json({ ...result, success: true })
+  } catch (error) {
+    next(error)
+  }
+}
+
 module.exports = {
   createInjury,
+  clearTeamInjuryHistory,
   deleteInjury,
   getInjuries,
   getTeamInjuries,

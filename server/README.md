@@ -57,10 +57,13 @@ Protected user-specific routes:
 
 The existing NHL roster service is authoritative for current team goalies.
 Authenticated users store only a mapping keyed by canonical team ID and NHL
-player ID, with a model adjustment from `-5.00` to `+5.00` in `0.05`
-increments plus an optional note and nullable active override. A provider
-goalie with no mapping has an implicit `0.00` adjustment and creates no
-database record. The API never accepts a client-provided owner ID, and the
+player ID, with a model adjustment from their configured Maximum Goalie
+Penalty through `0.00` in `0.05` increments plus an optional note and nullable
+active override. Positive adjustments are rejected. Team Power Rating is
+assumed to already include the normal #1 goalie, so `0.00` is the baseline and
+backup or third-goalie adjustments are relative negative downgrades. A provider
+goalie with no mapping has an implicit `0.00` adjustment and creates no database
+record. The API never accepts a client-provided owner ID, and the
 `{ userId, teamId, nhlPlayerId }` mapping is unique.
 
 Legacy user-maintained goalie documents remain readable for compatibility.
@@ -69,16 +72,59 @@ goalies; unmatched manual rows are excluded from current roster choices.
 Historical game-context and bet snapshots retain legacy status values and are
 normalized for display without being rewritten.
 
+Maximum Goalie Penalty is stored in the existing user-scoped Rating Engine
+settings document, defaults to `-4.00`, and may be configured from `-5.00` to
+`0.00`. The Model Adjustments scoped save and reset own this field; the Power
+Rating Engine scoped save and reset leave it unchanged. Tightening it never
+clamps or rewrites an existing saved goalie value. When an out-of-policy saved
+default is next used, the exact value is preserved and the request returns a
+review-required validation state so the user can fix the team default or supply
+an existing supported game override.
+
 Game-specific starting-goalie selections live in the existing `GameContext`.
 Selections snapshot the provider goalie identity, team default, any game
 override, effective adjustment, display name, and source. Custom and unknown
-selections remain game-specific. Later adjustment edits therefore do not
-rewrite saved game contexts or bet snapshots.
+selections remain game-specific. Other / Unlisted goalie requires an adjustment
+within the current configured range and does not create a team default. Unknown
+starter always resolves to neutral `0.00` and has no editable penalty. Later
+adjustment edits therefore do not rewrite saved game contexts or bet snapshots.
 
-Injury records can be explicitly flagged with `isGoalie`. Flagged records stay
-visible and count as active injury records, but their point impact is excluded
-from the regular injury aggregate so the Analyzer goalie adjustment is not
-counted twice. Legacy injury records are not guessed or reclassified.
+Injury records remain in the existing authenticated, user-scoped `Injury`
+collection. Current roster selections snapshot `providerPlayerId`, player name,
+and canonical `position`; manual Other / Unlisted records keep a null provider
+ID. Provider `L`/`R` positions normalize to `LW`/`RW`. Existing records missing
+identity metadata remain readable without destructive migration or name-based
+provider guessing.
+
+Position `G` automatically sets the compatibility `isGoalie` flag and forces
+persisted model impact to zero. The team summary also excludes either position
+`G` or a legacy `isGoalie` flag, so stale goalie impacts cannot leak into
+Dashboard or Analyzer totals. Goalie availability stays available for reference
+and history; Starting Goalies remains the only goalie adjustment path.
+
+Maximum Player Injury Penalty is stored in the existing user-scoped
+`RatingEngineSettings` document, defaults to `-2.50`, uses `0.50` increments,
+and is owned by the Model Adjustments scoped save/reset. The Power Rating Engine
+scope cannot write or reset it. New or changed skater impacts must be within the
+configured value through `0.00` and use half-point steps. Existing arbitrary
+negative values remain unchanged until their impact is edited.
+
+The injury aggregate matches active, non-healthy records, counts every active
+record for context, and sums only negative skater impacts. Zero-impact skaters
+therefore remain visible without changing the total; healthy, historical, and
+goalie records contribute zero. Multiple skaters may sum beyond the individual
+maximum because no team-level cap exists. Duplicate active records are rejected
+by provider player ID, or case-insensitive manual name when no provider ID
+exists; historical records remain valid.
+
+`DELETE /api/injuries/team/:teamId/history` is authenticated and scoped by both
+the token user and a known NHL team. It deletes only records that are inactive
+or healthy and returns `deletedCount`; active non-healthy skaters and goalies are
+never matched. This is the server-side ownership boundary for the team-level
+Clear history action and does not recalculate or mutate model values.
+
+No injury provider, automatic player valuation, replacement-quality model,
+lineup optimizer, or cumulative positional penalty is part of this workflow.
 
 ## Market Odds Phase 1
 
@@ -160,6 +206,10 @@ per `userId + teamId`. The client never sends `userId`; every operation uses the
 authenticated token and the canonical NHL team identity shared with goalie
 adjustments.
 
+The Teams page reads saved goalie adjustments with `?localOnly=true`, which
+returns MongoDB values without waiting for roster enrichment. Existing callers
+that need current provider goalies retain the original enriched response.
+
 Protected endpoints:
 
 - `GET /api/teams/:teamId/model-values` returns the current user's saved values
@@ -168,12 +218,22 @@ Protected endpoints:
   lines, three optional defense pairs, and one optional plain-text lineup note.
 - `DELETE /api/teams/:teamId/model-values/lines` clears positions and the note.
 
-Selections store NHL player IDs, not authoritative player names. Current
-provider forwards validate forward slots and current provider defensemen
-validate defense slots. Previously saved IDs remain readable and may be saved
-unchanged if a player later disappears from the provider roster, allowing the
-client to display an unavailable-player fallback and let the user clear or
-replace it.
+Selections store NHL player IDs as authoritative identity plus a
+non-authoritative display-name snapshot for each occupied slot. Current
+provider forwards validate new forward selections and current provider
+defensemen validate new defense selections. Provider names refresh snapshots
+when a lineup is saved with roster data available; old documents without
+snapshots remain readable. Previously saved IDs remain readable and may be
+saved unchanged if a player later disappears or the NHL provider is
+temporarily unavailable. Note-only saves do not require a provider request.
+
+The Model Values read endpoint is MongoDB-only and never waits for the NHL
+provider. Teams provider endpoints return independent section state metadata
+(`ready`, `cached`, `stale`, `rate_limited`, or `unavailable`) without raw
+upstream bodies. The NHL service owns normalized request keys, bounded
+concurrency, in-flight Promise deduplication, one interactive 429 retry with
+`Retry-After`, and safe stale-cache fallback. One current-roster request is
+normalized once and supplies forwards, defensemen, and goalies.
 
 Team Model Values are personal notes only. They are not read by Power Ratings,
 Dashboard, Game Analyzer, Game Context, injuries, goalie adjustments,
@@ -181,6 +241,34 @@ special-teams calculations, Bet Candidate logic, Kelly sizing, or saved bets.
 Phase 1 has no PP/PK units, automatic lineup feed, historical versions,
 game-specific lineups, or lineup automation. Provider goalie adjustments
 remain a separate persisted feature and retain their existing model effects.
+
+## Special Teams Matchup Alerts
+
+`GET /api/teams/special-teams` exposes a compact league dataset for Dashboard
+and Game Analyzer using only the existing Previous 3 seasons PP/PK averages and
+league ranks. The endpoint calls the existing league Special Teams service, so
+its provider work, eight-hour cache, stale fallback, and in-flight request
+deduplication are shared with the Teams page. It does not add a provider or
+perform one upstream request per displayed game or team. The response includes
+`leagueTeamCount`, the three source season IDs, and canonical team
+abbreviations with 3-season PP and PK ranks.
+
+`RatingEngineSettings` stores two authenticated user-scoped presentation
+controls: `specialTeamsAlertsEnabled` (default `true`) and
+`specialTeamsRankThreshold` (default `6`, integer range `3–12`). Existing
+documents missing either field receive schema/service defaults, while explicit
+values are preserved. Model Adjustments reset restores both defaults.
+
+Detection evaluates Away PP versus Home PK and Home PP versus Away PK
+independently. Top N PP versus Bottom N PK is positive; Bottom N PP versus Top
+N PK is negative. The bottom boundary is calculated as
+`leagueTeamCount - N + 1`. Missing or invalid ranks are unavailable rather than
+alerts.
+
+This feature is informational only. Its settings and matchup data are not read
+by the Power Rating update engine, probability calculation, fair-odds logic,
+or historical replay. No automatic Special Teams rating adjustment exists in
+this version.
 
 ## Power Rating Updates
 
@@ -450,6 +538,11 @@ does not alter existing
 `ProcessedRatingGame` snapshots, Rating History, saved bets, historical
 analyses, or Rating Lab replay defaults and simulation behavior.
 
+Base Model Calibration uses the calibrated Base Model v1 reference values as
+editable experimental inputs. User-saved production changes do not silently
+change Rating Lab inputs, and calibration does not write settings or recalculate
+stored history.
+
 `homeAdvantage` in these settings is the global Base Home Advantage. Team Power
 Ratings expose `homeAdjustment`, a team-specific adjustment that defaults to
 `0`. Production live updates use:
@@ -467,31 +560,233 @@ Authenticated endpoints:
 - `GET /api/settings/rating-engine` returns the current user's settings and
   whether defaults are being used.
 - `PUT /api/settings/rating-engine` creates or replaces the current user's
-  settings. The request must include all fields.
-- `POST /api/settings/rating-engine/reset` deletes the current user's persisted
-  settings so the centralized defaults are used.
+  settings. Current clients include all fields; legacy payloads without
+  `probabilityScale` or `maximumGoaliePenalty` preserve an already-saved value
+  or receive the calibrated default.
+- `POST /api/settings/rating-engine/reset` accepts an optional `scope` of
+  `engine`, `model-adjustments`, or `all`. This keeps each Settings reset button
+  within its visual section.
 
 Default values:
 
 ```json
 {
-  "kFactor": 1.2,
-  "homeAdvantage": 4,
+  "kFactor": 1.3,
+  "homeAdvantage": 3.5,
+  "maximumGoaliePenalty": -4,
+  "probabilityScale": 20,
   "regulationMultiplier": 1,
-  "overtimeMultiplier": 0.7,
-  "shootoutMultiplier": 0.5
+  "overtimeMultiplier": 0.4,
+  "shootoutMultiplier": 0.1
 }
 ```
+
+These values come from the centralized production Base Model v1 configuration.
+They are the calibrated Phase 1 baseline from Rating Lab replay across the
+2023â€“24, 2024â€“25, and 2025â€“26 regular seasons (approximately 3,936 games).
+They are reference defaults, not a claim of statistical optimality or
+guaranteed predictive performance.
+Its calibrated starting-rating reference is `42` to `50`, centered at `46`,
+with total spread `8`. Existing live ratings, processed games, and rating
+history are never rewritten when the defaults change. The current Power Rating
+collection initializer intentionally inserts missing live teams at the neutral
+legacy value `50` because production has no safe season-specific team ordering
+source; it does not fabricate a `42` to `50` ordering or initialize a season.
+The calibrated range is used where an explicit fixed-spread starting procedure
+exists, including Rating Lab.
 
 Validation ranges:
 
 - `kFactor`: greater than `0` and no more than `10`
 - `homeAdvantage`: `0` to `15`
+- `maximumGoaliePenalty`: `-5` to `0`; goalie adjustments must be at least the
+  configured value and no more than `0.00`
+- `probabilityScale`: `1` to `50`; values must be finite. These conservative
+  production bounds prevent zero, negative, NaN, Infinity, and extreme scales
+  from breaking probability calculations.
 - `regulationMultiplier`: `0` to `2`
 - `overtimeMultiplier`: `0` to `2`
 - `shootoutMultiplier`: `0` to `2`
 
 Team-level `homeAdjustment` values are validated between `-5` and `5`.
+
+Existing settings documents are normalized per field: explicitly saved valid
+values are preserved, while only absent or unusable fields receive calibrated
+defaults. This is read/update compatibility, not a bulk migration, and it does
+not trigger replay or touch processed rating records.
+
+## Rating Lab Base Model Calibration (Phase 1)
+
+Rating Lab has an authenticated, production-isolated calibration workflow:
+
+- `GET /api/power-rating-simulations/calibration/options` returns historical
+  regular-season boundaries, the calibrated Base Model v1 references, the
+  production probability formula, and each season's persistent dataset
+  readiness.
+- `POST /api/power-rating-simulations/calibration/historical-seasons/:seasonId/prepare`
+  prepares or resumes one completed regular season. `{ "refresh": true }` is
+  the explicit maintenance path for an already-ready old season.
+- `POST /api/power-rating-simulations/calibration/run` runs one experimental
+  configuration against one or more completed historical seasons. A custom date
+  range is accepted only for a single selected season.
+
+The run endpoint rejects client-provided identity fields and always reads Power
+Ratings and settings with the authenticated `userId`. It requires a complete,
+finite set of current Power Ratings when the selected start source requires it.
+Current starting values use production `baseRating` and are rejected for
+cross-season calibration because they can leak present-day strength into older
+seasons. For the latest historical season, centered fixed-spread starts can use
+current `baseRating` ordering. Older seasons use an explicit,
+franchise-normalized alphabetical fallback when no historical preseason rating
+snapshot exists; that source is returned per season and never presented as a
+historical rating estimate.
+
+Historical calibration data is shared infrastructure, not user-owned data.
+`HistoricalNhlGame` stores one completed regular-season game per globally unique
+NHL game ID, including canonical franchise identity, scores, final state, and
+explicit regulation/overtime/shootout result type. `HistoricalSeasonDataset`
+stores the inclusive season boundaries, expected and persisted counts, status,
+completed seven-day windows, skip diagnostics, attempt timestamps, and safe
+error code. Neither collection has a `userId`, and production Dashboard,
+Analyzer, market, game-context, and live Power Rating update paths do not read or
+write these collections.
+
+Calibration reads MongoDB first. A `ready` season is loaded locally with no NHL
+request and has no automatic TTL refresh. A missing or partial season is fetched
+through the central NHL schedule service in sequential seven-day windows, never
+per team or per game. Every successful window is validated, safely upserted, and
+checkpointed before the next provider call. Concurrent requests for the same
+season share one import, while different selected seasons use one conservative
+queue. A provider 429 pauses the queue immediately; prior windows remain stored
+and Resume begins at the first missing window rather than restarting the season.
+
+Readiness requires all date windows, unique valid games inside the official
+boundaries, games on both the first and last regular-season dates, and at least
+1,250 completed games for a modern season. Counts such as 1,307/approximately
+1,312 are valid when the boundaries and validation checks pass. A smaller set
+remains `partial` and is never ranked as complete. Multi-season loading reads
+dataset metadata and selected games in bulk, then sorts in memory. The replay
+loop itself performs no database or NHL calls.
+
+The complete in-memory rating state is reset before every replay, so ratings
+never carry across season boundaries. Each home-win probability is calculated
+before its game's rating update. Phase 1 uses only:
+
+```text
+1 / (1 + exp(-(homeRating + homeAdvantage - awayRating) / probabilityScale))
+```
+
+The production probability scale defaults to `20`; calibration may vary it
+explicitly without changing production Settings. The calibrated references are
+starting range `42` to `50` (center `46`, spread `8`), Home Advantage `3.5`, K
+`1.3`, regulation `1.0`, overtime `0.4`, and shootout `0.1`. Team home
+adjustments, manual
+adjustments, goalie, lineup, injury, rest, travel, and Analyzer inputs are not
+included.
+
+Responses include games found/included/skipped with reason counts, Brier score,
+clipped binary log loss, weighted expected calibration error, calibration and
+favorite-confidence buckets, accuracy context, prediction distributions,
+warnings, and a constant-center invariance diagnostic. Pooled metrics are
+calculated from the combined prediction records, not by averaging season-level
+scores. The aggregate also reports unweighted average season Brier, best and
+worst season, Brier range and population standard deviation, plus per-season
+metrics, baselines, temporary final spread, metadata source, and ordering source.
+Coverage includes every requested canonical `YYYYyyyy` season ID with status,
+inclusive boundaries, source, found/included/skipped counts, safe failure code,
+and user-facing message. Only completed seasons contribute pooled predictions.
+Final temporary team ratings remain single-season output; they are not combined
+into a cross-season simulation.
+
+Stability is descriptive: `stable` requires Brier range at most `0.010` and
+standard deviation at most `0.005`; `mixed` requires range at most `0.020` and
+standard deviation at most `0.010`; other results are `unstable`. Counts of
+seasons beating each sanity baseline are included. A run with fewer than two
+successful seasons is `not_assessed`. These thresholds are not a
+  statistical significance claim. Preparation and per-season loading are
+  sequential; failed seasons are reported safely while successful local results
+  remain available and aggregate coverage is marked incomplete. A modern full
+  season with fewer than 1,250 included completed games is reported as incomplete
+  historical data instead of being ranked as a completed calibration.
+
+Season identifiers and display labels are converted centrally; the internal and
+provider format is canonical `YYYYyyyy`. Inclusive regular-season boundaries
+come from tested explicit metadata, while the current-season context uses the
+central season service and its 12-hour cache. Metadata discovery does not fetch
+club schedules. Fallback responses use the exact warning `Season dates loaded
+from tested fallback metadata.` Only completed historical seasons are exposed to
+Rating Lab.
+
+Every run also returns two dataset-only sanity baselines. The `constant50`
+baseline predicts `0.50` for every included game. The
+`historicalHomeRate` baseline first calculates the included dataset's home-win
+rate and then uses that constant probability for every game. Both report Brier
+score and log loss without updating ratings. Run results identify whether their
+Brier score is better than, equal to, or worse than each baseline. Runs worse
+than the home-rate baseline, or with ECE above ten percentage points, receive
+diagnostic warnings without recommending a production change.
+
+ECE is calculated as `sum((bucketGames / includedGames) * absoluteGap)`, where
+`absoluteGap` is the difference between the bucket's average predicted home-win
+probability and actual home-win rate. Brier, log loss, and ECE are
+lower-is-better; winner accuracy is context only.
+
+Adding a constant to every team rating should not affect probabilities because
+the formula uses rating differences. Spread controls the initial differences,
+probability scale controls how sharply those differences translate to
+probability, home advantage shifts the home side, and K controls subsequent
+rating sensitivity. A `37–55` scale is therefore not inherently right or wrong:
+its suitability depends on those parameters together and on historical
+calibration.
+
+Calibration imports no write workflow and creates no Power Rating, history,
+settings, or processed-game records. Results are not persisted and never apply
+to production automatically. Game-specific adjustment calibration and automatic
+parameter optimization are intentionally deferred beyond Phase 1.
+
+## Rating Lab Team Home Advantage Calibration (Phase 2)
+
+Phase 2 is exposed through authenticated endpoints under
+`/api/power-rating-simulations/home-advantage`. It reads the shared
+`HistoricalNhlGame` and `HistoricalSeasonDataset` collections and never reads
+or writes production Team Home Adjustments, rating-engine settings, processed
+rating history, or live Power Ratings.
+
+The current planning ranking pools all completed regular-season games from
+2023–24, 2024–25, and 2025–26 before calculating each franchise's home and away
+Points % and Win %. Home Points Advantage (`Home P% - Away P%`) is the primary
+ranking measure and uses its full unrounded value; Home Win Advantage
+(`Home W% - Away W%`) is diagnostic only. The `home-points-local-gap-v1`
+classifier starts from rounded one-third and two-third target ranks and searches
+within ±3 ranks for the largest meaningful adjacent Home Points Advantage gap.
+Adjacent values separated by at most `0.001` in proportion terms (0.1 percentage
+points) are an effective-tie cluster and are never split. When no local gap is
+clearly preferable, the closest valid cut is selected deterministically. The
+minimum size of each tier is `min(6, floor(teamCount / 3))`, so a 32-team league
+uses six as its safeguard but tier sizes otherwise vary with the data.
+
+Arizona Coyotes (`ARI`), Utah Hockey Club, and Utah Mammoth records resolve to
+the current `UTA` franchise through `nhlTeamIdentity`. This is the established
+franchise-continuity mapping; no unrelated franchises are combined.
+
+Historical evaluation is leakage-safe. The 2023–24 target freezes tiers from
+2020–21 through 2022–23, 2024–25 uses 2021–22 through 2023–24, and 2025–26 uses
+2022–23 through 2024–25. Consequently the complete backtest requires prepared
+datasets for 2020–21 through 2025–26. The shortened 2020–21 season uses its 868-game
+expected size and a matching plausibility floor. Missing seasons are prepared
+through the existing historical dataset importer.
+
+Every target-season snapshot runs that same gap-aware classifier independently,
+stores its boundary diagnostics and variable tier sizes, and freezes its team
+assignments before replay. Current-window boundaries are never reused for a
+historical target, and target-season results cannot affect their own snapshot.
+Backtest comparisons include the tier sizes used by each target season.
+
+The control is Base Model v1: starting range 42–50 centered on 46, probability
+scale 20, Base Home Advantage 3.5, K 1.3, and result multipliers 1.0 / 0.4 /
+0.1. Symmetric tier magnitudes 0, 0.25, 0.50, 0.75, and 1.00 are compared, with
+an optional custom magnitude. Strong receives `3.5 + X`, Normal remains `3.5`,
+and Weak receives `3.5 - X`; only the home team's tier affects a game.
 
 ## Home Adjustment Migration
 
@@ -528,3 +823,123 @@ npm run cleanup:pre-auth-data -- --confirm
 ```
 
 Do not run the cleanup until the affected collection counts have been reviewed.
+
+## Rating Lab Phase 3: Schedule & Context
+
+`GET /api/power-rating-simulations/schedule-context/options` reports prepared
+season readiness, production schedule-rule definitions, and the authenticated
+user's persisted Quick Rematch values (or the canonical defaults when no record
+exists). `POST /api/power-rating-simulations/schedule-context/run` loads each
+selected prepared `HistoricalNhlGame` season once, precomputes all schedule
+facts, and replays candidates chronologically in memory. The replay never calls
+an NHL provider, writes ratings or simulation output, or changes Settings.
+
+Phase 3 uses `nhlSeasonIdentity.normalizeSeasonId`, the shared
+`historicalNhlDataService.loadPreparedSeasons` reader, and Base Model
+Calibration's `prepareDataset` eligibility filter. The stored-game reader shape
+uses canonical `season`, nested home/away teams and scores, and
+`gameOutcome.lastPeriodType`; Phase 3 does not require duplicate top-level
+`seasonId` or `resultType` fields. Its minimum historical inputs are the season,
+game ID, replay date/start time, regular-season game type, final/off state,
+resolvable home and away team identities, final scores, and supported
+regulation/OT/SO result metadata. Rest days, back-to-back, 3-in-4, travel, and
+Quick Rematch fields are not stored prerequisites; they are derived from the
+chronological games in memory.
+
+Every successful run reports per-season historical eligibility counters under
+`diagnostics.historicalEligibility`: loaded, season-matched, regular-season,
+completed, valid-team, valid-result, skipped, and eligible counts plus safe skip
+reason totals. A zero-eligible response returns the same counters in structured
+error details. Zero schedule-context or Quick Rematch occurrences remain a
+valid replay result as long as historical games themselves are eligible.
+
+The control is calibrated Base Model v1 with Team Home Advantage and all
+schedule adjustments disabled. Phase 3A treats 3 Games in 4 Days,
+Back-to-Back, and Back-to-Back + Travel as its primary Rest & Fatigue rules.
+They are swept independently against zero and remain mutually exclusive under
+the production priority Back-to-Back + Travel > Back-to-Back > 3 Games in 4
+Days > Well Rested. Well Rested remains available under Optional Experiments,
+but is excluded from combined replay unless the request explicitly opts in.
+Combined replay carries that enabled state separately from the numeric value:
+when disabled, Well Rested is fixed at zero and removed from applied precedence.
+Diagnostics report matched and applied counts separately, so historical Well
+Rested detections remain visible without being labeled as adjustments.
+
+Phase 3B uses `gameContextRules.buildQuickRematchContext`, the same detector as
+production. For each target game it considers only the most recent earlier
+head-to-head, measures the selected Max Days as elapsed 24-hour periods, and
+applies the adjustment once to the previous loser's rating. Regulation,
+overtime, and shootout losses are treated equally. The target result and future
+games cannot affect eligibility. The standard grid is five windows (3, 5, 7,
+10, and 14 days) by four adjustments (0, +0.10, +0.25, and +0.50). Zero is
+reported as one disabled baseline rather than five redundant rows; optional
+custom windows from 1 through 30 days and adjustments from 0 through +1.00 are
+supported.
+
+The final Combined Schedule & Context replay uses only the manually submitted
+Rest & Fatigue and Quick Rematch values. Rest & Fatigue remains exclusive and
+Quick Rematch is additive. Independently ranked sweep winners are never copied
+into the final candidate automatically. Results include occurrence counts and
+rates, games affected, pooled Brier/log loss/ECE/accuracy, baseline deltas,
+per-season diagnostics, stability, and combined context counts. Small samples,
+negligible changes, and inconsistent seasons are diagnostic only; there is no
+production Apply workflow.
+
+Base Home Advantage remains stored once in `RatingEngineSettings`, but its
+user-facing save owner is Model Adjustments. The scoped Model Adjustments save
+updates Home Advantage plus the informational Special Teams alert toggle and
+rank threshold; the scoped Power Rating Engine save updates only K, result
+multipliers, and probability scale.
+
+## Rating Lab Phase 4: Special Teams Matchup Calibration
+
+Phase 4 is exposed through authenticated, production-isolated endpoints:
+
+- `GET /api/power-rating-simulations/special-teams/options`
+- `POST /api/power-rating-simulations/special-teams/historical-seasons/:seasonId/prepare`
+- `POST /api/power-rating-simulations/special-teams/reference-seasons/:seasonId/prepare`
+- `POST /api/power-rating-simulations/special-teams/run`
+
+Target game seasons remain in the shared `HistoricalNhlGame` and
+`HistoricalSeasonDataset` collections. The minimum additional dataset is one
+shared `HistoricalSpecialTeamsSeason` document per completed reference season.
+It stores team-season PP goals, PP opportunities, PP%, times shorthanded,
+power-play goals allowed, and PK%. Preparation makes one bounded season-level
+power-play and penalty-kill report load, persists the normalized result, and is
+safe to retry. Prepared replay reads those documents once and performs no NHL
+provider calls or per-game database queries.
+
+The default target seasons are 2023-24, 2024-25, and 2025-26. Their required
+frozen references are respectively 2020-21 through 2022-23, 2021-22 through
+2023-24, and 2022-23 through 2024-25. A target season is never included in its
+own reference. All three predecessor datasets must be ready; partial windows
+are reported and excluded from pooled comparison rather than falling back to
+end-of-target-season data. Arizona and Utah rows resolve through the canonical
+UTA franchise identity.
+
+PP rank sorts higher PP% first and PK rank sorts higher PK% first. Exact ties
+receive the same deterministic competition rank. Three-season ranks average
+the three completed regular-season percentages, matching the production alert
+concept. Matchup classification calls `shared/specialTeamsMatchups.js`, the
+same detector imported by Dashboard and Game Analyzer, so positive, negative,
+neutral, unavailable, dynamic league boundaries, and `rankGap` are identical.
+
+One standard run evaluates Top/Bottom N values 4, 6, 8, and 10 against symmetric
+rating magnitudes 0, 0.25, 0.50, 0.75, and 1.00 (20 combinations). One optional
+custom integer N from 2 through 12 can be added. Each team is evaluated
+independently: positive is +X and negative is -X, so both teams may receive
+opposite adjustments in one game. Phase 4 does not independently optimize PP
+and PK, use continuous rank-gap weighting, or combine contextual layers.
+
+The control is canonical Base Model v1: ratings 42-50 centered at 46,
+probability scale 20, Base Home Advantage 3.5, K 1.3, and result multipliers
+1.0/0.4/0.1. Results report pooled Brier as the primary metric, log loss, ECE,
+accuracy, average and worst-season Brier, stability, baseline deltas,
+per-season scoring, positive/negative occurrences, games affected, both-team
+signals, signal-side expected versus actual win rates, and rank-gap diagnostics.
+Frozen rankings and their source identities are returned for audit.
+
+Phase 4 is experimental. It never reads or writes production Special Teams
+Settings, writes Power Ratings or history, changes Dashboard or Analyzer
+probabilities, or applies a result to fair odds. Production remains
+informational alert-only until a result is manually reviewed in a future task.

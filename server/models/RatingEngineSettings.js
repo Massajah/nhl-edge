@@ -1,4 +1,10 @@
 const mongoose = require('mongoose')
+const {
+  DEFAULT_PRODUCTION_RATING_ENGINE_SETTINGS,
+  MAXIMUM_GOALIE_PENALTY_LIMITS,
+  MAXIMUM_PLAYER_INJURY_PENALTY_LIMITS,
+  PRODUCTION_PROBABILITY_SCALE_LIMITS,
+} = require('../config/baseModel')
 
 const ratingEngineSettingsSchema = new mongoose.Schema(
   {
@@ -10,32 +16,82 @@ const ratingEngineSettingsSchema = new mongoose.Schema(
     kFactor: {
       type: Number,
       required: true,
+      default: DEFAULT_PRODUCTION_RATING_ENGINE_SETTINGS.kFactor,
       min: 0,
       max: 10,
     },
     homeAdvantage: {
       type: Number,
       required: true,
+      default: DEFAULT_PRODUCTION_RATING_ENGINE_SETTINGS.homeAdvantage,
       min: 0,
       max: 15,
     },
     regulationMultiplier: {
       type: Number,
       required: true,
+      default: DEFAULT_PRODUCTION_RATING_ENGINE_SETTINGS.regulationMultiplier,
       min: 0,
       max: 2,
     },
     overtimeMultiplier: {
       type: Number,
       required: true,
+      default: DEFAULT_PRODUCTION_RATING_ENGINE_SETTINGS.overtimeMultiplier,
       min: 0,
       max: 2,
     },
     shootoutMultiplier: {
       type: Number,
       required: true,
+      default: DEFAULT_PRODUCTION_RATING_ENGINE_SETTINGS.shootoutMultiplier,
       min: 0,
       max: 2,
+    },
+    probabilityScale: {
+      type: Number,
+      required: true,
+      default: DEFAULT_PRODUCTION_RATING_ENGINE_SETTINGS.probabilityScale,
+      min: PRODUCTION_PROBABILITY_SCALE_LIMITS.min,
+      max: PRODUCTION_PROBABILITY_SCALE_LIMITS.max,
+    },
+    maximumGoaliePenalty: {
+      type: Number,
+      required: true,
+      default:
+        DEFAULT_PRODUCTION_RATING_ENGINE_SETTINGS.maximumGoaliePenalty,
+      min: MAXIMUM_GOALIE_PENALTY_LIMITS.min,
+      max: MAXIMUM_GOALIE_PENALTY_LIMITS.max,
+    },
+    maximumPlayerInjuryPenalty: {
+      type: Number,
+      required: true,
+      default:
+        DEFAULT_PRODUCTION_RATING_ENGINE_SETTINGS.maximumPlayerInjuryPenalty,
+      min: MAXIMUM_PLAYER_INJURY_PENALTY_LIMITS.min,
+      max: MAXIMUM_PLAYER_INJURY_PENALTY_LIMITS.max,
+      validate: {
+        validator: (value) => Number.isInteger(value * 2),
+        message: 'maximumPlayerInjuryPenalty must use 0.50-point increments.',
+      },
+    },
+    specialTeamsAlertsEnabled: {
+      type: Boolean,
+      required: true,
+      default:
+        DEFAULT_PRODUCTION_RATING_ENGINE_SETTINGS.specialTeamsAlertsEnabled,
+    },
+    specialTeamsRankThreshold: {
+      type: Number,
+      required: true,
+      default:
+        DEFAULT_PRODUCTION_RATING_ENGINE_SETTINGS.specialTeamsRankThreshold,
+      min: 3,
+      max: 12,
+      validate: {
+        validator: Number.isInteger,
+        message: 'specialTeamsRankThreshold must be an integer.',
+      },
     },
   },
   {

@@ -11,6 +11,7 @@ import {
   WalletCards,
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext.jsx'
+import { NHL_TEAMS } from '../data/teams.js'
 import { getBankrollSummary } from '../services/bankrollApi.js'
 import {
   fetchBookmakerPreferences,
@@ -26,7 +27,8 @@ import {
 import {
   getRatingEngineSettings,
   resetRatingEngineSettings,
-  updateRatingEngineSettings,
+  updateRatingEngineModelAdjustments,
+  updateRatingEngineParameters,
 } from '../services/ratingEngineSettingsApi.js'
 import {
   getQuickRematchSettings,
@@ -35,8 +37,10 @@ import {
 } from '../services/quickRematchSettingsApi.js'
 import {
   DEFAULT_RATING_ENGINE_SETTINGS,
+  RATING_ENGINE_PARAMETER_KEYS,
   RATING_ENGINE_SETTING_FIELDS,
   createRatingEngineSettingsDraft,
+  getRatingEngineDirtyOwnership,
   normalizeRatingEngineSettings,
   parseRatingEngineSettingsDraft,
 } from '../utils/ratingEngineSettings.js'
@@ -66,6 +70,7 @@ import {
   BANKROLL_DEFAULT_CURRENCY,
   formatBankrollCurrency,
 } from '../utils/bankroll.js'
+import { BASE_MODEL_V1 } from '../config/baseModel.js'
 
 const providerLabels = {
   both: 'Email and Google',
@@ -76,21 +81,33 @@ const providerLabels = {
 const getProviderLabel = (provider) =>
   providerLabels[provider] ?? 'Email/password'
 
-const RATING_ENGINE_MODEL_FIELD_KEYS = Object.freeze([
-  'homeAdvantage',
-  'kFactor',
-  'regulationMultiplier',
-  'overtimeMultiplier',
-  'shootoutMultiplier',
-])
-
 const RATING_ENGINE_UPDATE_FIELDS = Object.freeze(
-  RATING_ENGINE_SETTING_FIELDS.filter((field) => field.key !== 'homeAdvantage'),
+  RATING_ENGINE_SETTING_FIELDS.filter(
+    (field) =>
+      field.key !== 'homeAdvantage' &&
+      field.key !== 'maximumGoaliePenalty' &&
+      field.key !== 'maximumPlayerInjuryPenalty' &&
+      field.key !== 'probabilityScale',
+  ),
 )
 
 const HOME_ADVANTAGE_FIELD = RATING_ENGINE_SETTING_FIELDS.find(
   (field) => field.key === 'homeAdvantage',
 )
+
+const PROBABILITY_SCALE_FIELD = RATING_ENGINE_SETTING_FIELDS.find(
+  (field) => field.key === 'probabilityScale',
+)
+
+const MAXIMUM_GOALIE_PENALTY_FIELD = RATING_ENGINE_SETTING_FIELDS.find(
+  (field) => field.key === 'maximumGoaliePenalty',
+)
+
+const MAXIMUM_PLAYER_INJURY_PENALTY_FIELD = RATING_ENGINE_SETTING_FIELDS.find(
+  (field) => field.key === 'maximumPlayerInjuryPenalty',
+)
+
+const SPECIAL_TEAMS_LEAGUE_TEAM_COUNT = NHL_TEAMS.length
 
 const REST_FATIGUE_RULES = Object.freeze([
   {
@@ -471,15 +488,13 @@ function Settings({
     () => parseQuickRematchSettingsDraft(draftQuickRematchSettings),
     [draftQuickRematchSettings],
   )
-  const hasUnsavedChanges = useMemo(() => {
-    if (!parsedDraft.isValid) {
-      return true
-    }
-
-    return RATING_ENGINE_MODEL_FIELD_KEYS.some(
-      (field) => parsedDraft.settings[field] !== savedSettings[field],
-    )
-  }, [parsedDraft, savedSettings])
+  const ratingEngineDirtyOwnership = useMemo(
+    () => getRatingEngineDirtyOwnership(draftSettings, savedSettings),
+    [draftSettings, savedSettings],
+  )
+  const hasUnsavedChanges = ratingEngineDirtyOwnership.ratingEngine
+  const hasUnsavedRatingModelAdjustments =
+    ratingEngineDirtyOwnership.modelAdjustments
   const hasUnsavedBettingChanges = useMemo(() => {
     if (!parsedBettingDraft.isValid) {
       return true
@@ -503,6 +518,20 @@ function Settings({
     },
     [parsedQuickRematchDraft, savedQuickRematchSettings],
   )
+  const hasUnsavedModelAdjustmentChanges =
+    hasUnsavedRatingModelAdjustments || hasUnsavedQuickRematchChanges
+  const modelAdjustmentsUseDefaults =
+    quickRematchUsingDefaults &&
+    savedSettings.homeAdvantage ===
+      DEFAULT_RATING_ENGINE_SETTINGS.homeAdvantage &&
+    savedSettings.maximumGoaliePenalty ===
+      DEFAULT_RATING_ENGINE_SETTINGS.maximumGoaliePenalty &&
+    savedSettings.maximumPlayerInjuryPenalty ===
+      DEFAULT_RATING_ENGINE_SETTINGS.maximumPlayerInjuryPenalty &&
+    savedSettings.specialTeamsAlertsEnabled ===
+      DEFAULT_RATING_ENGINE_SETTINGS.specialTeamsAlertsEnabled &&
+    savedSettings.specialTeamsRankThreshold ===
+      DEFAULT_RATING_ENGINE_SETTINGS.specialTeamsRankThreshold
   const isPending =
     settingsStatus === 'loading' ||
     saveStatus === 'saving' ||
@@ -546,8 +575,21 @@ function Settings({
       ...currentErrors,
       [field]: '',
     }))
-    setSaveStatus('idle')
-    setSettingsMessage('')
+    if (
+      [
+        'homeAdvantage',
+        'maximumGoaliePenalty',
+        'maximumPlayerInjuryPenalty',
+        'specialTeamsAlertsEnabled',
+        'specialTeamsRankThreshold',
+      ].includes(field)
+    ) {
+      setQuickRematchSaveStatus('idle')
+      setQuickRematchMessage('')
+    } else {
+      setSaveStatus('idle')
+      setSettingsMessage('')
+    }
     setSettingsError('')
   }
 
@@ -592,8 +634,14 @@ function Settings({
       return
     }
 
-    if (!parsedDraft.isValid) {
-      setFieldErrors(parsedDraft.fieldErrors)
+    const engineFieldErrors = Object.fromEntries(
+      RATING_ENGINE_PARAMETER_KEYS.filter(
+        (field) => parsedDraft.fieldErrors[field],
+      ).map((field) => [field, parsedDraft.fieldErrors[field]]),
+    )
+
+    if (Object.keys(engineFieldErrors).length > 0) {
+      setFieldErrors(engineFieldErrors)
       setSaveStatus('error')
       setSettingsMessage('Fix invalid engine settings before saving.')
       return
@@ -609,11 +657,33 @@ function Settings({
     setFieldErrors({})
 
     try {
-      const result = await updateRatingEngineSettings(parsedDraft.settings)
+      const payload = Object.fromEntries(
+        RATING_ENGINE_PARAMETER_KEYS.map((field) => [
+          field,
+          parsedDraft.settings[field],
+        ]),
+      )
+      const result = await updateRatingEngineParameters(payload)
       const nextSettings = normalizeRatingEngineSettings(result.settings)
 
-      setSavedSettings(nextSettings)
-      setDraftSettings(createRatingEngineSettingsDraft(nextSettings))
+      setSavedSettings((current) => ({
+        ...current,
+        ...Object.fromEntries(
+          RATING_ENGINE_PARAMETER_KEYS.map((field) => [
+            field,
+            nextSettings[field],
+          ]),
+        ),
+      }))
+      setDraftSettings((current) => ({
+        ...current,
+        ...Object.fromEntries(
+          RATING_ENGINE_PARAMETER_KEYS.map((field) => [
+            field,
+            createRatingEngineSettingsDraft(nextSettings)[field],
+          ]),
+        ),
+      }))
       setUsingDefaults(false)
       onRatingEngineSettingsChanged?.(nextSettings)
       setSaveStatus('success')
@@ -629,7 +699,7 @@ function Settings({
     const confirmed =
       typeof window === 'undefined' ||
       window.confirm(
-        'Reset Power Rating Engine settings to defaults? Future live updates will use the default model settings.',
+        'Reset K Factor, result multipliers, and Probability Scale to calibrated defaults? Future live updates will use those defaults.',
       )
 
     if (!confirmed || isPending) {
@@ -643,11 +713,25 @@ function Settings({
     setFieldErrors({})
 
     try {
-      const result = await resetRatingEngineSettings()
+      const result = await resetRatingEngineSettings('engine')
       const nextSettings = normalizeRatingEngineSettings(result.settings)
 
-      setSavedSettings(nextSettings)
-      setDraftSettings(createRatingEngineSettingsDraft(nextSettings))
+      const nextDraft = createRatingEngineSettingsDraft(nextSettings)
+      setSavedSettings((current) => ({
+        ...current,
+        ...Object.fromEntries(
+          RATING_ENGINE_PARAMETER_KEYS.map((field) => [
+            field,
+            nextSettings[field],
+          ]),
+        ),
+      }))
+      setDraftSettings((current) => ({
+        ...current,
+        ...Object.fromEntries(
+          RATING_ENGINE_PARAMETER_KEYS.map((field) => [field, nextDraft[field]]),
+        ),
+      }))
       setUsingDefaults(Boolean(result.usingDefaults))
       onRatingEngineSettingsChanged?.(nextSettings)
       setResetStatus('success')
@@ -740,14 +824,38 @@ function Settings({
       return
     }
 
-    if (!parsedQuickRematchDraft.isValid) {
-      setQuickRematchFieldErrors(parsedQuickRematchDraft.fieldErrors)
+    const ratingModelAdjustmentErrors = Object.fromEntries(
+      [
+        'homeAdvantage',
+        'maximumGoaliePenalty',
+        'maximumPlayerInjuryPenalty',
+        'specialTeamsAlertsEnabled',
+        'specialTeamsRankThreshold',
+      ]
+        .filter((field) => parsedDraft.fieldErrors[field])
+        .map((field) => [field, parsedDraft.fieldErrors[field]]),
+    )
+
+    if (
+      !parsedQuickRematchDraft.isValid ||
+      Object.keys(ratingModelAdjustmentErrors).length > 0
+    ) {
+      setQuickRematchFieldErrors({
+        ...parsedQuickRematchDraft.fieldErrors,
+        ...ratingModelAdjustmentErrors,
+      })
+      if (Object.keys(ratingModelAdjustmentErrors).length > 0) {
+        setFieldErrors((current) => ({
+          ...current,
+          ...ratingModelAdjustmentErrors,
+        }))
+      }
       setQuickRematchSaveStatus('error')
       setQuickRematchMessage('Fix invalid model adjustments before saving.')
       return
     }
 
-    if (!hasUnsavedQuickRematchChanges) {
+    if (!hasUnsavedModelAdjustmentChanges) {
       return
     }
 
@@ -757,16 +865,68 @@ function Settings({
     setQuickRematchFieldErrors({})
 
     try {
-      const result = await updateQuickRematchSettings(
-        parsedQuickRematchDraft.settings,
-      )
-      const nextSettings = normalizeQuickRematchSettings(result.settings)
+      const [quickRematchResult, modelAdjustmentsResult] = await Promise.all([
+        hasUnsavedQuickRematchChanges
+          ? updateQuickRematchSettings(parsedQuickRematchDraft.settings)
+          : null,
+        hasUnsavedRatingModelAdjustments
+          ? updateRatingEngineModelAdjustments({
+              homeAdvantage: parsedDraft.settings.homeAdvantage,
+              maximumGoaliePenalty:
+                parsedDraft.settings.maximumGoaliePenalty,
+              maximumPlayerInjuryPenalty:
+                parsedDraft.settings.maximumPlayerInjuryPenalty,
+              specialTeamsAlertsEnabled:
+                parsedDraft.settings.specialTeamsAlertsEnabled,
+              specialTeamsRankThreshold:
+                parsedDraft.settings.specialTeamsRankThreshold,
+            })
+          : null,
+      ])
 
-      setSavedQuickRematchSettings(nextSettings)
-      setDraftQuickRematchSettings(
-        createQuickRematchSettingsDraft(nextSettings),
-      )
-      setQuickRematchUsingDefaults(false)
+      if (quickRematchResult) {
+        const nextSettings = normalizeQuickRematchSettings(
+          quickRematchResult.settings,
+        )
+        setSavedQuickRematchSettings(nextSettings)
+        setDraftQuickRematchSettings(
+          createQuickRematchSettingsDraft(nextSettings),
+        )
+        setQuickRematchUsingDefaults(false)
+      }
+
+      if (modelAdjustmentsResult) {
+        const nextRatingEngineSettings = normalizeRatingEngineSettings(
+          modelAdjustmentsResult.settings,
+        )
+        setSavedSettings((current) => ({
+          ...current,
+          homeAdvantage: nextRatingEngineSettings.homeAdvantage,
+          maximumGoaliePenalty:
+            nextRatingEngineSettings.maximumGoaliePenalty,
+          maximumPlayerInjuryPenalty:
+            nextRatingEngineSettings.maximumPlayerInjuryPenalty,
+          specialTeamsAlertsEnabled:
+            nextRatingEngineSettings.specialTeamsAlertsEnabled,
+          specialTeamsRankThreshold:
+            nextRatingEngineSettings.specialTeamsRankThreshold,
+        }))
+        const nextDraft = createRatingEngineSettingsDraft(
+          nextRatingEngineSettings,
+        )
+        setDraftSettings((current) => ({
+          ...current,
+          homeAdvantage: nextDraft.homeAdvantage,
+          maximumGoaliePenalty: nextDraft.maximumGoaliePenalty,
+          maximumPlayerInjuryPenalty:
+            nextDraft.maximumPlayerInjuryPenalty,
+          specialTeamsAlertsEnabled:
+            nextDraft.specialTeamsAlertsEnabled,
+          specialTeamsRankThreshold:
+            nextDraft.specialTeamsRankThreshold,
+        }))
+        onRatingEngineSettingsChanged?.(nextRatingEngineSettings)
+      }
       setQuickRematchSaveStatus('success')
       setQuickRematchMessage('Model adjustments saved.')
     } catch (error) {
@@ -781,7 +941,7 @@ function Settings({
       typeof window === 'undefined' ||
       window.confirm('Reset Model Adjustments to defaults?')
 
-    if (!confirmed || isQuickRematchPending) {
+    if (!confirmed || isQuickRematchPending || isPending) {
       return
     }
 
@@ -792,14 +952,48 @@ function Settings({
     setQuickRematchFieldErrors({})
 
     try {
-      const result = await resetQuickRematchSettings()
+      const [result, ratingEngineResult] = await Promise.all([
+        resetQuickRematchSettings(),
+        resetRatingEngineSettings('model-adjustments'),
+      ])
       const nextSettings = normalizeQuickRematchSettings(result.settings)
+      const nextRatingEngineSettings = normalizeRatingEngineSettings(
+        ratingEngineResult.settings,
+      )
 
       setSavedQuickRematchSettings(nextSettings)
       setDraftQuickRematchSettings(
         createQuickRematchSettingsDraft(nextSettings),
       )
       setQuickRematchUsingDefaults(Boolean(result.usingDefaults))
+      setSavedSettings((current) => ({
+        ...current,
+        homeAdvantage: nextRatingEngineSettings.homeAdvantage,
+        maximumGoaliePenalty:
+          nextRatingEngineSettings.maximumGoaliePenalty,
+        maximumPlayerInjuryPenalty:
+          nextRatingEngineSettings.maximumPlayerInjuryPenalty,
+        specialTeamsAlertsEnabled:
+          nextRatingEngineSettings.specialTeamsAlertsEnabled,
+        specialTeamsRankThreshold:
+          nextRatingEngineSettings.specialTeamsRankThreshold,
+      }))
+      const nextRatingDraft = createRatingEngineSettingsDraft(
+        nextRatingEngineSettings,
+      )
+      setDraftSettings((current) => ({
+        ...current,
+        homeAdvantage: nextRatingDraft.homeAdvantage,
+        maximumGoaliePenalty: nextRatingDraft.maximumGoaliePenalty,
+        maximumPlayerInjuryPenalty:
+          nextRatingDraft.maximumPlayerInjuryPenalty,
+        specialTeamsAlertsEnabled:
+          nextRatingDraft.specialTeamsAlertsEnabled,
+        specialTeamsRankThreshold:
+          nextRatingDraft.specialTeamsRankThreshold,
+      }))
+      setUsingDefaults(Boolean(ratingEngineResult.usingDefaults))
+      onRatingEngineSettingsChanged?.(nextRatingEngineSettings)
       setQuickRematchResetStatus('success')
       setQuickRematchSaveStatus('success')
       setQuickRematchMessage('Model adjustments reset to defaults.')
@@ -811,6 +1005,7 @@ function Settings({
   }
 
   const ratingEngineFormId = 'settings-rating-engine-form'
+  const modelAdjustmentsFormId = 'settings-model-adjustments-form'
   const engineDisplayErrors = {
     ...parsedDraft.fieldErrors,
     ...fieldErrors,
@@ -818,9 +1013,32 @@ function Settings({
   const modelAdjustmentDisplayErrors = {
     ...parsedQuickRematchDraft.fieldErrors,
     ...quickRematchFieldErrors,
+    homeAdvantage:
+      fieldErrors.homeAdvantage || parsedDraft.fieldErrors.homeAdvantage,
+    maximumGoaliePenalty:
+      fieldErrors.maximumGoaliePenalty ||
+      parsedDraft.fieldErrors.maximumGoaliePenalty,
+    maximumPlayerInjuryPenalty:
+      fieldErrors.maximumPlayerInjuryPenalty ||
+      parsedDraft.fieldErrors.maximumPlayerInjuryPenalty,
+    specialTeamsAlertsEnabled:
+      fieldErrors.specialTeamsAlertsEnabled ||
+      parsedDraft.fieldErrors.specialTeamsAlertsEnabled,
+    specialTeamsRankThreshold:
+      fieldErrors.specialTeamsRankThreshold ||
+      parsedDraft.fieldErrors.specialTeamsRankThreshold,
   }
   const showRatingEngineForm = settingsStatus !== 'error'
   const showModelAdjustmentForm = quickRematchStatus !== 'error'
+  const specialTeamsThreshold = Number(
+    draftSettings.specialTeamsRankThreshold,
+  )
+  const specialTeamsBottomRankStart =
+    Number.isInteger(specialTeamsThreshold) &&
+    specialTeamsThreshold >= 1 &&
+    specialTeamsThreshold <= SPECIAL_TEAMS_LEAGUE_TEAM_COUNT
+      ? SPECIAL_TEAMS_LEAGUE_TEAM_COUNT - specialTeamsThreshold + 1
+      : null
 
   const renderRatingEngineField = (
     field,
@@ -855,7 +1073,10 @@ function Settings({
           aria-describedby={[describedBy, helperId, errorId]
             .filter(Boolean)
             .join(' ') || undefined}
-          disabled={isPending}
+          disabled={
+            isPending ||
+            (field.key === 'homeAdvantage' && isQuickRematchPending)
+          }
           onChange={(event) =>
             handleSettingsChange(field.key, event.target.value)
           }
@@ -1504,7 +1725,9 @@ function Settings({
             <h2 id="settings-model-adjustments-heading">Model Adjustments</h2>
           </div>
           <span>
-            {quickRematchUsingDefaults ? 'Defaults active' : 'Custom settings'}
+            {modelAdjustmentsUseDefaults
+              ? 'Defaults active'
+              : 'Custom settings'}
           </span>
         </div>
 
@@ -1572,6 +1795,7 @@ function Settings({
             {HOME_ADVANTAGE_FIELD && showRatingEngineForm ? (
               renderRatingEngineField(HOME_ADVANTAGE_FIELD, {
                 className: 'field settings-compact-number-field',
+                formId: modelAdjustmentsFormId,
                 helper:
                   'Added to the home team before team-specific Home Adjustment is applied.',
               })
@@ -1586,14 +1810,15 @@ function Settings({
               Power Ratings page and is intentionally absent from Settings.
             </p>
             <p className="settings-card-save-note">
-              Save ownership: use Save Rating Engine in the Power Rating Engine
-              section.
+              Save ownership: Base Home Advantage is saved with Model
+              Adjustments.
             </p>
           </article>
 
           {showModelAdjustmentForm ? (
           <form
             className="settings-model-adjustments-form"
+            id={modelAdjustmentsFormId}
             noValidate
             onSubmit={handleSaveQuickRematchSettings}
           >
@@ -1801,6 +2026,156 @@ function Settings({
               </div>
             </article>
 
+            <article className="settings-rule-card settings-goalie-card">
+              <div className="settings-rule-card-heading">
+                <div>
+                  <h3>Goalie</h3>
+                  <p>Global safety limit for goalie downgrades.</p>
+                </div>
+                <span>Guardrail</span>
+              </div>
+
+              {MAXIMUM_GOALIE_PENALTY_FIELD && showRatingEngineForm
+                ? renderRatingEngineField(
+                    MAXIMUM_GOALIE_PENALTY_FIELD,
+                    {
+                      className: 'field settings-compact-number-field',
+                      formId: modelAdjustmentsFormId,
+                      helper:
+                        "Goalie adjustments represent the downgrade from the team's normal starting goalie. 0.00 is the team baseline. The maximum penalty limits how large a goalie downgrade can be. The team Power Rating is assumed to already reflect its normal #1 goalie.",
+                    },
+                  )
+                : null}
+
+              <p className="settings-card-note">
+                Saved team goalie defaults and game-specific unlisted goalies
+                must stay between this value and 0.00. Positive goalie
+                adjustments are not used.
+              </p>
+              <p className="settings-card-save-note">
+                Save ownership: Maximum Goalie Penalty is saved with Model
+                Adjustments.
+              </p>
+            </article>
+
+            <article className="settings-rule-card settings-injury-card">
+              <div className="settings-rule-card-heading">
+                <div>
+                  <h3>Injury</h3>
+                  <p>Individual skater injury guardrail.</p>
+                </div>
+                <span>Guardrail</span>
+              </div>
+
+              {MAXIMUM_PLAYER_INJURY_PENALTY_FIELD && showRatingEngineForm
+                ? renderRatingEngineField(
+                    MAXIMUM_PLAYER_INJURY_PENALTY_FIELD,
+                    {
+                      className: 'field settings-compact-number-field',
+                      formId: modelAdjustmentsFormId,
+                      helper:
+                        "Player injury adjustment represents the downgrade caused by the player's absence for this team, not the player's absolute value.",
+                    },
+                  )
+                : null}
+
+              <p className="settings-card-note">
+                Use 0.00 when the player is adequately replaceable. Larger
+                penalties should be reserved for difficult-to-replace impact
+                players.
+              </p>
+              <p className="settings-card-note">
+                Maximum Player Injury Penalty limits a single skater injury.
+                Multiple active injuries may sum beyond this value.
+              </p>
+              <p className="settings-card-save-note">
+                Save ownership: Maximum Player Injury Penalty is saved with
+                Model Adjustments.
+              </p>
+            </article>
+
+            <article className="settings-rule-card settings-special-teams-alerts-card">
+              <div className="settings-rule-card-heading">
+                <div>
+                  <h3>Special Teams Matchup Alerts</h3>
+                  <p>
+                    Informational 3-season PP/PK matchup signals only.
+                  </p>
+                </div>
+                <span>Informational</span>
+              </div>
+
+              <label className="toggle-field settings-master-toggle">
+                <input
+                  type="checkbox"
+                  checked={Boolean(draftSettings.specialTeamsAlertsEnabled)}
+                  disabled={isPending || isQuickRematchPending}
+                  onChange={(event) =>
+                    handleSettingsChange(
+                      'specialTeamsAlertsEnabled',
+                      event.target.checked,
+                    )
+                  }
+                />
+                <span>Enable Special Teams Matchup Alerts</span>
+              </label>
+
+              <p className="settings-card-note">
+                Highlights games where a team with a top-ranked 3-season power
+                play faces a bottom-ranked 3-season penalty kill, or the
+                inverse.
+              </p>
+
+              <label
+                className="field settings-compact-number-field"
+                htmlFor="special-teams-rank-threshold"
+              >
+                <span>Top / Bottom N</span>
+                <input
+                  id="special-teams-rank-threshold"
+                  type="number"
+                  min="3"
+                  max="12"
+                  step="1"
+                  inputMode="numeric"
+                  value={draftSettings.specialTeamsRankThreshold}
+                  aria-invalid={Boolean(
+                    modelAdjustmentDisplayErrors.specialTeamsRankThreshold,
+                  )}
+                  aria-describedby="special-teams-rank-threshold-status"
+                  disabled={
+                    isPending ||
+                    isQuickRematchPending ||
+                    !draftSettings.specialTeamsAlertsEnabled
+                  }
+                  onChange={(event) =>
+                    handleSettingsChange(
+                      'specialTeamsRankThreshold',
+                      event.target.value,
+                    )
+                  }
+                />
+                <small
+                  className={
+                    modelAdjustmentDisplayErrors.specialTeamsRankThreshold
+                      ? 'field-error'
+                      : 'field-error-placeholder'
+                  }
+                  id="special-teams-rank-threshold-status"
+                >
+                  {modelAdjustmentDisplayErrors.specialTeamsRankThreshold ||
+                    (specialTeamsBottomRankStart
+                      ? `Top/Bottom ${specialTeamsThreshold} means ranks 1–${specialTeamsThreshold} and ${specialTeamsBottomRankStart}–${SPECIAL_TEAMS_LEAGUE_TEAM_COUNT} in a ${SPECIAL_TEAMS_LEAGUE_TEAM_COUNT}-team league.`
+                      : 'Choose an integer from 3 to 12.')}
+                </small>
+              </label>
+
+              <p className="settings-card-save-note">
+                Alerts do not change Power Ratings, model probability, fair
+                odds, or Analyzer adjustments.
+              </p>
+            </article>
+
             {quickRematchMessage ? (
               <p
                 className={`form-status ${quickRematchSaveStatus}`}
@@ -1812,7 +2187,7 @@ function Settings({
 
             <div className="settings-form-actions">
               <span className="settings-dirty-state">
-                {hasUnsavedQuickRematchChanges
+                {hasUnsavedModelAdjustmentChanges
                   ? 'Unsaved model-adjustment changes'
                   : 'No model-adjustment changes'}
               </span>
@@ -1820,7 +2195,9 @@ function Settings({
                 className="save-ratings-button"
                 type="submit"
                 disabled={
-                  isQuickRematchPending || !hasUnsavedQuickRematchChanges
+                  isQuickRematchPending ||
+                  isPending ||
+                  !hasUnsavedModelAdjustmentChanges
                 }
               >
                 {quickRematchSaveStatus === 'saving' ? (
@@ -1843,7 +2220,7 @@ function Settings({
               <button
                 className="reset-button"
                 type="button"
-                disabled={isQuickRematchPending}
+                disabled={isQuickRematchPending || isPending}
                 onClick={handleResetQuickRematchSettings}
               >
                 {quickRematchResetStatus === 'saving' ? (
@@ -1873,6 +2250,15 @@ function Settings({
           <div>
             <p className="eyebrow">Live model</p>
             <h2>Power Rating Engine</h2>
+            <div className="settings-calibrated-model" aria-label="Calibrated Base Model v1 defaults">
+              <span>Calibrated Base Model v1</span>
+              <small>
+                K {BASE_MODEL_V1.kFactor.toFixed(2)} · Reg{' '}
+                {BASE_MODEL_V1.regulationMultiplier.toFixed(2)} · OT{' '}
+                {BASE_MODEL_V1.overtimeMultiplier.toFixed(2)} · SO{' '}
+                {BASE_MODEL_V1.shootoutMultiplier.toFixed(2)}
+              </small>
+            </div>
           </div>
           <span>{usingDefaults ? 'Defaults active' : 'Custom settings'}</span>
         </div>
@@ -1884,6 +2270,8 @@ function Settings({
             your Power Ratings. Changes affect future rating updates only.
             Previously processed games are not recalculated. Rating Lab remains
             a separate simulation environment.
+            {' '}Defaults were calibrated using multi-season historical Rating
+            Lab replay.
           </p>
         </div>
 
@@ -1926,7 +2314,7 @@ function Settings({
                   ).map((field) =>
                     renderRatingEngineField(field, {
                       helper:
-                        'Higher values make ratings react faster to each game.',
+                        'Controls how quickly team ratings react to completed game results.',
                     }),
                   )}
                 </div>
@@ -1937,8 +2325,8 @@ function Settings({
                   <div>
                     <h3 id="result-weighting-heading">Result Multipliers</h3>
                     <p>
-                      Result multipliers reduce or preserve rating movement
-                      based on how the game was decided.
+                      Controls how strongly each game result type updates Power
+                      Ratings relative to a regulation result.
                     </p>
                   </div>
                 </div>
@@ -1948,6 +2336,23 @@ function Settings({
                   ).map((field) => renderRatingEngineField(field))}
                 </div>
               </section>
+
+              {PROBABILITY_SCALE_FIELD ? (
+                <details className="settings-advanced-model">
+                  <summary>
+                    <span>Advanced Model Settings</span>
+                    <small>Advanced</small>
+                  </summary>
+                  <div className="settings-advanced-model-content">
+                    {PROBABILITY_SCALE_FIELD
+                      ? renderRatingEngineField(PROBABILITY_SCALE_FIELD, {
+                          helper:
+                            'Controls how Power Rating differences are converted into win probabilities. The calibrated default is 20. Changing this value can materially affect model calibration.',
+                        })
+                      : null}
+                  </div>
+                </details>
+              ) : null}
             </div>
 
             {settingsMessage ? (

@@ -653,6 +653,13 @@ function AuthenticatedApp({ authUser, onLogout }) {
       {activePage === "dashboard" ? (
         <Dashboard
           baseHomeAdvantage={ratingEngineSettings.homeAdvantage}
+          probabilityScale={ratingEngineSettings.probabilityScale}
+          specialTeamsAlertsEnabled={
+            ratingEngineSettings.specialTeamsAlertsEnabled
+          }
+          specialTeamsRankThreshold={
+            ratingEngineSettings.specialTeamsRankThreshold
+          }
           injurySummaries={injurySummaries}
           injurySummaryError={injurySummaryError}
           injurySummaryStatus={injurySummaryStatus}
@@ -673,6 +680,14 @@ function AuthenticatedApp({ authUser, onLogout }) {
         <GameAnalyzer
           key={analyzerPrefill?.id ?? "manual-analyzer"}
           baseHomeAdvantage={ratingEngineSettings.homeAdvantage}
+          maximumGoaliePenalty={ratingEngineSettings.maximumGoaliePenalty}
+          probabilityScale={ratingEngineSettings.probabilityScale}
+          specialTeamsAlertsEnabled={
+            ratingEngineSettings.specialTeamsAlertsEnabled
+          }
+          specialTeamsRankThreshold={
+            ratingEngineSettings.specialTeamsRankThreshold
+          }
           injurySummaries={injurySummaries}
           injurySummaryError={injurySummaryError}
           injurySummaryStatus={injurySummaryStatus}
@@ -691,6 +706,7 @@ function AuthenticatedApp({ authUser, onLogout }) {
         <Teams
           injurySummaries={injurySummaries}
           injurySummaryStatus={injurySummaryStatus}
+          maximumGoaliePenalty={ratingEngineSettings.maximumGoaliePenalty}
           powerRatings={powerRatings}
           powerRatingsStatus={powerRatingsStatus}
         />
@@ -716,6 +732,9 @@ function AuthenticatedApp({ authUser, onLogout }) {
       ) : activePage === "injuries" ? (
         <InjuryManager
           injurySummaries={injurySummaries}
+          maximumPlayerInjuryPenalty={
+            ratingEngineSettings.maximumPlayerInjuryPenalty
+          }
           summaryError={injurySummaryError}
           summaryStatus={injurySummaryStatus}
           onInjuriesChanged={loadInjurySummaries}

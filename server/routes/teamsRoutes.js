@@ -5,6 +5,7 @@ const authenticate = require('../middleware/authenticate')
 const router = express.Router()
 
 router.get('/', teamsController.getTeams)
+router.get('/special-teams', teamsController.getLeagueSpecialTeams)
 router.get(
   '/:teamId/model-values',
   authenticate,

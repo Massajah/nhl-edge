@@ -3,6 +3,7 @@ const PowerRating = require('../models/PowerRating')
 const ProcessedRatingGame = require('../models/ProcessedRatingGame')
 const nhlApiService = require('./nhlApiService')
 const {
+  PROBABILITY_SCALE,
   calculatePregameProbability,
   calculateRatingUpdate,
   classifyCompletedGameResult,
@@ -457,6 +458,7 @@ const buildEngineSettingsSnapshot = (settings) => ({
   modelVersion: settings.modelVersion,
   kFactor: settings.kFactor,
   homeAdvantage: settings.homeAdvantage,
+  probabilityScale: settings.probabilityScale ?? PROBABILITY_SCALE,
   regulationMultiplier: settings.regulationMultiplier,
   overtimeMultiplier: settings.overtimeMultiplier,
   shootoutMultiplier: settings.shootoutMultiplier,
@@ -841,6 +843,7 @@ const processEligibleGameWithoutTransaction = async ({
     automaticAdjustments: {},
     homeAdvantage: homeAdvantageAudit.effectiveHomeAdvantage,
     homeRating: homeRatingValue.value,
+    probabilityScale: settings.probabilityScale ?? PROBABILITY_SCALE,
   })
   const ratingUpdate = calculateRatingUpdate({
     awayExpectedProbability: pregameProbability.awayProbability,

@@ -32,6 +32,9 @@ const engineSettingsSnapshotSchema = new mongoose.Schema(
       type: Number,
       required: true,
     },
+    probabilityScale: {
+      type: Number,
+    },
   },
   { _id: false },
 )

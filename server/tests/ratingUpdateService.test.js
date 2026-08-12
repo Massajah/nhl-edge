@@ -35,6 +35,7 @@ const DEFAULT_TEST_ENGINE_SETTINGS = Object.freeze({
   regulationMultiplier: 1,
   overtimeMultiplier: 0.7,
   shootoutMultiplier: 0.5,
+  probabilityScale: 20,
 })
 
 const assertAlmostEqual = (actual, expected, tolerance = 1e-9) => {
@@ -327,9 +328,17 @@ test('live update combines base home advantage with home team adjustment', async
     awayRating: 50,
     homeAdvantage: 4.5,
     homeRating: 50,
+    probabilityScale: DEFAULT_TEST_ENGINE_SETTINGS.probabilityScale,
   })
   const expectedUpdate = calculateRatingUpdate({
     awayExpectedProbability: pregameProbability.awayProbability,
+    configuration: {
+      kFactor: DEFAULT_TEST_ENGINE_SETTINGS.kFactor,
+      modelVersion: DEFAULT_TEST_ENGINE_SETTINGS.modelVersion,
+      overtimeMultiplier: DEFAULT_TEST_ENGINE_SETTINGS.overtimeMultiplier,
+      regulationMultiplier: DEFAULT_TEST_ENGINE_SETTINGS.regulationMultiplier,
+      shootoutMultiplier: DEFAULT_TEST_ENGINE_SETTINGS.shootoutMultiplier,
+    },
     homeExpectedProbability: pregameProbability.homeProbability,
     resultType: RESULT_TYPES.REGULATION,
     winner: WINNERS.HOME,
@@ -352,6 +361,7 @@ test('live update combines base home advantage with home team adjustment', async
     to: '2025-03-01',
   })
   assert.equal(auditRecord.engineSettingsSnapshot.homeAdvantage, 4)
+  assert.equal(auditRecord.engineSettingsSnapshot.probabilityScale, 20)
   assert.equal(auditRecord.baseHomeAdvantage, 4)
   assert.equal(auditRecord.homeTeamAdjustment, 0.5)
   assert.equal(auditRecord.effectiveHomeAdvantage, 4.5)
@@ -567,11 +577,13 @@ test('live rating update uses the requesting user persisted settings', async () 
       ...DEFAULT_TEST_ENGINE_SETTINGS,
       homeAdvantage: 2,
       kFactor: 1,
+      probabilityScale: 10,
     },
     [userB]: {
       ...DEFAULT_TEST_ENGINE_SETTINGS,
       homeAdvantage: 8,
       kFactor: 2,
+      probabilityScale: 30,
     },
   }
 
@@ -604,8 +616,10 @@ test('live rating update uses the requesting user persisted settings', async () 
 
   assert.equal(userAProcessedGame.engineSettingsSnapshot.homeAdvantage, 2)
   assert.equal(userAProcessedGame.engineSettingsSnapshot.kFactor, 1)
+  assert.equal(userAProcessedGame.engineSettingsSnapshot.probabilityScale, 10)
   assert.equal(userBProcessedGame.engineSettingsSnapshot.homeAdvantage, 8)
   assert.equal(userBProcessedGame.engineSettingsSnapshot.kFactor, 2)
+  assert.equal(userBProcessedGame.engineSettingsSnapshot.probabilityScale, 30)
   assert.notEqual(
     userAProcessedGame.homeRatingChange,
     userBProcessedGame.homeRatingChange,

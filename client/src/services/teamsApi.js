@@ -12,20 +12,29 @@ export const fetchTeams = async () => {
   return data.teams ?? []
 }
 
-export const fetchTeamRoster = async (teamAbbreviation) => {
+export const fetchTeamRosterState = async (teamAbbreviation) => {
   const data = await requestTeams(
     `/api/teams/${encodeURIComponent(teamAbbreviation)}/roster`,
   )
 
-  return data.roster
+  return {
+    data: data.roster ?? null,
+    provider: data.provider ?? { status: data.roster ? 'ready' : 'unavailable' },
+  }
 }
 
-export const fetchTeamStats = async (teamAbbreviation) => {
+export const fetchTeamRoster = async (teamAbbreviation) =>
+  (await fetchTeamRosterState(teamAbbreviation)).data
+
+export const fetchTeamStatsState = async (teamAbbreviation) => {
   const data = await requestTeams(
     `/api/teams/${encodeURIComponent(teamAbbreviation)}/stats`,
   )
 
-  return data.stats
+  return {
+    data: data.stats ?? null,
+    provider: data.provider ?? { status: data.stats ? 'ready' : 'unavailable' },
+  }
 }
 
 export const fetchGoalieStats = async (playerId) => {
@@ -36,17 +45,44 @@ export const fetchGoalieStats = async (playerId) => {
   return data.goalieStats
 }
 
-export const fetchTeamGoalieSummaries = async (teamAbbreviation) => {
+export const fetchTeamGoalieSummariesState = async (teamAbbreviation) => {
   const data = await requestTeams(
     `/api/teams/${encodeURIComponent(teamAbbreviation)}/goalie-summaries`,
   )
 
-  return data.goalieSummaries
+  return {
+    data: data.goalieSummaries ?? null,
+    provider: data.provider ?? {
+      status: data.goalieSummaries ? 'ready' : 'unavailable',
+    },
+  }
 }
+
+export const fetchLeagueSpecialTeamsState = async () => {
+  const data = await requestTeams('/api/teams/special-teams')
+
+  return {
+    data: data.specialTeams ?? null,
+    provider: data.provider ?? {
+      status: data.specialTeams ? 'ready' : 'unavailable',
+    },
+  }
+}
+
+export const fetchTeamStats = async (teamAbbreviation) =>
+  (await fetchTeamStatsState(teamAbbreviation)).data
+
+export const fetchTeamGoalieSummaries = async (teamAbbreviation) =>
+  (await fetchTeamGoalieSummariesState(teamAbbreviation)).data
 
 export const fetchGoalieAdjustments = (teamId) =>
   requestTeams(
     `/api/teams/${encodeURIComponent(teamId)}/goalie-adjustments`,
+  )
+
+export const fetchSavedGoalieAdjustments = (teamId) =>
+  requestTeams(
+    `/api/teams/${encodeURIComponent(teamId)}/goalie-adjustments?localOnly=true`,
   )
 
 export const fetchTeamModelValues = (teamId) =>

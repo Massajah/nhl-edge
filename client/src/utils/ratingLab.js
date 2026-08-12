@@ -1,4 +1,5 @@
 import { NHL_TEAMS } from "../data/teams.js";
+import { BASE_MODEL_V1 } from "../config/baseModel.js";
 
 export const RATING_LAB_CONFIGURATION_FIELDS = Object.freeze([
   {
@@ -35,10 +36,10 @@ export const MAX_REPLAY_DATE_RANGE_DAYS = 370;
 
 export const RATING_LAB_DEFAULT_FORM = Object.freeze({
   configuration: Object.freeze({
-    kFactor: "1.2",
-    overtimeMultiplier: "0.7",
-    regulationMultiplier: "1",
-    shootoutMultiplier: "0.5",
+    kFactor: String(BASE_MODEL_V1.kFactor),
+    overtimeMultiplier: String(BASE_MODEL_V1.overtimeMultiplier),
+    regulationMultiplier: String(BASE_MODEL_V1.regulationMultiplier),
+    shootoutMultiplier: String(BASE_MODEL_V1.shootoutMultiplier),
   }),
   dateFrom: "",
   dateTo: "",

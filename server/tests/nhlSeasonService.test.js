@@ -4,11 +4,13 @@ const assert = require('node:assert/strict')
 const test = require('node:test')
 const {
   FALLBACK_METADATA_SOURCE,
+  FALLBACK_SEASONS,
   NHL_API_METADATA_SOURCE,
   buildFallbackSeasons,
   deriveSeasonBoundaryFromSchedules,
   getAvailablePowerRatingHistorySeasons,
   getSeasonForDate,
+  normalizeSeasonId,
   normalizeSeasonBoundary,
 } = require('../services/nhlSeasonService')
 
@@ -83,8 +85,12 @@ const clubScheduleSeasonProvider = async (_teamAbbreviation, seasonId) =>
   }
 
 test('available seasons from NHL schedule metadata are sorted newest first', async () => {
+  let clubScheduleCalls = 0
   const result = await getAvailablePowerRatingHistorySeasons({
-    clubScheduleSeasonProvider,
+    clubScheduleSeasonProvider: async (...args) => {
+      clubScheduleCalls += 1
+      return clubScheduleSeasonProvider(...args)
+    },
     count: 3,
     currentSeasonContextProvider: async () => ({
       currentSeasonId: 20262027,
@@ -99,6 +105,8 @@ test('available seasons from NHL schedule metadata are sorted newest first', asy
     result.seasons.map((season) => season.id),
     ['20262027', '20252026', '20242025'],
   )
+  assert.equal(clubScheduleCalls, 0)
+  assert.equal(result.seasons[0].metadataSource, 'tested-explicit')
 })
 
 test('current offseason resolves to the upcoming NHL season deterministically', async () => {
@@ -146,17 +154,17 @@ test('fallback season metadata is newest first and marks current season', () => 
     ['20262027', '20252026', '20242025'],
   )
   assert.equal(result.seasons[0].isCurrent, true)
-  assert.match(result.warning, /fallback NHL regular-season boundaries/)
+  assert.equal(
+    result.warning,
+    'Season dates loaded from tested fallback metadata.',
+  )
 })
 
 test('season metadata failure uses documented fallback behavior', async () => {
   const result = await getAvailablePowerRatingHistorySeasons({
-    clubScheduleSeasonProvider: async () => {
+    currentSeasonContextProvider: async () => {
       throw new Error('NHL API unavailable')
     },
-    currentSeasonContextProvider: async () => ({
-      currentSeasonId: 20262027,
-    }),
     skipCache: true,
     teamsProvider,
     todayProvider: () => '2026-11-01',
@@ -165,7 +173,42 @@ test('season metadata failure uses documented fallback behavior', async () => {
   assert.equal(result.metadataSource, FALLBACK_METADATA_SOURCE)
   assert.equal(result.currentSeasonId, '20262027')
   assert.equal(result.seasons[0].id, '20262027')
-  assert.match(result.warning, /fallback NHL regular-season boundaries/)
+  assert.equal(
+    result.warning,
+    'Season dates loaded from tested fallback metadata.',
+  )
+})
+
+test('supported season identifiers normalize to one canonical provider format', () => {
+  ;[
+    ['2026–27', '20262027'],
+    ['2025-26', '20252026'],
+    ['20242025', '20242025'],
+    ['2023—24', '20232024'],
+    ['2022-23', '20222023'],
+    ['2021–22', '20212022'],
+  ].forEach(([input, expected]) => {
+    assert.equal(normalizeSeasonId(input), expected)
+  })
+
+  assert.equal(normalizeSeasonId('2024'), '')
+  assert.equal(normalizeSeasonId('20242026'), '')
+})
+
+test('supported completed seasons keep explicit inclusive final dates', () => {
+  const expectedEndDates = {
+    20212022: '2022-04-29',
+    20222023: '2023-04-14',
+    20232024: '2024-04-18',
+    20242025: '2025-04-17',
+    20252026: '2026-04-16',
+  }
+
+  Object.entries(expectedEndDates).forEach(([seasonId, endDate]) => {
+    const season = FALLBACK_SEASONS.find((candidate) => candidate.id === seasonId)
+
+    assert.equal(season.endDate, endDate)
+  })
 })
 
 test('season date lookup returns the upcoming season during the offseason gap', () => {
