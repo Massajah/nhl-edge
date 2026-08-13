@@ -1347,7 +1347,7 @@ test('partial Previous Day failure does not hide today games', () => {
   assertNoInvalidNumbers(html)
 })
 
-test('GameAnalyzer separates detected rest conditions from applied modifiers', () => {
+test('GameAnalyzer renders an automatic zero state without fatigue controls', () => {
   const html = renderGameAnalyzer({
     awayContext: {
       adjustmentBreakdown: [],
@@ -1378,24 +1378,20 @@ test('GameAnalyzer separates detected rest conditions from applied modifiers', (
     status: 'Scheduled',
   })
 
-  assert.match(html, /Well Rested[\s\S]*adjustment disabled/)
-  assert.match(html, /4 Games in 6 Days[\s\S]*informational/)
-  assert.match(html, /Applied adjustments<\/h3><p>None<\/p>/)
-  assert.match(html, /<dt>Rest days<\/dt><dd>2<\/dd>/)
-  assert.match(html, /Total schedule adjustment[\s\S]*\+0\.00/)
+  assert.match(html, /Automatic Adjustments/)
+  assert.match(html, /Read-only values supplied to the model/)
   assert.match(
     html,
-    /<details class="game-context-overrides"><summary>Manual overrides<\/summary>/,
+    /data-testid="analyzer-away-restFatigue"[\s\S]*?<strong>0\.00<\/strong>[\s\S]*?No fatigue adjustment/,
   )
-  assert.doesNotMatch(html, /<details class="game-context-overrides" open/)
-  assert.doesNotMatch(html, /<dt>Rest\/Fatigue<\/dt>/)
-  assert.doesNotMatch(html, /4 Games in 6 Days[\s\S]*-0\.50/)
-  assert.equal(countMatches(html, /game-context-status-badge/g), 1)
-  assert.doesNotMatch(html, /Current game has already started/i)
+  assert.doesNotMatch(html, /<small>Well Rested<\/small>/)
+  assert.doesNotMatch(html, /game-context-overrides/)
+  assert.doesNotMatch(html, /<input[^>]*id="analyzer-away-restFatigue"/)
+  assert.doesNotMatch(html, /rest and fatigue override/i)
   assertNoInvalidNumbers(html)
 })
 
-test('GameAnalyzer keeps applied totals, Team Adjustments and Effective Rating aligned', () => {
+test('GameAnalyzer keeps automatic context and Effective Rating aligned', () => {
   const context = {
     awayContext: {
       adjustmentBreakdown: [
@@ -1415,12 +1411,10 @@ test('GameAnalyzer keeps applied totals, Team Adjustments and Effective Rating a
         'back_to_back_travel',
         '4_games_in_6_days',
       ],
-      manualRestFatigueAdjustment: -1,
       quickRematch: {
         eligible: true,
       },
       restDays: 0,
-      restFatigueOverrideEnabled: true,
     },
     awayTeam: {
       abbreviation: 'LAK',
@@ -1455,16 +1449,15 @@ test('GameAnalyzer keeps applied totals, Team Adjustments and Effective Rating a
     .awayFinalRating.toFixed(1)
   const html = renderGameAnalyzer(context)
 
-  assert.match(html, /3 Games in 4 Days/)
   assert.match(html, /Back-to-Back \+ Travel/)
-  assert.match(html, /4 Games in 6 Days[\s\S]*informational/)
-  assert.match(html, /Quick Rematch eligible/)
-  assert.match(html, /Manual Rest\/Fatigue override[\s\S]*-1\.00/)
-  assert.match(html, /Quick Rematch[\s\S]*\+0\.25/)
-  assert.match(html, /data-testid="game-context-away-total">-0\.75/)
+  assert.match(html, /Quick Rematch/)
   assert.match(
     html,
-    /data-testid="analyzer-away-restFatigue"[\s\S]*?<strong>-1\.00<\/strong>/,
+    /data-testid="analyzer-away-restFatigue"[\s\S]*?<strong>-1\.25<\/strong>/,
+  )
+  assert.match(
+    html,
+    /data-testid="analyzer-away-quickRematchAdjustment"[\s\S]*?<strong>\+0\.25<\/strong>/,
   )
   assert.match(
     html,
@@ -1472,9 +1465,93 @@ test('GameAnalyzer keeps applied totals, Team Adjustments and Effective Rating a
       `data-testid="analyzer-away-effective-rating">${expectedAwayRating}`,
     ),
   )
-  assert.match(html, /Manual override active/)
-  assert.equal(countMatches(html, /game-context-status-badge/g), 1)
+  assert.doesNotMatch(html, /game-context-overrides|Manual override active/)
+  assert.doesNotMatch(
+    html,
+    /<input[^>]*id="analyzer-away-quickRematchAdjustment"/,
+  )
   assertNoInvalidNumbers(html)
+})
+
+test('GameAnalyzer displays production fatigue conditions read-only and applies each once', () => {
+  const cases = [
+    {
+      adjustment: -0.5,
+      condition: '3_games_in_4_days',
+      label: /3 Games in 4 Days/,
+    },
+    {
+      adjustment: -1,
+      condition: 'back_to_back',
+      label: /Back-to-Back/,
+    },
+    {
+      adjustment: -4,
+      condition: 'back_to_back_travel',
+      label: /Back-to-Back \+ Travel/,
+    },
+    {
+      adjustment: 0.75,
+      condition: 'well_rested',
+      label: /Well Rested/,
+    },
+  ]
+
+  cases.forEach(({ adjustment, condition, label }) => {
+    const context = {
+      awayContext: {
+        adjustmentBreakdown: [{ adjustment, category: 'restFatigue', condition }],
+        restFatigueCondition: condition,
+      },
+      awayTeam: {
+        abbreviation: 'LAK',
+        name: 'Los Angeles Kings',
+        teamId: 'LAK',
+      },
+      gameId: `context-${condition}`,
+      homeContext: {
+        adjustmentBreakdown: [],
+        restFatigueCondition: 'normal',
+      },
+      homeTeam: {
+        abbreviation: 'NYI',
+        name: 'New York Islanders',
+        teamId: 'NYI',
+      },
+      status: 'Scheduled',
+    }
+    const ratings = createRatings()
+    const inputs = modelAnalysisUtils.createInputsForTeams(
+      ratings,
+      { away: 'LAK', home: 'NYI' },
+      {},
+      {},
+      0,
+      context,
+    )
+    const expectedAwayRating = calculateGameUtils
+      .calculateGame(inputs.home, inputs.away)
+      .awayFinalRating.toFixed(1)
+    const html = renderGameAnalyzer(context)
+
+    assert.match(html, label)
+    assert.match(
+      html,
+      new RegExp(
+        `data-testid="analyzer-away-restFatigue"[\\s\\S]*?<strong>${adjustment > 0 ? '\\+' : ''}${adjustment.toFixed(2)}<\\/strong>`,
+      ),
+    )
+    assert.match(
+      html,
+      new RegExp(
+        `data-testid="analyzer-away-effective-rating">${expectedAwayRating}`,
+      ),
+    )
+    assert.doesNotMatch(
+      html,
+      /<input[^>]*id="analyzer-away-restFatigue"/,
+    )
+  })
 })
 
 test('Dashboard uses concise schedule-adjustment labels and omits neutral context', () => {

@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { RefreshCw, Save } from 'lucide-react'
 import AdjustmentComparison from './AdjustmentComparison.jsx'
 import ResultCard from './ResultCard.jsx'
 import TeamSelector from './TeamSelector.jsx'
@@ -10,7 +9,6 @@ import { createBet, fetchBets } from '../services/betsApi.js'
 import { getBettingSettings } from '../services/bettingSettingsApi.js'
 import {
   fetchGameContexts,
-  updateGameContextOverrides,
   updateGameGoalieSelections,
 } from '../services/gameContextApi.js'
 import { parseBankrollMoneyInput } from '../utils/bankroll.js'
@@ -29,11 +27,7 @@ import {
   formatStakeInputValue,
 } from '../utils/kellyStaking.js'
 import {
-  applyGameContextDraftToInputs,
   applyGameContextToInputs,
-  formatSignedGameContextAdjustment,
-  getGameContextForSide,
-  getTeamGameContextPresentation,
   normalizeGameContext,
 } from '../utils/gameContext.js'
 import {
@@ -135,98 +129,6 @@ const formatSavedTime = (dateTime) =>
     minute: '2-digit',
   }).format(new Date(dateTime))
 
-const createGameContextDraft = (gameContext) => {
-  const normalizedContext = normalizeGameContext(gameContext)
-  const awayContext = getGameContextForSide(normalizedContext, 'away')
-  const homeContext = getGameContextForSide(normalizedContext, 'home')
-
-  return {
-    awayContext: {
-      manualQuickRematchAdjustment: String(
-        awayContext.manualQuickRematchAdjustment,
-      ),
-      manualRestFatigueAdjustment: String(
-        awayContext.manualRestFatigueAdjustment,
-      ),
-      quickRematchOverrideEnabled: awayContext.quickRematchOverrideEnabled,
-      restFatigueOverrideEnabled: awayContext.restFatigueOverrideEnabled,
-    },
-    homeContext: {
-      manualQuickRematchAdjustment: String(
-        homeContext.manualQuickRematchAdjustment,
-      ),
-      manualRestFatigueAdjustment: String(
-        homeContext.manualRestFatigueAdjustment,
-      ),
-      quickRematchOverrideEnabled: homeContext.quickRematchOverrideEnabled,
-      restFatigueOverrideEnabled: homeContext.restFatigueOverrideEnabled,
-    },
-  }
-}
-
-const parseContextDraftAdjustment = (value) => {
-  const numberValue = Number(value)
-
-  return Number.isFinite(numberValue)
-    ? clamp(numberValue, { max: 3, min: -3 })
-    : 0
-}
-
-const createGameContextOverridePayload = (draft) => ({
-  awayContext: {
-    manualQuickRematchAdjustment: parseContextDraftAdjustment(
-      draft.awayContext.manualQuickRematchAdjustment,
-    ),
-    manualRestFatigueAdjustment: parseContextDraftAdjustment(
-      draft.awayContext.manualRestFatigueAdjustment,
-    ),
-    quickRematchOverrideEnabled:
-      draft.awayContext.quickRematchOverrideEnabled,
-    restFatigueOverrideEnabled: draft.awayContext.restFatigueOverrideEnabled,
-  },
-  homeContext: {
-    manualQuickRematchAdjustment: parseContextDraftAdjustment(
-      draft.homeContext.manualQuickRematchAdjustment,
-    ),
-    manualRestFatigueAdjustment: parseContextDraftAdjustment(
-      draft.homeContext.manualRestFatigueAdjustment,
-    ),
-    quickRematchOverrideEnabled:
-      draft.homeContext.quickRematchOverrideEnabled,
-    restFatigueOverrideEnabled: draft.homeContext.restFatigueOverrideEnabled,
-  },
-})
-
-const formatRestDays = (value) =>
-  Number.isFinite(Number(value)) ? String(Number(value)) : '--'
-
-const getGameContextStatusLabel = (gameContext, contextRequestGame) => {
-  const gameState = String(
-    gameContext?.gameState ?? contextRequestGame?.gameState ?? '',
-  ).toUpperCase()
-  const status = String(
-    gameContext?.status ?? contextRequestGame?.status ?? '',
-  ).toLowerCase()
-
-  if (['FINAL', 'OFF'].includes(gameState) || status.includes('final')) {
-    return 'Final'
-  }
-
-  if (
-    (gameState && !['FUT', 'PRE'].includes(gameState)) ||
-    status.includes('live') ||
-    status.includes('progress')
-  ) {
-    return 'Live'
-  }
-
-  return 'Scheduled'
-}
-
-const areGameContextDraftsEqual = (leftDraft, rightDraft) =>
-  JSON.stringify(createGameContextOverridePayload(leftDraft)) ===
-  JSON.stringify(createGameContextOverridePayload(rightDraft))
-
 function GameAnalyzer({
   baseHomeAdvantage = 0,
   probabilityScale,
@@ -270,13 +172,9 @@ function GameAnalyzer({
     away: prefillMatchup?.marketOdds?.metadata?.away ?? null,
     home: prefillMatchup?.marketOdds?.metadata?.home ?? null,
   }))
-  const [gameContextDraft, setGameContextDraft] = useState(() =>
-    createGameContextDraft(initialGameContext),
-  )
   const [gameContextStatus, setGameContextStatus] = useState(
     initialGameContext ? 'success' : 'idle',
   )
-  const [gameContextSaveStatus, setGameContextSaveStatus] = useState('idle')
   const [gameContextMessage, setGameContextMessage] = useState('')
   const [goalieStatsByPlayerId, setGoalieStatsByPlayerId] = useState({})
   const [goalieStatusByTeam, setGoalieStatusByTeam] = useState({})
@@ -391,15 +289,6 @@ function GameAnalyzer({
       isCurrent = false
     }
   }, [specialTeamsAlertsEnabled])
-  const hasUnsavedGameContextChanges = useMemo(
-    () =>
-      Boolean(gameContext) &&
-      !areGameContextDraftsEqual(
-        gameContextDraft,
-        createGameContextDraft(gameContext),
-      ),
-    [gameContext, gameContextDraft],
-  )
   const goalieSelectionPayload = useMemo(
     () => ({
       away: createGoalieSelectionPayload(inputs.away, awayTeam.id),
@@ -572,7 +461,6 @@ function GameAnalyzer({
     const loadGameContext = async () => {
       if (!contextRequestGame) {
         setGameContext(null)
-        setGameContextDraft(createGameContextDraft(null))
         setGameContextStatus('idle')
         setGameContextMessage('')
         return
@@ -590,7 +478,6 @@ function GameAnalyzer({
         }
 
         setGameContext(nextContext)
-        setGameContextDraft(createGameContextDraft(nextContext))
         setGameContextStatus(nextContext ? 'success' : 'idle')
 
         if (nextContext) {
@@ -605,7 +492,6 @@ function GameAnalyzer({
         }
 
         setGameContext(null)
-        setGameContextDraft(createGameContextDraft(null))
         setGameContextStatus('error')
         setGameContextMessage(error.message)
       }
@@ -860,9 +746,7 @@ function GameAnalyzer({
     setSaveMessage('')
     setIsBetReviewOpen(false)
     setGameContext(null)
-    setGameContextDraft(createGameContextDraft(null))
     setGameContextStatus('idle')
-    setGameContextSaveStatus('idle')
     setGameContextMessage('')
 
     setMatchup((currentMatchup) => {
@@ -1019,94 +903,6 @@ function GameAnalyzer({
         ),
       },
     }))
-  }
-
-  const handleGameContextDraftChange = (side, field, value) => {
-    const sideKey = side === 'away' ? 'awayContext' : 'homeContext'
-    const nextDraft = {
-      ...gameContextDraft,
-      [sideKey]: {
-        ...gameContextDraft[sideKey],
-        [field]: value,
-      },
-    }
-
-    setGameContextDraft(nextDraft)
-
-    if (gameContext) {
-      setMatchup((currentMatchup) => ({
-        ...currentMatchup,
-        inputs: applyGameContextDraftToInputs(
-          currentMatchup.inputs,
-          gameContext,
-          nextDraft,
-        ),
-      }))
-    }
-
-    setGameContextSaveStatus('idle')
-    setGameContextMessage('')
-    setSaveStatus('idle')
-    setSaveMessage('')
-  }
-
-  const refreshGameContext = async () => {
-    if (!contextRequestGame) {
-      return null
-    }
-
-    const result = await fetchGameContexts([contextRequestGame])
-    const nextContext = result.contexts[0] ?? null
-
-    setGameContext(nextContext)
-    setGameContextDraft(createGameContextDraft(nextContext))
-    setGameContextStatus(nextContext ? 'success' : 'idle')
-
-    if (nextContext) {
-      setMatchup((currentMatchup) => ({
-        ...currentMatchup,
-        inputs: applyGameContextToInputs(currentMatchup.inputs, nextContext),
-      }))
-    }
-
-    return nextContext
-  }
-
-  const handleRefreshGameContext = async () => {
-    setGameContextStatus('loading')
-    setGameContextSaveStatus('idle')
-    setGameContextMessage('')
-
-    try {
-      await refreshGameContext()
-    } catch (error) {
-      setGameContext(null)
-      setGameContextDraft(createGameContextDraft(null))
-      setGameContextStatus('error')
-      setGameContextMessage(error.message)
-    }
-  }
-
-  const handleSaveGameContextOverrides = async () => {
-    if (!contextRequestGame?.gameId || !hasUnsavedGameContextChanges) {
-      return
-    }
-
-    setGameContextSaveStatus('saving')
-    setGameContextMessage('')
-
-    try {
-      await updateGameContextOverrides(
-        contextRequestGame.gameId,
-        createGameContextOverridePayload(gameContextDraft),
-      )
-      await refreshGameContext()
-      setGameContextSaveStatus('success')
-      setGameContextMessage('Overrides saved')
-    } catch (error) {
-      setGameContextSaveStatus('error')
-      setGameContextMessage(error.message)
-    }
   }
 
   const handleSaveGoalieSelections = async () => {
@@ -1311,14 +1107,6 @@ function GameAnalyzer({
               />
             </div>
 
-            <SpecialTeamsMatchupPanel
-              awayTeam={awayTeam}
-              enabled={specialTeamsAlertsEnabled}
-              homeTeam={homeTeam}
-              specialTeams={specialTeams}
-              status={specialTeamsStatus}
-              threshold={specialTeamsRankThreshold}
-            />
           </div>
 
           <AdjustmentComparison
@@ -1347,7 +1135,9 @@ function GameAnalyzer({
             homeTeam={homeTeam}
             injurySummaries={injurySummaries}
             inputs={inputs}
-            isGameContextManaged={Boolean(gameContext)}
+            gameContext={gameContext}
+            gameContextMessage={gameContextMessage}
+            gameContextStatus={gameContextStatus}
             onChange={handleInputChange}
             onGoalieChange={handleGoalieSelectionChange}
             onSaveGoalies={handleSaveGoalieSelections}
@@ -1357,21 +1147,16 @@ function GameAnalyzer({
               away: () => loadTeamGoalies(awayTeam, { force: true }),
               home: () => loadTeamGoalies(homeTeam, { force: true }),
             }}
-          />
-
-          <GameContextPanel
-            awayTeam={awayTeam}
-            contextRequestGame={contextRequestGame}
-            draft={gameContextDraft}
-            gameContext={gameContext}
-            homeTeam={homeTeam}
-            saveMessage={gameContextMessage}
-            saveStatus={gameContextSaveStatus}
-            status={gameContextStatus}
-            hasUnsavedChanges={hasUnsavedGameContextChanges}
-            onChange={handleGameContextDraftChange}
-            onRefresh={handleRefreshGameContext}
-            onSave={handleSaveGameContextOverrides}
+            specialTeamsContent={(
+              <SpecialTeamsMatchupPanel
+                awayTeam={awayTeam}
+                enabled={specialTeamsAlertsEnabled}
+                homeTeam={homeTeam}
+                specialTeams={specialTeams}
+                status={specialTeamsStatus}
+                threshold={specialTeamsRankThreshold}
+              />
+            )}
           />
         </div>
 
@@ -1591,299 +1376,6 @@ function SpecialTeamsMatchupPanel({
           </div>
         ))}
       </div>
-    </section>
-  )
-}
-
-function GameContextPanel({
-  awayTeam,
-  contextRequestGame,
-  draft,
-  gameContext,
-  homeTeam,
-  saveMessage,
-  saveStatus,
-  status,
-  hasUnsavedChanges,
-  onChange,
-  onRefresh,
-  onSave,
-}) {
-  if (!contextRequestGame && status !== 'error') {
-    return null
-  }
-
-  const isLoading = status === 'loading'
-  const isSaving = saveStatus === 'saving'
-  const gameStatus = getGameContextStatusLabel(
-    gameContext,
-    contextRequestGame,
-  )
-  const actionStatus = isSaving
-    ? { label: 'Saving...', tone: 'saving' }
-    : saveStatus === 'error'
-      ? { detail: saveMessage, label: 'Save failed', tone: 'error' }
-      : hasUnsavedChanges
-        ? { label: 'Unsaved changes', tone: 'dirty' }
-        : saveStatus === 'success'
-          ? { label: 'Overrides saved', tone: 'success' }
-          : null
-
-  return (
-    <section className="game-context-panel" aria-label="Game Context">
-      <div className="section-heading">
-        <div>
-          <p className="eyebrow">Game Context</p>
-          <h2>Schedule Adjustments</h2>
-        </div>
-        <div className="game-context-section-meta">
-          <span
-            className={`game-context-status-badge ${gameStatus.toLowerCase()}`}
-          >
-            {gameStatus}
-          </span>
-          <small>{isLoading ? 'Loading context' : 'User scoped'}</small>
-        </div>
-      </div>
-
-      {status === 'error' ? (
-        <p className="form-status error" role="alert">
-          {saveMessage || 'Game context unavailable.'}
-        </p>
-      ) : null}
-
-      {gameContext ? (
-        <div className="game-context-grid">
-          <GameContextTeamCard
-            context={getGameContextForSide(gameContext, 'away')}
-            draft={draft.awayContext}
-            label="Away"
-            side="away"
-            team={awayTeam}
-            onChange={onChange}
-          />
-          <GameContextTeamCard
-            context={getGameContextForSide(gameContext, 'home')}
-            draft={draft.homeContext}
-            label="Home"
-            side="home"
-            team={homeTeam}
-            onChange={onChange}
-          />
-        </div>
-      ) : isLoading ? (
-        <div className="game-context-loading" role="status">
-          Loading game context...
-        </div>
-      ) : null}
-
-      {contextRequestGame ? (
-        <div className="game-context-actions">
-          {actionStatus ? (
-            <span
-              className={`game-context-action-status ${actionStatus.tone}`}
-              role={actionStatus.tone === 'error' ? 'alert' : 'status'}
-            >
-              <strong>{actionStatus.label}</strong>
-              {actionStatus.detail ? <small>{actionStatus.detail}</small> : null}
-            </span>
-          ) : null}
-          <button
-            className="game-context-refresh-button"
-            type="button"
-            disabled={isLoading || isSaving}
-            onClick={onRefresh}
-          >
-            <RefreshCw aria-hidden="true" size={15} />
-            Refresh Context
-          </button>
-          <button
-            className={hasUnsavedChanges ? 'save-ratings-button' : ''}
-            type="button"
-            disabled={isLoading || isSaving || !hasUnsavedChanges}
-            onClick={onSave}
-          >
-            <Save aria-hidden="true" size={15} />
-            {isSaving ? 'Saving...' : 'Save Overrides'}
-          </button>
-        </div>
-      ) : null}
-    </section>
-  )
-}
-
-function GameContextTeamCard({ context, draft, label, side, team, onChange }) {
-  const presentation = getTeamGameContextPresentation(context, draft)
-  const { preview } = presentation
-  const restEnabledId = `game-context-${side}-rest-enabled`
-  const restValueId = `game-context-${side}-rest-value`
-  const rematchEnabledId = `game-context-${side}-rematch-enabled`
-  const rematchValueId = `game-context-${side}-rematch-value`
-
-  return (
-    <article className="game-context-team-card">
-      <div className="game-context-card-header">
-        <div>
-          <span>{label}</span>
-          <strong>{team.name}</strong>
-        </div>
-        {presentation.hasActiveOverride ? (
-          <span className="game-context-override-badge">
-            Manual override active
-          </span>
-        ) : null}
-      </div>
-
-      <dl className="game-context-rest-days">
-        <div>
-          <dt>Rest days</dt>
-          <dd>{formatRestDays(context.restDays)}</dd>
-        </div>
-      </dl>
-
-      <div className="game-context-card-sections">
-        <section
-          className="game-context-facts"
-          aria-label={`${team.name} detected schedule facts`}
-        >
-          <h3>Detected schedule facts</h3>
-          {presentation.detectedFacts.length > 0 ? (
-            <ul>
-              {presentation.detectedFacts.map((fact) => (
-                <li key={fact.key}>
-                  <span>{fact.label}</span>
-                  {fact.note ? <small>{fact.note}</small> : null}
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p>None</p>
-          )}
-        </section>
-
-        <section
-          className="game-context-applied"
-          aria-label={`${team.name} applied adjustments`}
-        >
-          <h3>Applied adjustments</h3>
-          {presentation.appliedAdjustments.length > 0 ? (
-            <ul>
-              {presentation.appliedAdjustments.map((item) => (
-                <li key={item.key}>
-                  <span>{item.label}</span>
-                  <strong>
-                    {formatSignedGameContextAdjustment(item.adjustment)}
-                  </strong>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p>None</p>
-          )}
-        </section>
-      </div>
-
-      <div className="game-context-total">
-        <span>Total schedule adjustment</span>
-        <strong data-testid={`game-context-${side}-total`}>
-          {formatSignedGameContextAdjustment(
-            preview.totalGameContextAdjustment,
-          )}
-        </strong>
-      </div>
-
-      <details className="game-context-overrides">
-        <summary>Manual overrides</summary>
-        <div className="game-context-override-groups">
-          <GameContextOverrideControl
-            automaticValue={preview.automaticRestFatigueAdjustment}
-            checkboxId={restEnabledId}
-            checked={draft.restFatigueOverrideEnabled}
-            effectiveValue={preview.effectiveRestFatigueAdjustment}
-            inputId={restValueId}
-            inputLabel={`${team.name} rest and fatigue override`}
-            label="Override Rest/Fatigue"
-            value={draft.manualRestFatigueAdjustment}
-            onCheckedChange={(checked) =>
-              onChange(side, 'restFatigueOverrideEnabled', checked)
-            }
-            onValueChange={(value) =>
-              onChange(side, 'manualRestFatigueAdjustment', value)
-            }
-          />
-          <GameContextOverrideControl
-            automaticValue={preview.automaticQuickRematchAdjustment}
-            checkboxId={rematchEnabledId}
-            checked={draft.quickRematchOverrideEnabled}
-            effectiveValue={preview.effectiveQuickRematchAdjustment}
-            inputId={rematchValueId}
-            inputLabel={`${team.name} quick rematch override`}
-            label="Override Quick Rematch"
-            value={draft.manualQuickRematchAdjustment}
-            onCheckedChange={(checked) =>
-              onChange(side, 'quickRematchOverrideEnabled', checked)
-            }
-            onValueChange={(value) =>
-              onChange(side, 'manualQuickRematchAdjustment', value)
-            }
-          />
-        </div>
-      </details>
-    </article>
-  )
-}
-
-function GameContextOverrideControl({
-  automaticValue,
-  checkboxId,
-  checked,
-  effectiveValue,
-  inputId,
-  inputLabel,
-  label,
-  onCheckedChange,
-  onValueChange,
-  value,
-}) {
-  return (
-    <section aria-labelledby={`${checkboxId}-label`}>
-      <label className="toggle-field" htmlFor={checkboxId}>
-        <input
-          id={checkboxId}
-          type="checkbox"
-          checked={checked}
-          onChange={(event) => onCheckedChange(event.target.checked)}
-        />
-        <span id={`${checkboxId}-label`}>{label}</span>
-      </label>
-      <dl>
-        <div>
-          <dt>Automatic</dt>
-          <dd>{formatSignedGameContextAdjustment(automaticValue)}</dd>
-        </div>
-        <div>
-          <dt>
-            <label htmlFor={inputId}>Override</label>
-          </dt>
-          <dd>
-            <input
-              aria-label={inputLabel}
-              disabled={!checked}
-              id={inputId}
-              max="3"
-              min="-3"
-              step="0.05"
-              type="number"
-              value={value}
-              onChange={(event) => onValueChange(event.target.value)}
-            />
-          </dd>
-        </div>
-        <div>
-          <dt>Effective</dt>
-          <dd>{formatSignedGameContextAdjustment(effectiveValue)}</dd>
-        </div>
-      </dl>
     </section>
   )
 }

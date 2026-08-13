@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { Info } from 'lucide-react'
 import {
   GOALIE_SELECTION_TYPES,
@@ -9,6 +10,10 @@ import {
   formatInjuryImpact,
   getTeamInjurySummary,
 } from '../utils/injuries.js'
+import {
+  getGameContextForSide,
+  getTeamGameContextPresentation,
+} from '../utils/gameContext.js'
 
 const toNumber = (value) => {
   const parsedValue = Number(value)
@@ -17,6 +22,12 @@ const toNumber = (value) => {
 
 const formatRating = (value) =>
   Number.isFinite(Number(value)) ? Number(value).toFixed(1) : '--'
+
+const formatAdjustment = (value) => {
+  const numberValue = toNumber(value)
+
+  return `${numberValue > 0 ? '+' : ''}${numberValue.toFixed(2)}`
+}
 
 const formatSavePercentage = (savePercentage) =>
   Number.isFinite(savePercentage)
@@ -46,12 +57,15 @@ function AdjustmentComparison({
   homeTeam,
   injurySummaries,
   inputs,
-  isGameContextManaged = false,
+  gameContext = null,
+  gameContextMessage = '',
+  gameContextStatus = 'idle',
   maximumGoaliePenalty = DEFAULT_MAXIMUM_GOALIE_PENALTY,
   onChange,
   onGoalieChange,
   onRetryGoalies,
   onSaveGoalies,
+  specialTeamsContent = null,
 }) {
   const storedAwayInjuryImpact = toNumber(inputs.away.storedInjuryImpact)
   const storedHomeInjuryImpact = toNumber(inputs.home.storedInjuryImpact)
@@ -65,6 +79,10 @@ function AdjustmentComparison({
     injurySummaries,
     homeTeam.id,
   )
+  const automaticContext = {
+    away: getAutomaticContextPresentation(gameContext, 'away', inputs.away),
+    home: getAutomaticContextPresentation(gameContext, 'home', inputs.home),
+  }
 
   return (
     <section
@@ -79,249 +97,295 @@ function AdjustmentComparison({
         <span>Aligned game inputs</span>
       </div>
 
-      <GoalieSelectionPanel
-        awayTeam={awayTeam}
-        canPersist={canPersistGoalies}
-        errorMessages={goalieValidationErrors}
-        goalies={goalies}
-        goalieErrors={goalieErrors}
-        goalieSaveMessage={goalieSaveMessage}
-        goalieSaveStatus={goalieSaveStatus}
-        goalieStatuses={goalieStatuses}
-        goalieStatsByPlayerId={goalieStatsByPlayerId}
-        hasUnsavedChanges={hasUnsavedGoalieChanges}
-        homeTeam={homeTeam}
-        inputs={inputs}
-        maximumGoaliePenalty={maximumGoaliePenalty}
-        onChange={onGoalieChange}
-        onRetry={onRetryGoalies}
-        onSave={onSaveGoalies}
-      />
+      <AdjustmentGroup
+        description="Selections and roster availability for this matchup."
+        title="Game Inputs"
+      >
+        <GoalieSelectionPanel
+          awayTeam={awayTeam}
+          canPersist={canPersistGoalies}
+          errorMessages={goalieValidationErrors}
+          goalies={goalies}
+          goalieErrors={goalieErrors}
+          goalieSaveMessage={goalieSaveMessage}
+          goalieSaveStatus={goalieSaveStatus}
+          goalieStatuses={goalieStatuses}
+          goalieStatsByPlayerId={goalieStatsByPlayerId}
+          hasUnsavedChanges={hasUnsavedGoalieChanges}
+          homeTeam={homeTeam}
+          inputs={inputs}
+          maximumGoaliePenalty={maximumGoaliePenalty}
+          onChange={onGoalieChange}
+          onRetry={onRetryGoalies}
+          onSave={onSaveGoalies}
+        />
 
-      <InjuryContextPanel
-        awaySummary={awayInjurySummary}
-        awayTeam={awayTeam}
-        homeSummary={homeInjurySummary}
-        homeTeam={homeTeam}
-      />
+        <InjuryContextPanel
+          awaySummary={awayInjurySummary}
+          awayTeam={awayTeam}
+          homeSummary={homeInjurySummary}
+          homeTeam={homeTeam}
+        />
+      </AdjustmentGroup>
 
-      <div className="adjustment-comparison" role="table">
-        <div className="adjustment-comparison-header" role="row">
-          <div role="columnheader">Adjustment</div>
-          <TeamColumnHeader label="Away" team={awayTeam} />
-          <TeamColumnHeader label="Home" team={homeTeam} />
-        </div>
-
-        <AdjustmentRow label="Power rating">
-          <ReadOnlyCell
-            sideLabel="Away"
-            value={formatRating(inputs.away.baseRating)}
-          />
-          <ReadOnlyCell
-            sideLabel="Home"
-            value={formatRating(inputs.home.baseRating)}
-          />
-        </AdjustmentRow>
-
-        <AdjustmentRow
-          helpText="Base Home Advantage plus the home team's saved Home Adjustment; edit here only for this analysis."
-          label="Effective home advantage"
-        >
-          <ReadOnlyCell muted sideLabel="Away" value="-" />
-          <NumberCell
-            field="homeAdvantage"
+      <AdjustmentGroup
+        description="Read-only values supplied to the model."
+        title="Automatic Adjustments"
+        tone="automatic"
+      >
+        <ComparisonTable awayTeam={awayTeam} homeTeam={homeTeam}>
+          <AdjustmentRow
+            helpText="Base Home Advantage plus the home team's saved Home Adjustment. This is read-only in Analyzer."
             label="Effective home advantage"
-            max="10"
-            min="-10"
-            side="home"
-            sideLabel="Home"
-            step="0.5"
-            teamName={homeTeam.name}
-            value={inputs.home.homeAdvantage}
-            onChange={onChange}
-          />
-        </AdjustmentRow>
+          >
+            <ReadOnlyCell muted sideLabel="Away" value="—" />
+            <ReadOnlyCell
+              sideLabel="Home"
+              testId="analyzer-home-homeAdvantage"
+              value={formatAdjustment(inputs.home.homeAdvantage)}
+            />
+          </AdjustmentRow>
 
-        <AdjustmentRow label="Stored injury impact">
-          <ReadOnlyCell
-            sideLabel="Away"
-            value={storedAwayInjuryImpact.toFixed(1)}
-          />
-          <ReadOnlyCell
-            sideLabel="Home"
-            value={storedHomeInjuryImpact.toFixed(1)}
-          />
-        </AdjustmentRow>
+          <AdjustmentRow
+            helpText="Detected and calculated automatically by the production schedule context service, including Well Rested when enabled."
+            label="Rest & Fatigue"
+          >
+            <ReadOnlyCell
+              secondary={automaticContext.away.restLabel}
+              sideLabel="Away"
+              testId="analyzer-away-restFatigue"
+              value={formatAdjustment(inputs.away.restFatigue)}
+            />
+            <ReadOnlyCell
+              secondary={automaticContext.home.restLabel}
+              sideLabel="Home"
+              testId="analyzer-home-restFatigue"
+              value={formatAdjustment(inputs.home.restFatigue)}
+            />
+          </AdjustmentRow>
 
-        <AdjustmentRow
-          helpText="Use this only for cumulative or game-specific lineup effects not already included in the stored player injury impacts. Avoid double counting an absence already represented above."
-          label="Game injury adjustment"
-        >
-          <NumberCell
-            field="injuries"
-            label="Game-specific injury adjustment"
-            max="20"
-            min="-20"
-            secondary={`Total: ${(
-              storedAwayInjuryImpact + awayGameInjuryImpact
-            ).toFixed(1)}`}
-            side="away"
-            sideLabel="Away"
-            step="0.5"
-            teamName={awayTeam.name}
-            value={inputs.away.injuries}
-            onChange={onChange}
-          />
-          <NumberCell
-            field="injuries"
-            label="Game-specific injury adjustment"
-            max="20"
-            min="-20"
-            secondary={`Total: ${(
-              storedHomeInjuryImpact + homeGameInjuryImpact
-            ).toFixed(1)}`}
-            side="home"
-            sideLabel="Home"
-            step="0.5"
-            teamName={homeTeam.name}
-            value={inputs.home.injuries}
-            onChange={onChange}
-          />
-        </AdjustmentRow>
+          <AdjustmentRow label="Quick Rematch">
+            <ReadOnlyCell
+              secondary={automaticContext.away.quickRematchLabel}
+              sideLabel="Away"
+              testId="analyzer-away-quickRematchAdjustment"
+              value={formatAdjustment(inputs.away.quickRematchAdjustment)}
+            />
+            <ReadOnlyCell
+              secondary={automaticContext.home.quickRematchLabel}
+              sideLabel="Home"
+              testId="analyzer-home-quickRematchAdjustment"
+              value={formatAdjustment(inputs.home.quickRematchAdjustment)}
+            />
+          </AdjustmentRow>
+        </ComparisonTable>
 
-        <AdjustmentRow
-          helpText={
-            isGameContextManaged
-              ? 'This value is managed by the normalized Game Context below.'
-              : 'Back-to-backs, compressed schedules, travel, rest edge and road-trip fatigue.'
-          }
-          label="Rest & fatigue"
-        >
-          {isGameContextManaged ? (
-            <>
-              <ReadOnlyCell
-                secondary="Game Context"
-                sideLabel="Away"
-                testId="analyzer-away-restFatigue"
-                value={toNumber(inputs.away.restFatigue).toFixed(2)}
-              />
-              <ReadOnlyCell
-                secondary="Game Context"
-                sideLabel="Home"
-                testId="analyzer-home-restFatigue"
-                value={toNumber(inputs.home.restFatigue).toFixed(2)}
-              />
-            </>
-          ) : (
-            <>
-              <NumberCell
-                field="restFatigue"
-                label="Rest and fatigue adjustment"
-                max="3"
-                min="-3"
-                side="away"
-                sideLabel="Away"
-                step="0.25"
-                teamName={awayTeam.name}
-                value={inputs.away.restFatigue}
-                onChange={onChange}
-              />
-              <NumberCell
-                field="restFatigue"
-                label="Rest and fatigue adjustment"
-                max="3"
-                min="-3"
-                side="home"
-                sideLabel="Home"
-                step="0.25"
-                teamName={homeTeam.name}
-                value={inputs.home.restFatigue}
-                onChange={onChange}
-              />
-            </>
-          )}
-        </AdjustmentRow>
+        {gameContextStatus === 'loading' ? (
+          <p className="automatic-adjustment-status" role="status">
+            Loading production schedule context…
+          </p>
+        ) : null}
+        {gameContextStatus === 'error' ? (
+          <p className="automatic-adjustment-status error" role="alert">
+            {gameContextMessage || 'Production schedule context unavailable.'}
+          </p>
+        ) : null}
+        {specialTeamsContent}
+      </AdjustmentGroup>
 
-        <AdjustmentRow
-          helpText="Use conservatively for playoff race, rematch context, coaching changes or similar game importance."
-          label="Motivation"
-        >
-          <NumberCell
-            field="motivation"
-            label="Motivation adjustment"
-            max="2"
-            min="-2"
-            side="away"
-            sideLabel="Away"
-            step="0.25"
-            teamName={awayTeam.name}
-            value={inputs.away.motivation}
-            onChange={onChange}
-          />
-          <NumberCell
-            field="motivation"
-            label="Motivation adjustment"
-            max="2"
-            min="-2"
-            side="home"
-            sideLabel="Home"
-            step="0.25"
-            teamName={homeTeam.name}
-            value={inputs.home.motivation}
-            onChange={onChange}
-          />
-        </AdjustmentRow>
+      <AdjustmentGroup
+        description="Editable, deliberate inputs for this analysis."
+        title="Manual Adjustments"
+        tone="manual"
+      >
+        <ComparisonTable awayTeam={awayTeam} homeTeam={homeTeam}>
+          <AdjustmentRow
+            helpText="Use this only for cumulative or game-specific lineup effects not already included in the stored player injury impacts. Avoid double counting an absence already represented above."
+            label="Game injury adjustment"
+          >
+            <NumberCell
+              field="injuries"
+              label="Game-specific injury adjustment"
+              max="20"
+              min="-20"
+              secondary={[
+                `Stored: ${formatAdjustment(storedAwayInjuryImpact)}`,
+                `Total: ${formatAdjustment(storedAwayInjuryImpact + awayGameInjuryImpact)}`,
+              ]}
+              side="away"
+              sideLabel="Away"
+              step="0.5"
+              teamName={awayTeam.name}
+              value={inputs.away.injuries}
+              onChange={onChange}
+            />
+            <NumberCell
+              field="injuries"
+              label="Game-specific injury adjustment"
+              max="20"
+              min="-20"
+              secondary={[
+                `Stored: ${formatAdjustment(storedHomeInjuryImpact)}`,
+                `Total: ${formatAdjustment(storedHomeInjuryImpact + homeGameInjuryImpact)}`,
+              ]}
+              side="home"
+              sideLabel="Home"
+              step="0.5"
+              teamName={homeTeam.name}
+              value={inputs.home.injuries}
+              onChange={onChange}
+            />
+          </AdjustmentRow>
 
-        <AdjustmentRow
-          helpText="Use for relevant factors not already represented by ratings, injuries, goalies, schedule or motivation."
-          label="Manual / X-factor"
-        >
-          <NumberCell
-            field="manualAdjustment"
-            label="Manual or X-factor adjustment"
-            max="2"
-            min="-2"
-            side="away"
-            sideLabel="Away"
-            step="0.25"
-            teamName={awayTeam.name}
-            value={inputs.away.manualAdjustment}
-            onChange={onChange}
-          />
-          <NumberCell
-            field="manualAdjustment"
-            label="Manual or X-factor adjustment"
-            max="2"
-            min="-2"
-            side="home"
-            sideLabel="Home"
-            step="0.25"
-            teamName={homeTeam.name}
-            value={inputs.home.manualAdjustment}
-            onChange={onChange}
-          />
-        </AdjustmentRow>
+          <AdjustmentRow
+            helpText="Use only for clearly justified situational factors such as exceptional game importance."
+            label="Motivation"
+          >
+            <NumberCell
+              field="motivation"
+              label="Motivation adjustment"
+              max="2"
+              min="-2"
+              side="away"
+              sideLabel="Away"
+              step="0.25"
+              teamName={awayTeam.name}
+              value={inputs.away.motivation}
+              onChange={onChange}
+            />
+            <NumberCell
+              field="motivation"
+              label="Motivation adjustment"
+              max="2"
+              min="-2"
+              side="home"
+              sideLabel="Home"
+              step="0.25"
+              teamName={homeTeam.name}
+              value={inputs.home.motivation}
+              onChange={onChange}
+            />
+          </AdjustmentRow>
 
-        <AdjustmentRow label="Effective rating" tone="final">
-          <ReadOnlyCell
-            sideLabel="Away"
-            value={formatRating(finalRatings.away)}
-          />
-          <ReadOnlyCell
-            sideLabel="Home"
-            value={formatRating(finalRatings.home)}
-          />
-        </AdjustmentRow>
-      </div>
+          <AdjustmentRow
+            helpText="Use for relevant factors not already represented by ratings, injuries, goalies, schedule or motivation."
+            label="Manual / X-factor"
+          >
+            <NumberCell
+              field="manualAdjustment"
+              label="Manual or X-factor adjustment"
+              max="2"
+              min="-2"
+              side="away"
+              sideLabel="Away"
+              step="0.25"
+              teamName={awayTeam.name}
+              value={inputs.away.manualAdjustment}
+              onChange={onChange}
+            />
+            <NumberCell
+              field="manualAdjustment"
+              label="Manual or X-factor adjustment"
+              max="2"
+              min="-2"
+              side="home"
+              sideLabel="Home"
+              step="0.25"
+              teamName={homeTeam.name}
+              value={inputs.home.manualAdjustment}
+              onChange={onChange}
+            />
+          </AdjustmentRow>
+        </ComparisonTable>
+      </AdjustmentGroup>
 
-      <details className="adjustment-guide">
-        <summary>Adjustment Guide</summary>
-        <p>
-          Rest handles schedule and travel. Motivation is for game context.
-          Manual / X-factor is only for meaningful inputs not covered elsewhere.
-        </p>
+      <details className="effective-rating-summary">
+        <summary>
+          <span>Effective Rating Summary</span>
+          <strong>
+            {awayTeam.abbreviation} {formatRating(finalRatings.away)} ·{' '}
+            {homeTeam.abbreviation} {formatRating(finalRatings.home)}
+          </strong>
+        </summary>
+        <ComparisonTable awayTeam={awayTeam} homeTeam={homeTeam}>
+          <SummaryRow label="Power rating" values={[inputs.away.baseRating, inputs.home.baseRating]} rating />
+          <SummaryRow label="Home advantage" values={[null, inputs.home.homeAdvantage]} />
+          <SummaryRow label="Goalie" values={[inputs.away.goalieAdjustment, inputs.home.goalieAdjustment]} />
+          <SummaryRow label="Stored injury" values={[inputs.away.storedInjuryImpact, inputs.home.storedInjuryImpact]} />
+          <SummaryRow label="Game injury" values={[inputs.away.injuries, inputs.home.injuries]} />
+          <SummaryRow label="Rest & Fatigue" values={[inputs.away.restFatigue, inputs.home.restFatigue]} />
+          <SummaryRow label="Quick Rematch" values={[inputs.away.quickRematchAdjustment, inputs.home.quickRematchAdjustment]} />
+          <SummaryRow label="Motivation" values={[inputs.away.motivation, inputs.home.motivation]} />
+          <SummaryRow label="Manual / X-factor" values={[inputs.away.manualAdjustment, inputs.home.manualAdjustment]} />
+          <SummaryRow final label="Effective rating" values={[finalRatings.away, finalRatings.home]} rating />
+        </ComparisonTable>
       </details>
     </section>
+  )
+}
+
+function getAutomaticContextPresentation(gameContext, side, sideInputs) {
+  const context = getGameContextForSide(gameContext, side)
+  const presentation = getTeamGameContextPresentation(context)
+  const restAdjustment = presentation.appliedAdjustments.find((item) =>
+    ['restFatigue', 'restFatigueOverride'].includes(item.category),
+  )
+  const quickRematchAdjustment = presentation.appliedAdjustments.find((item) =>
+    ['quickRematch', 'quickRematchOverride'].includes(item.category),
+  )
+
+  return {
+    quickRematchLabel: quickRematchAdjustment?.label ??
+      (toNumber(sideInputs.quickRematchAdjustment) === 0
+        ? 'Not triggered'
+        : 'Production context'),
+    restLabel: restAdjustment?.label ??
+      (toNumber(sideInputs.restFatigue) === 0
+        ? 'No fatigue adjustment'
+        : 'Production context'),
+  }
+}
+
+function AdjustmentGroup({ children, description, title, tone = 'neutral' }) {
+  return (
+    <section className={`team-adjustment-group ${tone}`}>
+      <header className="team-adjustment-group-heading">
+        <div>
+          <h3>{title}</h3>
+          <p>{description}</p>
+        </div>
+        <span>{tone === 'manual' ? 'Editable' : tone === 'automatic' ? 'Read-only' : 'Game setup'}</span>
+      </header>
+      {children}
+    </section>
+  )
+}
+
+function ComparisonTable({ awayTeam, children, homeTeam }) {
+  return (
+    <div className="adjustment-comparison" role="table">
+      <div className="adjustment-comparison-header" role="row">
+        <div role="columnheader">Adjustment</div>
+        <TeamColumnHeader label="Away" team={awayTeam} />
+        <TeamColumnHeader label="Home" team={homeTeam} />
+      </div>
+      {children}
+    </div>
+  )
+}
+
+function SummaryRow({ final = false, label, rating = false, values }) {
+  return (
+    <AdjustmentRow label={label} tone={final ? 'final' : undefined}>
+      {values.map((value, index) => (
+        <ReadOnlyCell
+          key={`${label}-${index}`}
+          muted={value === null}
+          sideLabel={index === 0 ? 'Away' : 'Home'}
+          value={value === null ? '—' : rating ? formatRating(value) : formatAdjustment(value)}
+        />
+      ))}
+    </AdjustmentRow>
   )
 }
 
@@ -339,9 +403,9 @@ export function InjuryContextPanel({
       <div className="analyzer-injury-context-heading">
         <div>
           <h3>Active injuries</h3>
-          <p>Player records behind each stored injury impact.</p>
+          <p>Compact stored-impact context for this matchup.</p>
         </div>
-        <span>review context</span>
+        <span>Game inputs</span>
       </div>
       <div className="analyzer-injury-context-grid">
         <InjuryContextCard summary={awaySummary} team={awayTeam} />
@@ -351,39 +415,42 @@ export function InjuryContextPanel({
   )
 }
 
-function InjuryContextCard({ summary = {}, team }) {
+export function InjuryContextCard({
+  initialExpanded = false,
+  summary = {},
+  team,
+}) {
+  const [expanded, setExpanded] = useState(initialExpanded)
   const injuries = Array.isArray(summary.injuries) ? summary.injuries : []
   const skaterInjuries = injuries.filter((injury) => !injury.isGoalie)
   const goalieInjuries = injuries.filter((injury) => injury.isGoalie)
-  const visibleSkaters = skaterInjuries.slice(0, 3)
-  const remainingSkaters = skaterInjuries.slice(3)
 
   return (
     <article className="analyzer-injury-card">
       <header>
-        <strong>{team.name} injuries</strong>
-        <span>{injuries.length} active</span>
+        <strong>{team.name}</strong>
+        {injuries.length > 0 ? (
+          <button
+            aria-expanded={expanded}
+            type="button"
+            onClick={() => setExpanded((current) => !current)}
+          >
+            {expanded ? 'Hide injuries' : 'View injuries'}
+          </button>
+        ) : null}
       </header>
 
-      {injuries.length === 0 ? (
-        <p className="analyzer-injury-empty">No active injuries.</p>
-      ) : (
+      <p className="analyzer-injury-summary">
+        <span>{injuries.length} active</span>
+        <span aria-hidden="true">·</span>
+        <span>Stored impact {formatInjuryImpact(summary.totalImpact)}</span>
+      </p>
+
+      {expanded ? (
         <div className="analyzer-injury-list">
-          {visibleSkaters.map((injury) => (
+          {skaterInjuries.map((injury) => (
             <AnalyzerInjuryRow injury={injury} key={injury.id || injury.playerName} />
           ))}
-
-          {remainingSkaters.length > 0 ? (
-            <details className="analyzer-injury-more">
-              <summary>Show all injuries</summary>
-              {remainingSkaters.map((injury) => (
-                <AnalyzerInjuryRow
-                  injury={injury}
-                  key={injury.id || injury.playerName}
-                />
-              ))}
-            </details>
-          ) : null}
 
           {goalieInjuries.length > 0 ? (
             <div className="analyzer-goalie-injury-list">
@@ -398,12 +465,7 @@ function InjuryContextCard({ summary = {}, team }) {
             </div>
           ) : null}
         </div>
-      )}
-
-      <footer>
-        <span>Stored injury impact</span>
-        <strong>{formatInjuryImpact(summary.totalImpact)}</strong>
-      </footer>
+      ) : null}
     </article>
   )
 }
@@ -505,7 +567,11 @@ function NumberCell({
         value={value}
         onChange={(event) => onChange(side, field, event.target.value)}
       />
-      {secondary ? <small>{secondary}</small> : null}
+      {Array.isArray(secondary) ? (
+        <div className="adjustment-cell-secondary">
+          {secondary.map((line) => <small key={line}>{line}</small>)}
+        </div>
+      ) : secondary ? <small>{secondary}</small> : null}
     </div>
   )
 }
@@ -644,6 +710,9 @@ function GoalieSelectionCard({
   const isUnknown = selectionType === GOALIE_SELECTION_TYPES.UNKNOWN
   const isCustom = selectionType === GOALIE_SELECTION_TYPES.CUSTOM
   const isProvider = selectionType === GOALIE_SELECTION_TYPES.PROVIDER
+  const [providerDetailsExpanded, setProviderDetailsExpanded] = useState(() =>
+    Boolean(values.goalieOverrideEnabled || errorMessage),
+  )
 
   return (
     <article className="analyzer-goalie-card">
@@ -680,97 +749,148 @@ function GoalieSelectionCard({
         </select>
       </label>
 
-      <span className="goalie-selection-source">{sourceLabel}</span>
+      <dl className="goalie-selection-summary">
+        <div>
+          <dt>Goalie adjustment</dt>
+          <dd data-testid={`analyzer-${side}-goalie-adjustment-value`}>
+            {formatAdjustment(isUnknown ? 0 : values.goalieAdjustment)}
+          </dd>
+        </div>
+        <div>
+          <dt>Status</dt>
+          <dd>
+            {isUnknown
+              ? 'Unconfirmed'
+              : isCustom
+                ? 'Unlisted game input'
+                : values.goalieOverrideEnabled
+                  ? 'Provider goalie · game override'
+                  : 'Provider goalie'}
+          </dd>
+          {isCustom ? <small>{sourceLabel}</small> : null}
+        </div>
+      </dl>
 
-      {isUnknown ? (
-        <dl className="goalie-selection-summary">
-          <div><dt>Goalie adjustment</dt><dd>0.00</dd></div>
-          <div><dt>Status</dt><dd>Unconfirmed</dd></div>
-        </dl>
-      ) : (
-        <>
-          {isCustom ? (
-            <label className="field" htmlFor={`analyzer-${side}-goalie-name`}>
-              <span>Name / note (optional)</span>
-              <input
-                id={`analyzer-${side}-goalie-name`}
-                maxLength="120"
-                placeholder="AHL recall"
-                type="text"
-                value={values.selectedGoalieName}
-                onChange={(event) =>
-                  onChange(side, 'goalieName', event.target.value)
-                }
-              />
-              <small>Applies to this game only.</small>
-            </label>
-          ) : null}
-
-          {isProvider ? (
-            <dl className="goalie-selection-summary provider-default">
-              <div>
-                <dt>Team default</dt>
-                <dd>{toNumber(values.goalieTeamDefaultAdjustment).toFixed(2)}</dd>
-              </div>
-              <div>
-                <dt>Game input</dt>
-                <dd>
-                  {values.goalieOverrideEnabled
-                    ? 'Game-specific override'
-                    : 'Uses team default'}
-                </dd>
-              </div>
-            </dl>
-          ) : null}
-
-          <label className="field" htmlFor={`analyzer-${side}-goalie-adjustment`}>
-            <span>{isCustom ? 'Adjustment' : 'Game adjustment'}</span>
+      {isCustom ? (
+        <div className="analyzer-goalie-expanded-inputs">
+          <label className="field" htmlFor={`analyzer-${side}-goalie-name`}>
+            <span>Name / note (optional)</span>
             <input
-              aria-invalid={Boolean(errorMessage)}
-              id={`analyzer-${side}-goalie-adjustment`}
-              inputMode="decimal"
-              max="0"
-              min={configuredMaximum}
-              required
-              step="0.05"
-              type="number"
-              value={
-                values.goalieOverrideEnabled
-                  ? (values.goalieManualAdjustment ?? '')
-                  : (values.goalieTeamDefaultAdjustment ?? '')
-              }
+              id={`analyzer-${side}-goalie-name`}
+              maxLength="120"
+              placeholder="AHL recall"
+              type="text"
+              value={values.selectedGoalieName}
               onChange={(event) =>
-                onChange(side, 'manualAdjustment', event.target.value)
+                onChange(side, 'goalieName', event.target.value)
               }
             />
+            <small>Applies to this game only.</small>
           </label>
+          <GoalieAdjustmentControl
+            configuredMaximum={configuredMaximum}
+            errorMessage={errorMessage}
+            isCustom
+            onChange={onChange}
+            side={side}
+            values={values}
+          />
+        </div>
+      ) : null}
 
-          {isProvider && values.goalieOverrideEnabled ? (
-            <button
-              className="goalie-reset-default-button"
-              type="button"
-              onClick={() => onChange(side, 'resetToTeamDefault', true)}
+      {isProvider ? (
+        <div className="analyzer-goalie-details">
+          <button
+            aria-controls={`analyzer-${side}-goalie-details`}
+            aria-expanded={providerDetailsExpanded}
+            type="button"
+            onClick={() => setProviderDetailsExpanded((current) => !current)}
+          >
+            {providerDetailsExpanded
+              ? 'Hide goalie details'
+              : 'View goalie details'}
+          </button>
+          {providerDetailsExpanded ? (
+            <div
+              className="analyzer-goalie-expanded-inputs"
+              id={`analyzer-${side}-goalie-details`}
             >
-              Reset to team default
-            </button>
+              <p>
+                Team default:{' '}
+                <strong>
+                  {formatAdjustment(values.goalieTeamDefaultAdjustment)}
+                </strong>
+              </p>
+              <GoalieAdjustmentControl
+                configuredMaximum={configuredMaximum}
+                errorMessage={errorMessage}
+                onChange={onChange}
+                side={side}
+                values={values}
+              />
+              {values.goalieOverrideEnabled ? (
+                <button
+                  className="goalie-reset-default-button"
+                  type="button"
+                  onClick={() => onChange(side, 'resetToTeamDefault', true)}
+                >
+                  Reset to team default
+                </button>
+              ) : null}
+              <GoalieStatsSummary
+                errorMessage={goalieDataError}
+                goalie={selectedGoalie}
+                onRetry={onRetry}
+                stats={selectedGoalieStats}
+                status={status}
+              />
+            </div>
           ) : null}
-
-          {errorMessage ? (
-            <p className="field-error" role="alert">{errorMessage}</p>
-          ) : null}
-
-          {isProvider ? (
-            <GoalieStatsSummary
-              errorMessage={goalieDataError}
-              goalie={selectedGoalie}
-              onRetry={onRetry}
-              stats={selectedGoalieStats}
-              status={status}
-            />
-          ) : null}
-        </>
-      )}
+        </div>
+      ) : null}
     </article>
+  )
+}
+
+function GoalieAdjustmentControl({
+  configuredMaximum,
+  errorMessage,
+  isCustom = false,
+  onChange,
+  side,
+  values,
+}) {
+  return (
+    <>
+      <label className="field" htmlFor={`analyzer-${side}-goalie-adjustment`}>
+        <span>
+          {isCustom
+            ? 'Game-specific goalie adjustment'
+            : 'Game adjustment'}
+        </span>
+        <input
+          aria-invalid={Boolean(errorMessage)}
+          id={`analyzer-${side}-goalie-adjustment`}
+          inputMode="decimal"
+          max="0"
+          min={configuredMaximum}
+          required
+          step="0.05"
+          type="number"
+          value={
+            values.goalieOverrideEnabled
+              ? (values.goalieManualAdjustment ?? '')
+              : (values.goalieTeamDefaultAdjustment ?? '')
+          }
+          onChange={(event) =>
+            onChange(side, 'manualAdjustment', event.target.value)
+          }
+        />
+      </label>
+      {errorMessage ? (
+        <p className="field-error" role="alert">{errorMessage}</p>
+      ) : null}
+    </>
   )
 }
 

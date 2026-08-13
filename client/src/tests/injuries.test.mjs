@@ -241,7 +241,7 @@ test('summary normalization keeps zero-impact skaters visible and forces goalies
   assert.equal(summary.totalImpact, -1)
 })
 
-test('Analyzer shows both teams, positions, zero-impact context, goalies and compact overflow', () => {
+test('Analyzer injuries stay compact and expand to zero-impact and goalie context', () => {
   const awaySummary = {
     injuries: [
       { id: '1', impact: -1, playerName: 'Away Center', position: 'C' },
@@ -258,7 +258,7 @@ test('Analyzer shows both teams, positions, zero-impact context, goalies and com
     ],
     totalImpact: -1.5,
   }
-  const markup = renderToStaticMarkup(
+  const collapsedMarkup = renderToStaticMarkup(
     React.createElement(AdjustmentComparisonModule.InjuryContextPanel, {
       awaySummary,
       awayTeam: { id: 'ANA', name: 'Anaheim Ducks' },
@@ -266,18 +266,35 @@ test('Analyzer shows both teams, positions, zero-impact context, goalies and com
       homeTeam: { id: 'BOS', name: 'Boston Bruins' },
     }),
   )
+  const expandedMarkup = renderToStaticMarkup(
+    React.createElement(AdjustmentComparisonModule.InjuryContextCard, {
+      initialExpanded: true,
+      summary: awaySummary,
+      team: { id: 'ANA', name: 'Anaheim Ducks' },
+    }),
+  )
+  const emptyMarkup = renderToStaticMarkup(
+    React.createElement(AdjustmentComparisonModule.InjuryContextCard, {
+      summary: { injuries: [], totalImpact: 0 },
+      team: { id: 'NYR', name: 'New York Rangers' },
+    }),
+  )
 
-  assert.match(markup, /Anaheim Ducks injuries/)
-  assert.match(markup, /Boston Bruins injuries/)
-  assert.match(markup, /Away Center · C/)
-  assert.match(markup, /Away Context · D/)
-  assert.match(markup, /zero-impact/)
-  assert.match(markup, /Show all injuries/)
-  assert.match(markup, /Away Extra · RW/)
-  assert.match(markup, /Goalie availability · excluded from injury impact/)
-  assert.match(markup, /Stored injury impact/)
-  assert.match(markup, /-2\.0/)
-  assert.match(markup, /-1\.5/)
+  assert.match(collapsedMarkup, /Anaheim Ducks/)
+  assert.match(collapsedMarkup, /Boston Bruins/)
+  assert.match(collapsedMarkup, /5 active/)
+  assert.match(collapsedMarkup, /Stored impact -2\.0/)
+  assert.match(collapsedMarkup, /View injuries/)
+  assert.doesNotMatch(collapsedMarkup, /Away Center/)
+  assert.match(expandedMarkup, /Hide injuries/)
+  assert.match(expandedMarkup, /Away Center · C/)
+  assert.match(expandedMarkup, /Away Context · D/)
+  assert.match(expandedMarkup, /zero-impact/)
+  assert.match(expandedMarkup, /Away Extra · RW/)
+  assert.match(expandedMarkup, /Goalie availability · excluded from injury impact/)
+  assert.match(emptyMarkup, /0 active/)
+  assert.match(emptyMarkup, /Stored impact 0\.0/)
+  assert.doesNotMatch(emptyMarkup, /View injuries|Hide injuries/)
 })
 
 test('stored plus game injury behavior and helper remain unchanged', async () => {
