@@ -19,6 +19,7 @@ import {
   createBet,
   deleteBet,
   fetchBets,
+  settleCompletedBets,
   updateBet,
 } from '../services/betsApi.js'
 import {
@@ -47,6 +48,8 @@ import {
   BET_RESULT_OPTIONS,
   calculateProfit,
   createBetPayloadFromSavedAnalysis,
+  formatSettlementSummary,
+  getBetSettlementDisplay,
   getBetSignature,
   hasSavedAnalysesInLocalStorage,
   loadSavedAnalyses,
@@ -216,6 +219,7 @@ function BetTracker() {
   const [modelStatusFilter, setModelStatusFilter] = useState('all')
   const [actionMessage, setActionMessage] = useState('')
   const [actionStatus, setActionStatus] = useState('idle')
+  const [settlementStatus, setSettlementStatus] = useState('idle')
   const [migrationAvailable, setMigrationAvailable] = useState(() =>
     hasSavedAnalysesInLocalStorage(),
   )
@@ -478,14 +482,14 @@ function BetTracker() {
   const bankrollCashValidation = useMemo(
     () =>
       validateBankrollCashTransaction(bankrollCashDraft, {
-        currentBankroll: bankrollSummary?.currentBankroll,
+        currentBankroll: bankrollSummary?.availableBankroll,
         today: todayInputValue,
         type: bankrollCashMode || 'DEPOSIT',
       }),
     [
       bankrollCashDraft,
       bankrollCashMode,
-      bankrollSummary?.currentBankroll,
+      bankrollSummary?.availableBankroll,
       todayInputValue,
     ],
   )
@@ -523,6 +527,27 @@ function BetTracker() {
     setActionStatus('success')
     setActionMessage('Bet deleted.')
     await refreshBankrollQuietly()
+  }
+
+  const handleSettleCompletedBets = async () => {
+    setSettlementStatus('saving')
+    setActionStatus('idle')
+    setActionMessage('')
+
+    try {
+      const settlementSummary = await settleCompletedBets()
+      const refreshedBets = await fetchBets()
+
+      applyBets(refreshedBets)
+      await refreshBankrollQuietly()
+      setSettlementStatus('success')
+      setActionStatus('success')
+      setActionMessage(formatSettlementSummary(settlementSummary))
+    } catch (error) {
+      setSettlementStatus('error')
+      setActionStatus('error')
+      setActionMessage(error.message)
+    }
   }
 
   const handleImportLocalBets = async () => {
@@ -931,6 +956,19 @@ function BetTracker() {
           <button type="button" onClick={loadBets}>
             Refresh
           </button>
+          <button
+            className="secondary-inline-button"
+            type="button"
+            disabled={settlementStatus === 'saving'}
+            onClick={handleSettleCompletedBets}
+          >
+            <RefreshCw aria-hidden="true" size={15} />
+            <span>
+              {settlementStatus === 'saving'
+                ? 'Checking results...'
+                : 'Settle completed bets'}
+            </span>
+          </button>
         </div>
 
         {actionMessage ? (
@@ -1232,7 +1270,7 @@ function BankrollSummaryCards({ summary }) {
           summary.availableBankroll,
           summary.currency,
         )}
-        detail="Current minus pending"
+        detail="Ready to wager"
         tone={profitClass(summary.availableBankroll)}
       />
       <SummaryMetric
@@ -1639,6 +1677,8 @@ function BetCard({ bet, onDelete, onUpdate }) {
   const [message, setMessage] = useState('')
 
   const profit = Number.isFinite(bet.profit) ? bet.profit : calculateProfit(bet)
+  const settlementDisplay = getBetSettlementDisplay(bet)
+  const isSettled = bet.result !== 'pending'
 
   const updateField = async (updates) => {
     setStatus('saving')
@@ -1729,6 +1769,14 @@ function BetCard({ bet, onDelete, onUpdate }) {
           <strong>{bet.selectedSide.name}</strong>
           <small>{bet.selectedSide.homeAway === 'home' ? 'Home' : 'Away'}</small>
         </div>
+        <div className={`bet-settlement-status ${settlementDisplay.tone}`}>
+          <span>Settlement</span>
+          <strong>{settlementDisplay.label}</strong>
+          <small>{settlementDisplay.message}</small>
+          {settlementDisplay.finalScore ? (
+            <small>{settlementDisplay.finalScore}</small>
+          ) : null}
+        </div>
       </div>
 
       <div className="bet-odds-grid">
@@ -1782,6 +1830,7 @@ function BetCard({ bet, onDelete, onUpdate }) {
         <label className="field tracker-field">
           <span>Stake</span>
           <input
+            disabled={isSettled}
             type="number"
             min="0.01"
             step="0.25"
@@ -1844,7 +1893,12 @@ function BetCard({ bet, onDelete, onUpdate }) {
           <button
             className="delete-bet-button"
             type="button"
-            disabled={status === 'saving'}
+            disabled={status === 'saving' || isSettled}
+            title={
+              isSettled
+                ? 'Settled bets are retained to preserve bankroll history.'
+                : 'Delete this pending bet and return its locked stake.'
+            }
             onClick={onDelete}
           >
             Delete

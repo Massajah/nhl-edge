@@ -11,7 +11,8 @@ export const MAX_POWER_RATING_UPDATE_RANGE_DAYS = 31
 export const PROCESSED_GAMES_PREVIEW_LIMIT = 8
 export const AUTOMATIC_POWER_RATING_UPDATE_STATUSES = Object.freeze({
   PARTIAL: 'partial',
-  REQUIRES_INITIALIZATION: 'requires_initialization',
+  PRESEASON_READY: 'preseason_ready',
+  UNPROCESSED_GAMES: 'unprocessed_games',
   UNAVAILABLE: 'unavailable',
   UPDATED: 'updated',
   UP_TO_DATE: 'up_to_date',
@@ -438,7 +439,7 @@ export const getPowerRatingUpdateOutcomeMessage = (result) => {
     return 'No new completed games were available. All eligible games in this range were already processed.'
   }
 
-  return 'No completed NHL regular-season games were available in this range.'
+  return 'No eligible completed regular-season games found for this range.'
 }
 
 export const getMostRecentProcessedGameDate = (processedGames = []) =>

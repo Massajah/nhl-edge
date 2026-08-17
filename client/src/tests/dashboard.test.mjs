@@ -870,7 +870,7 @@ test('Dashboard renders compact automatic Power Rating update states', () => {
   )
 })
 
-test('Dashboard initialization-required status links to manual update workflow', () => {
+test('Dashboard preseason-ready status is neutral and requires no action', () => {
   const html = renderDashboard({
     initialAutomaticRatingUpdateResult: automaticUpdateResult({
       dateRange: null,
@@ -879,18 +879,39 @@ test('Dashboard initialization-required status links to manual update workflow',
       gamesProcessed: 0,
       gamesSkipped: 0,
       latestProcessedGame: null,
-      message:
-        'Power Rating automatic updates need an initial processing point.',
+      message: 'Power Ratings are ready for season start.',
       ratingSettingsUsed: null,
-      status: 'requires_initialization',
+      status: 'preseason_ready',
+      success: true,
+    }),
+    onOpenManualPowerRatingUpdate: () => {},
+  })
+
+  assert.match(html, /Power Ratings ready for season start/)
+  assert.match(html, /automatic-rating-update-status neutral/)
+  assert.doesNotMatch(html, /initialization required/i)
+  assert.doesNotMatch(html, /Update Power Ratings<\/button>/)
+  assertNoInvalidNumbers(html)
+})
+
+test('Dashboard unprocessed-games status links to update workflow', () => {
+  const html = renderDashboard({
+    initialAutomaticRatingUpdateResult: automaticUpdateResult({
+      gamesAlreadyProcessed: 0,
+      gamesFound: 3,
+      gamesProcessed: 0,
+      latestProcessedGame: null,
+      message: 'Completed games are waiting to be processed.',
+      status: 'unprocessed_games',
       success: false,
     }),
     onOpenManualPowerRatingUpdate: () => {},
   })
 
-  assert.match(html, /Power Rating initialization required/)
-  assert.match(html, /initial processing point/)
-  assert.match(html, /Open manual update/)
+  assert.match(html, /Power Rating update available/)
+  assert.match(html, /Completed games are waiting to be processed\./)
+  assert.match(html, /Update Power Ratings/)
+  assert.doesNotMatch(html, /initialization required/i)
   assertNoInvalidNumbers(html)
 })
 

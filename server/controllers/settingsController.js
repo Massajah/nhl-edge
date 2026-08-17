@@ -3,6 +3,42 @@ const bettingSettingsService = require('../services/bettingSettingsService')
 const quickRematchSettingsService = require('../services/quickRematchSettingsService')
 const bookmakerPreferencesService = require('../services/bookmakerPreferencesService')
 const { marketOddsService } = require('../services/marketOddsService')
+const userDataResetService = require('../services/userDataResetService')
+
+const resetSettingsToDefaults = async (request, response, next) => {
+  try {
+    const result = await userDataResetService.resetSettingsToDefaults(
+      request.user.id,
+    )
+
+    response.json(result)
+  } catch (error) {
+    next(error)
+  }
+}
+
+const resetForNewSeason = async (request, response, next) => {
+  try {
+    const result = await userDataResetService.resetForNewSeason(request.user.id)
+
+    response.json(result)
+  } catch (error) {
+    next(error)
+  }
+}
+
+const factoryResetUserData = async (request, response, next) => {
+  try {
+    const result = await userDataResetService.factoryResetUserData(
+      request.user.id,
+      request.body,
+    )
+
+    response.json(result)
+  } catch (error) {
+    next(error)
+  }
+}
 
 const getBookmakerPreferences = async (request, response, next) => {
   try {
@@ -171,13 +207,16 @@ const resetQuickRematchSettings = async (request, response, next) => {
 }
 
 module.exports = {
+  factoryResetUserData,
   getBettingSettings,
   getBookmakerPreferences,
   getQuickRematchSettings,
   getRatingEngineSettings,
   resetBettingSettings,
+  resetForNewSeason,
   resetQuickRematchSettings,
   resetRatingEngineSettings,
+  resetSettingsToDefaults,
   updateBettingSettings,
   updateBookmakerPreferences,
   updateQuickRematchSettings,

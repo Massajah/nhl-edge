@@ -20,6 +20,7 @@ const {
   deduplicateGamesById,
   fetchNhlScheduleGames,
 } = require('./powerRatingSimulationService')
+const nhlSeasonService = require('./nhlSeasonService')
 const {
   SKIP_REASONS,
   classifyGameEligibility,
@@ -40,7 +41,8 @@ const LIVE_UPDATE_GAME_TYPE_FILTERS = Object.freeze({
 const PRESENTATION_PRECISION_DECIMALS = 6
 const AUTOMATIC_UPDATE_STATUSES = Object.freeze({
   PARTIAL: 'partial',
-  REQUIRES_INITIALIZATION: 'requires_initialization',
+  PRESEASON_READY: 'preseason_ready',
+  UNPROCESSED_GAMES: 'unprocessed_games',
   UNAVAILABLE: 'unavailable',
   UPDATED: 'updated',
   UP_TO_DATE: 'up_to_date',
@@ -317,15 +319,26 @@ const loadExistingProcessedGameIds = async ({
 }
 
 const findLatestProcessedRatingGame = async ({
+  dateRange = null,
   processedRatingGameModel,
   userId,
 }) => {
+  const filter = {
+    userId,
+    ...(dateRange
+      ? {
+          gameDate: {
+            $gte: new Date(`${dateRange.from}T00:00:00.000Z`),
+            $lte: new Date(`${dateRange.to}T23:59:59.999Z`),
+          },
+        }
+      : {}),
+  }
+
   if (typeof processedRatingGameModel.findOne === 'function') {
     const query = maybeLean(
       sortLatestProcessedGame(
-        processedRatingGameModel.findOne({
-          userId,
-        }),
+        processedRatingGameModel.findOne(filter),
       ),
     )
 
@@ -335,9 +348,7 @@ const findLatestProcessedRatingGame = async ({
   const query = maybeLean(
     limitOne(
       sortLatestProcessedGame(
-        processedRatingGameModel.find({
-          userId,
-        }),
+        processedRatingGameModel.find(filter),
       ),
     ),
   )
@@ -367,22 +378,78 @@ const subtractDays = (date, days) =>
 
 const determineAutomaticUpdateDateRange = ({
   latestProcessedGame,
+  seasonEndDate,
+  seasonStartDate,
   throughDate,
 }) => {
+  const effectiveThroughDate =
+    seasonEndDate && seasonEndDate < throughDate ? seasonEndDate : throughDate
   const latestProcessedDate = getLatestProcessedGameDate(latestProcessedGame)
 
-  if (!latestProcessedDate) {
+  if (seasonStartDate && effectiveThroughDate < seasonStartDate) {
     return null
+  }
+
+  if (!latestProcessedDate) {
+    if (!seasonStartDate) {
+      return null
+    }
+
+    return {
+      from: seasonStartDate,
+      to: effectiveThroughDate,
+    }
   }
 
   const overlapStart = subtractDays(
     latestProcessedDate,
     AUTO_UPDATE_SAFE_OVERLAP_DAYS,
   )
+  const seasonScopedOverlapStart =
+    seasonStartDate && overlapStart < seasonStartDate
+      ? seasonStartDate
+      : overlapStart
 
   return {
-    from: overlapStart <= throughDate ? overlapStart : throughDate,
-    to: throughDate,
+    from:
+      seasonScopedOverlapStart <= effectiveThroughDate
+        ? seasonScopedOverlapStart
+        : effectiveThroughDate,
+    to: effectiveThroughDate,
+  }
+}
+
+const getCurrentSeasonBoundary = async ({
+  seasonMetadataProvider,
+  throughDate,
+}) => {
+  const seasonMetadata = await seasonMetadataProvider({ throughDate })
+  const currentSeason = seasonMetadata?.seasons?.find(
+    (season) =>
+      season.id === seasonMetadata.currentSeasonId || season.isCurrent,
+  )
+
+  if (!currentSeason?.startDate || !currentSeason?.endDate) {
+    throw new RatingUpdateError(
+      'Current NHL regular-season dates are unavailable.',
+      503,
+    )
+  }
+
+  const parsedStart = parseUpdateDate(currentSeason.startDate, 'season startDate')
+  const parsedEnd = parseUpdateDate(currentSeason.endDate, 'season endDate')
+
+  if (parsedStart.timestamp > parsedEnd.timestamp) {
+    throw new RatingUpdateError(
+      'Current NHL regular-season dates are invalid.',
+      503,
+    )
+  }
+
+  return {
+    endDate: parsedEnd.date,
+    id: currentSeason.id ?? seasonMetadata.currentSeasonId ?? null,
+    startDate: parsedStart.date,
   }
 }
 
@@ -634,6 +701,7 @@ const buildEmptyAutomaticUpdateResult = ({
   ratingSettingsUsed,
   status,
   success:
+    status === AUTOMATIC_UPDATE_STATUSES.PRESEASON_READY ||
     status === AUTOMATIC_UPDATE_STATUSES.UPDATED ||
     status === AUTOMATIC_UPDATE_STATUSES.UP_TO_DATE,
 })
@@ -648,6 +716,8 @@ const buildAutomaticUpdateResult = ({
     ? AUTOMATIC_UPDATE_STATUSES.PARTIAL
     : summary.gamesProcessed > 0
       ? AUTOMATIC_UPDATE_STATUSES.UPDATED
+      : !latestProcessedGame
+        ? AUTOMATIC_UPDATE_STATUSES.PRESEASON_READY
       : AUTOMATIC_UPDATE_STATUSES.UP_TO_DATE
   const latestProcessedGameFromRun =
     getLatestProcessedGameFromUpdateResult(summary.processedGames) ??
@@ -659,6 +729,7 @@ const buildAutomaticUpdateResult = ({
     ratingSettingsUsed,
     status,
     success:
+      status === AUTOMATIC_UPDATE_STATUSES.PRESEASON_READY ||
       status === AUTOMATIC_UPDATE_STATUSES.UPDATED ||
       status === AUTOMATIC_UPDATE_STATUSES.UP_TO_DATE,
   }
@@ -1147,10 +1218,25 @@ const runAutomaticPowerRatingUpdate = async (
   const normalizedInput = normalizeAutomaticUpdateInput(payload, {
     todayProvider: options.todayProvider,
   })
+  const seasonMetadataProvider =
+    options.seasonMetadataProvider ??
+    (({ throughDate }) =>
+      nhlSeasonService.getAvailablePowerRatingHistorySeasons({
+        todayProvider: () => throughDate,
+      }))
+  let currentSeason
   let latestProcessedGame
 
   try {
+    currentSeason = await getCurrentSeasonBoundary({
+      seasonMetadataProvider,
+      throughDate: normalizedInput.throughDate,
+    })
     latestProcessedGame = await findLatestProcessedRatingGame({
+      dateRange: {
+        from: currentSeason.startDate,
+        to: currentSeason.endDate,
+      },
       processedRatingGameModel,
       userId,
     })
@@ -1164,6 +1250,8 @@ const runAutomaticPowerRatingUpdate = async (
     buildLatestProcessedGameResponse(latestProcessedGame)
   const dateRange = determineAutomaticUpdateDateRange({
     latestProcessedGame,
+    seasonEndDate: currentSeason.endDate,
+    seasonStartDate: currentSeason.startDate,
     throughDate: normalizedInput.throughDate,
   })
 
@@ -1171,9 +1259,8 @@ const runAutomaticPowerRatingUpdate = async (
     return buildEmptyAutomaticUpdateResult({
       dateRange: null,
       latestProcessedGame: null,
-      message:
-        'Power Rating automatic updates need an initial processing point.',
-      status: AUTOMATIC_UPDATE_STATUSES.REQUIRES_INITIALIZATION,
+      message: 'Power Ratings are ready for season start.',
+      status: AUTOMATIC_UPDATE_STATUSES.PRESEASON_READY,
     })
   }
 

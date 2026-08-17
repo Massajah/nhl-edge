@@ -20,14 +20,24 @@ export const BANKROLL_TRANSACTION_TYPES = [
   'STARTING_BALANCE',
   'DEPOSIT',
   'WITHDRAWAL',
+  'BET_STAKE',
+  'BET_WIN_RETURN',
+  'BET_VOID_RETURN',
   'BET_SETTLEMENT',
+  'MANUAL_ADJUSTMENT',
+  'SETTLEMENT_REVERSAL',
   'ADJUSTMENT',
 ]
 
 export const BANKROLL_TRANSACTION_LABELS = Object.freeze({
   ADJUSTMENT: 'Adjustment',
   BET_SETTLEMENT: 'Bet settlement',
+  BET_STAKE: 'Bet stake',
+  BET_VOID_RETURN: 'Void / cancellation return',
+  BET_WIN_RETURN: 'Winning return',
   DEPOSIT: 'Deposit',
+  MANUAL_ADJUSTMENT: 'Manual settlement correction',
+  SETTLEMENT_REVERSAL: 'Settlement reversal',
   STARTING_BALANCE: 'Starting balance',
   WITHDRAWAL: 'Withdrawal',
 })

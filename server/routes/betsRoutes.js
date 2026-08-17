@@ -8,6 +8,7 @@ router.use(authenticate)
 
 router.get('/', betsController.getBets)
 router.post('/', betsController.createBet)
+router.post('/settle', betsController.settlePendingBets)
 router.put('/:id', betsController.updateBet)
 router.delete('/:id', betsController.deleteBet)
 

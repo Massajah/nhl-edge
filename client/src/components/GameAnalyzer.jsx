@@ -960,6 +960,10 @@ function GameAnalyzer({
     onNavigate?.('settings')
 
     if (typeof window !== 'undefined') {
+      const settingsUrl = new URL(window.location.href)
+
+      settingsUrl.searchParams.set('tab', 'betting')
+      window.history.replaceState(window.history.state, '', settingsUrl)
       window.setTimeout(() => {
         document
           .getElementById('betting-staking-settings')

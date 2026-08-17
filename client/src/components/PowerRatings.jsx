@@ -10,8 +10,10 @@ import {
 import { getTeamMetadata } from '../data/teamMetadata.js'
 import { NHL_TEAMS } from '../data/teams.js'
 import {
+  getStartingRatingScale,
   getPowerRatingHistory,
   getPowerRatingHistorySeasons,
+  updateStartingRatingScale,
 } from '../services/powerRatingsApi.js'
 import {
   POWER_RATING_HISTORY_DEFAULT_LIMIT,
@@ -40,6 +42,15 @@ import {
   getEffectiveBaseRating,
   parsePowerRatingDraftValue,
 } from '../utils/powerRatings.js'
+import {
+  DEFAULT_STARTING_RATING_SCALE,
+  STANDARD_STARTING_RATING_SCALES,
+  STARTING_RATING_SCALE_MODES,
+  createStartingRatingScaleDraft,
+  isStartingRatingScaleDirty,
+  normalizeStartingRatingScale,
+  parseStartingRatingScaleDraft,
+} from '../utils/startingRatingScale.js'
 import {
   canRunPowerRatingUpdate,
   createDefaultPowerRatingUpdateRange,
@@ -249,6 +260,71 @@ function PowerRatings({
   const [historySeasonStatus, setHistorySeasonStatus] = useState('idle')
   const [historySeasonError, setHistorySeasonError] = useState('')
   const historyTopRef = useRef(null)
+  const [startingScale, setStartingScale] = useState(
+    DEFAULT_STARTING_RATING_SCALE,
+  )
+  const [startingScaleDraft, setStartingScaleDraft] = useState(() =>
+    createStartingRatingScaleDraft(DEFAULT_STARTING_RATING_SCALE),
+  )
+  const [startingScaleStatus, setStartingScaleStatus] = useState('loading')
+  const [startingScaleMessage, setStartingScaleMessage] = useState('')
+  const [startingScaleMessageTone, setStartingScaleMessageTone] = useState('')
+  const [startingScaleLocked, setStartingScaleLocked] = useState(false)
+
+  const loadStartingScale = () => {
+    setStartingScaleStatus('loading')
+    setStartingScaleMessage('')
+    setStartingScaleMessageTone('')
+
+    return getStartingRatingScale()
+      .then((result) => {
+        const normalizedScale = normalizeStartingRatingScale(result.scale)
+
+        setStartingScale(normalizedScale)
+        setStartingScaleDraft(createStartingRatingScaleDraft(normalizedScale))
+        setStartingScaleLocked(Boolean(result.locked))
+        setStartingScaleStatus('success')
+
+        return normalizedScale
+      })
+      .catch((error) => {
+        setStartingScaleStatus('error')
+        setStartingScaleMessage(error.message)
+        setStartingScaleMessageTone('error')
+        throw error
+      })
+  }
+
+  useEffect(() => {
+    let isCurrent = true
+
+    getStartingRatingScale()
+      .then((result) => {
+        if (!isCurrent) {
+          return
+        }
+
+        const normalizedScale = normalizeStartingRatingScale(result.scale)
+
+        setStartingScale(normalizedScale)
+        setStartingScaleDraft(createStartingRatingScaleDraft(normalizedScale))
+        setStartingScaleLocked(Boolean(result.locked))
+        setStartingScaleStatus('success')
+      })
+      .catch((error) => {
+        if (!isCurrent) {
+          return
+        }
+
+        setStartingScaleStatus('error')
+        setStartingScaleMessage(error.message)
+        setStartingScaleMessageTone('error')
+      })
+
+    return () => {
+      isCurrent = false
+    }
+  }, [])
 
   useEffect(() => {
     if (openUpdatePanelRequest <= 0) {
@@ -315,6 +391,15 @@ function PowerRatings({
     [ratings],
   )
 
+  const startingScaleDraftValidation = useMemo(
+    () => parseStartingRatingScaleDraft(startingScaleDraft),
+    [startingScaleDraft],
+  )
+  const startingScaleDirty = isStartingRatingScaleDirty(
+    startingScaleDraft,
+    startingScale,
+  )
+
   const draftSummary = useMemo(() => {
     const updates = {}
     const dirtyTeamIds = []
@@ -344,11 +429,12 @@ function PowerRatings({
           return
         }
 
-        teamUpdate[field.key] = parsedValue
+        const isDirtyField = parsedValue !== rating[field.key]
 
-        if (parsedValue !== rating[field.key]) {
+        if (isDirtyField) {
           isDirty = true
           dirtyFields.add(`${team.id}-${field.key}`)
+          teamUpdate[field.key] = parsedValue
         }
       })
 
@@ -381,11 +467,14 @@ function PowerRatings({
     const averageRating =
       ratedTeams.reduce((total, team) => total + team.effectiveRating, 0) /
       ratedTeams.length
+    const liveBaseRatings = ratedTeams.map((team) => team.baseRating)
 
     return {
       highestTeam,
       lowestTeam,
       averageRating,
+      liveMaximum: Math.max(...liveBaseRatings),
+      liveMinimum: Math.min(...liveBaseRatings),
     }
   }, [ratedTeams])
 
@@ -546,6 +635,104 @@ function PowerRatings({
     isHistoryQueryReady,
   ])
 
+  const handleStartingScaleSelection = (value) => {
+    if (startingScaleLocked) {
+      return
+    }
+
+    if (value === STARTING_RATING_SCALE_MODES.CUSTOM) {
+      setStartingScaleDraft(
+        createStartingRatingScaleDraft({
+          max: startingScale.max,
+          min: startingScale.min,
+          mode: STARTING_RATING_SCALE_MODES.CUSTOM,
+        }),
+      )
+    } else {
+      const preset = STANDARD_STARTING_RATING_SCALES.find(
+        (option) => option.id === value,
+      )
+
+      if (preset) {
+        setStartingScaleDraft(
+          createStartingRatingScaleDraft({
+            ...preset,
+            mode: STARTING_RATING_SCALE_MODES.STANDARD,
+          }),
+        )
+      }
+    }
+
+    setStartingScaleMessage('')
+    setStartingScaleMessageTone('')
+  }
+
+  const handleStartingScaleDraftChange = (field, value) => {
+    if (startingScaleLocked) {
+      return
+    }
+
+    setStartingScaleDraft((currentDraft) => ({
+      ...currentDraft,
+      [field]: value,
+    }))
+    setStartingScaleMessage('')
+    setStartingScaleMessageTone('')
+  }
+
+  const handleSaveStartingScale = async (event) => {
+    event.preventDefault()
+
+    if (startingScaleLocked) {
+      return
+    }
+
+    const validation = parseStartingRatingScaleDraft(startingScaleDraft)
+
+    if (!validation.isValid) {
+      setStartingScaleStatus('success')
+      setStartingScaleMessage('Fix the custom scale values before saving.')
+      setStartingScaleMessageTone('error')
+      return
+    }
+
+    setStartingScaleStatus('saving')
+    setStartingScaleMessage('')
+    setStartingScaleMessageTone('')
+
+    try {
+      const result = await updateStartingRatingScale({
+        max: validation.scale.max,
+        min: validation.scale.min,
+        mode: validation.scale.mode,
+      })
+      const normalizedScale = normalizeStartingRatingScale(result.scale)
+
+      setStartingScale(normalizedScale)
+      setStartingScaleDraft(createStartingRatingScaleDraft(normalizedScale))
+      setStartingScaleLocked(Boolean(result.locked))
+      setStartingScaleStatus('success')
+      setStartingScaleMessage(
+        'Starting scale saved. Existing Power Ratings were not changed.',
+      )
+      setStartingScaleMessageTone('success')
+    } catch (error) {
+      setStartingScaleStatus('success')
+      setStartingScaleMessage(error.message)
+      setStartingScaleMessageTone('error')
+
+      if (/cannot be changed after live rating updates begin/i.test(error.message)) {
+        setStartingScaleLocked(true)
+      }
+    }
+  }
+
+  const handleRetryStartingScale = () => {
+    loadStartingScale().catch(() => {
+      // Error state is displayed in the scale card.
+    })
+  }
+
   const handleDraftChange = (teamId, field, value) => {
     setDraftRatings((currentDraftRatings) => ({
       ...currentDraftRatings,
@@ -602,7 +789,7 @@ function PowerRatings({
     const confirmed =
       typeof window === 'undefined' ||
       window.confirm(
-        'Reset all power ratings in MongoDB to defaults? This will replace every team rating.',
+        `Reset all power ratings in MongoDB to the selected starting center (${startingScale.center.toFixed(2)}) and clear team adjustments? This will replace every team rating.`,
       )
 
     if (!confirmed) {
@@ -618,7 +805,9 @@ function PowerRatings({
       setDraftRatings(createDraftRatings(nextRatings))
       setResetStatus('success')
       setSaveStatus('success')
-      setSaveMessage('Reset all teams to default MongoDB values.')
+      setSaveMessage(
+        `Reset all teams to the selected starting center (${startingScale.center.toFixed(2)}).`,
+      )
     } catch (error) {
       setResetStatus('idle')
       setSaveStatus('error')
@@ -705,6 +894,12 @@ function PowerRatings({
       const latestProcessedGameDate = getMostRecentProcessedGameDate(
         result.processedGames,
       )
+
+      if (result.gamesProcessed > 0) {
+        loadStartingScale().catch(() => {
+          // The scale row displays lifecycle refresh errors independently.
+        })
+      }
 
       setUpdateResult(result)
       setUpdateStatus('success')
@@ -863,6 +1058,14 @@ function PowerRatings({
     : saveStatus === 'success' && !hasDirtyRatings
       ? 'Saved'
       : 'Save Changes'
+  const startingScaleSelectionValue = startingScaleDraft.preset
+  const displayedStartingScale = startingScaleDraftValidation.isValid
+    ? startingScaleDraftValidation.scale
+    : startingScale
+  const startingScaleIsSaving = startingScaleStatus === 'saving'
+  const startingScaleReady = ['saving', 'success'].includes(
+    startingScaleStatus,
+  )
 
   return (
     <section className="power-ratings-page" aria-label="Power Ratings">
@@ -956,6 +1159,22 @@ function PowerRatings({
               </p>
             ) : null}
 
+            <StartingRatingScaleCard
+              displayedScale={displayedStartingScale}
+              draft={startingScaleDraft}
+              fieldErrors={startingScaleDraftValidation.fieldErrors}
+              isDirty={startingScaleDirty}
+              locked={startingScaleLocked}
+              message={startingScaleMessage}
+              messageTone={startingScaleMessageTone}
+              onDraftChange={handleStartingScaleDraftChange}
+              onRetry={handleRetryStartingScale}
+              onSave={handleSaveStartingScale}
+              onSelectionChange={handleStartingScaleSelection}
+              selectionValue={startingScaleSelectionValue}
+              status={startingScaleStatus}
+            />
+
             <div className="ratings-summary" aria-label="Power ratings summary">
               <SummaryMetric
                 label="Base Home Advantage"
@@ -976,6 +1195,11 @@ function PowerRatings({
                 label="Average rating"
                 value={formatRating(summary.averageRating)}
                 detail={`${NHL_TEAMS.length} teams`}
+              />
+              <SummaryMetric
+                label="Current live range"
+                value={`${formatRating(summary.liveMinimum)}–${formatRating(summary.liveMaximum)}`}
+                detail="May exceed starting range"
               />
             </div>
 
@@ -1040,10 +1264,16 @@ function PowerRatings({
               <button
                 className="reset-button"
                 type="button"
-                disabled={isSaving || isResetting}
+                disabled={
+                  isSaving ||
+                  isResetting ||
+                  !startingScaleReady ||
+                  startingScaleDirty ||
+                  startingScaleIsSaving
+                }
                 onClick={handleReset}
               >
-                {isResetting ? 'Resetting...' : 'Reset to defaults'}
+                {isResetting ? 'Resetting...' : 'Reset to starting center'}
               </button>
             </div>
 
@@ -1179,6 +1409,164 @@ function PowerRatings({
           />
         )}
       </div>
+    </section>
+  )
+}
+
+function StartingRatingScaleCard({
+  displayedScale,
+  draft,
+  fieldErrors,
+  isDirty,
+  locked,
+  message,
+  messageTone,
+  onDraftChange,
+  onRetry,
+  onSave,
+  onSelectionChange,
+  selectionValue,
+  status,
+}) {
+  if (status === 'loading') {
+    return (
+      <div className="starting-rating-scale-row compact-state" role="status">
+        <strong>Starting Rating Scale</strong>
+        <span>Loading saved scale…</span>
+      </div>
+    )
+  }
+
+  if (status === 'error') {
+    return (
+      <div className="starting-rating-scale-row compact-state error">
+        <div>
+          <strong>Starting Rating Scale unavailable</strong>
+          <span>{message}</span>
+        </div>
+        <button type="button" onClick={onRetry}>
+          Try again
+        </button>
+      </div>
+    )
+  }
+
+  const isCustom = draft.mode === STARTING_RATING_SCALE_MODES.CUSTOM
+  const isNonDefault = isCustom || !displayedScale.calibratedDefault
+
+  return (
+    <section
+      className={`starting-rating-scale-row ${locked ? 'locked' : ''}`}
+      aria-labelledby="starting-rating-scale-heading"
+    >
+      <div className="starting-rating-scale-heading">
+        <p className="eyebrow">Initialization</p>
+        <h3 id="starting-rating-scale-heading">Starting Rating Scale</h3>
+      </div>
+
+      <form className="starting-rating-scale-form" onSubmit={onSave}>
+        <label className="starting-scale-selector">
+          <span className="visually-hidden">Starting Rating Scale preset</span>
+          <select
+            disabled={locked}
+            value={selectionValue}
+            onChange={(event) => onSelectionChange(event.target.value)}
+          >
+            {STANDARD_STARTING_RATING_SCALES.map((option) => (
+              <option key={option.id} value={option.id}>
+                {option.label}
+              </option>
+            ))}
+            <option value={STARTING_RATING_SCALE_MODES.CUSTOM}>
+              {isCustom
+                ? `Custom · ${formatRating(displayedScale.min)}–${formatRating(displayedScale.max)}`
+                : 'Custom'}
+            </option>
+          </select>
+        </label>
+
+        {!locked ? (
+          <button
+            className="save-starting-scale-button"
+            disabled={
+              !isDirty ||
+              status === 'saving' ||
+              Object.keys(fieldErrors).length > 0
+            }
+            type="submit"
+          >
+            {status === 'saving' ? 'Saving…' : 'Save'}
+          </button>
+        ) : null}
+
+        <span className={`starting-scale-status ${locked ? 'locked' : ''}`}>
+          {locked ? 'Starting scale locked' : 'Preseason'}
+        </span>
+
+        {isCustom ? (
+          <div className="starting-scale-custom-fields">
+            <label className="field">
+              <span>Minimum starting rating</span>
+              <input
+                aria-invalid={Boolean(fieldErrors.min)}
+                disabled={locked}
+                inputMode="decimal"
+                max="100"
+                min="0"
+                step="0.01"
+                type="number"
+                value={draft.min}
+                onChange={(event) =>
+                  onDraftChange('min', event.target.value)
+                }
+              />
+              {fieldErrors.min ? (
+                <small className="rating-field-error">
+                  {fieldErrors.min}
+                </small>
+              ) : null}
+            </label>
+            <label className="field">
+              <span>Maximum starting rating</span>
+              <input
+                aria-invalid={Boolean(fieldErrors.max)}
+                disabled={locked}
+                inputMode="decimal"
+                max="100"
+                min="0"
+                step="0.01"
+                type="number"
+                value={draft.max}
+                onChange={(event) =>
+                  onDraftChange('max', event.target.value)
+                }
+              />
+              {fieldErrors.max ? (
+                <small className="rating-field-error">
+                  {fieldErrors.max}
+                </small>
+              ) : null}
+            </label>
+          </div>
+        ) : null}
+      </form>
+
+      <p className="starting-scale-edit-context">
+        {locked
+          ? 'Starting scale cannot be changed after live rating updates begin.'
+          : 'Used only for initial ratings. Live ratings may move outside this range.'}
+      </p>
+
+      {isNonDefault ? (
+        <p className="starting-scale-calibration-note">
+          Non-default starting ranges have not been calibrated to the same
+          degree as 42–50.
+        </p>
+      ) : null}
+
+      {message ? (
+        <p className={`form-status ${messageTone || 'neutral'}`}>{message}</p>
+      ) : null}
     </section>
   )
 }

@@ -7,6 +7,9 @@ import { createServer } from 'vite'
 let AuthProvider
 let Settings
 let quickRematchSettingsUtils
+let apiClient
+let userDataResetApi
+let userDataResetUtils
 let vite
 
 before(async () => {
@@ -24,6 +27,13 @@ before(async () => {
   Settings = (await vite.ssrLoadModule('/src/components/Settings.jsx')).default
   quickRematchSettingsUtils = await vite.ssrLoadModule(
     '/src/utils/quickRematchSettings.js',
+  )
+  apiClient = await vite.ssrLoadModule('/src/services/apiClient.js')
+  userDataResetApi = await vite.ssrLoadModule(
+    '/src/services/userDataResetApi.js',
+  )
+  userDataResetUtils = await vite.ssrLoadModule(
+    '/src/utils/userDataReset.js',
   )
 })
 
@@ -48,17 +58,198 @@ const indexOfText = (html, text) => {
   return index
 }
 
-test('Settings page renders the new top-level hierarchy in order', () => {
+test('Settings page renders the five accessible tabs in order', () => {
   const html = renderSettings()
-  const accountIndex = indexOfText(html, 'Account')
-  const bettingIndex = indexOfText(html, 'Betting &amp; Staking')
-  const modelIndex = indexOfText(html, 'Model Adjustments')
-  const engineIndex = indexOfText(html, 'Power Rating Engine')
+  const generalIndex = indexOfText(html, '>General</button>')
+  const ratingModelIndex = indexOfText(html, '>Rating Model</button>')
+  const gameContextIndex = indexOfText(html, '>Game Context</button>')
+  const bettingIndex = indexOfText(html, '>Betting</button>')
+  const dataResetIndex = indexOfText(html, '>Data &amp; Reset</button>')
 
-  assert.ok(accountIndex < bettingIndex)
-  assert.ok(bettingIndex < modelIndex)
-  assert.ok(modelIndex < engineIndex)
-  assert.match(html, /MODEL CONFIGURATION/i)
+  assert.ok(generalIndex < ratingModelIndex)
+  assert.ok(ratingModelIndex < gameContextIndex)
+  assert.ok(gameContextIndex < bettingIndex)
+  assert.ok(bettingIndex < dataResetIndex)
+  assert.match(html, /role="tablist"/)
+  assert.match(html, /aria-selected="true"[^>]*data-settings-tab="general"/)
+})
+
+test('each Settings tab exposes its owned content without duplicating controls', () => {
+  const generalHtml = renderSettings({ initialTab: 'general' })
+  const ratingHtml = renderSettings({ initialTab: 'rating-model' })
+  const contextHtml = renderSettings({ initialTab: 'game-context' })
+  const bettingHtml = renderSettings({ initialTab: 'betting' })
+  const resetHtml = renderSettings({ initialTab: 'data-reset' })
+
+  assert.match(generalHtml, /id="settings-tab-panel-general" role="tabpanel"/)
+  assert.match(ratingHtml, /data-active-settings-tab="rating-model"/)
+  assert.match(
+    ratingHtml,
+    /data-setting-group="rating-model"[\s\S]*Base Home Advantage/,
+  )
+  assert.match(ratingHtml, /Maximum Goalie Penalty/)
+  assert.match(ratingHtml, /Maximum Player Injury Penalty/)
+  assert.match(ratingHtml, /Rating Model engine settings/)
+  assert.match(contextHtml, /data-active-settings-tab="game-context"/)
+  assert.match(contextHtml, /data-setting-group="game-context"/)
+  assert.match(contextHtml, /Rest &amp; Fatigue/)
+  assert.match(contextHtml, /Quick Rematch \/ Revenge/)
+  assert.match(contextHtml, /Special Teams Matchup Alerts/)
+  assert.match(
+    bettingHtml,
+    /id="betting-staking-settings"[^>]*aria-labelledby="settings-tab-betting"/,
+  )
+  assert.match(resetHtml, /id="settings-tab-panel-data-reset" role="tabpanel"/)
+  assert.equal(
+    (ratingHtml.match(/id="engine-setting-homeAdvantage"/g) ?? []).length,
+    1,
+  )
+  assert.equal(
+    (contextHtml.match(/id="special-teams-rank-threshold"/g) ?? []).length,
+    1,
+  )
+})
+
+test('tab views retain one shared settings draft and explicit save ownership', async () => {
+  const ratingHtml = renderSettings({ initialTab: 'rating-model' })
+  const contextHtml = renderSettings({ initialTab: 'game-context' })
+  const ratingValue = ratingHtml.match(
+    /id="engine-setting-homeAdvantage"[^>]*value="([^"]+)"/,
+  )?.[1]
+  const contextValue = contextHtml.match(
+    /id="engine-setting-homeAdvantage"[^>]*value="([^"]+)"/,
+  )?.[1]
+  const source = await import('node:fs/promises').then((fs) =>
+    fs.readFile(new URL('../components/Settings.jsx', import.meta.url), 'utf8'),
+  )
+
+  assert.equal(ratingValue, '3.50')
+  assert.equal(contextValue, ratingValue)
+  assert.match(ratingHtml, /Save Rating Model/)
+  assert.match(contextHtml, /Save Game Context/)
+  assert.match(source, /ownedRatingFields\.includes\(field\)/)
+  assert.match(source, /savedSettings\[field\]/)
+})
+
+test('Data & Reset renders three increasing reset levels and scope guidance', () => {
+  const html = renderSettings({ initialTab: 'data-reset' })
+
+  assert.match(html, /Reset Settings to Defaults/)
+  assert.match(html, /Reset for New Season/)
+  assert.match(html, /Factory Reset \/ Delete All Data/)
+  assert.match(html, /Starting Rating Scale returns to 42–50/)
+  assert.match(html, /current scale is preserved and unlocked/)
+  assert.match(html, /Shared NHL history and provider caches stay intact/)
+})
+
+test('destructive reset confirmations enforce their intended safeguards', () => {
+  const settingsHtml = renderSettings({ initialResetDialog: 'settings' })
+  const seasonHtml = renderSettings({ initialResetDialog: 'new-season' })
+  const wrongFactoryHtml = renderSettings({
+    initialFactoryConfirmation: 'reset',
+    initialResetDialog: 'factory',
+  })
+  const exactFactoryHtml = renderSettings({
+    initialFactoryConfirmation: 'RESET',
+    initialResetDialog: 'factory',
+  })
+  const findDeleteButton = (html) =>
+    [...html.matchAll(/<button[^>]*>[\s\S]*?<\/button>/g)]
+      .map(([button]) => button)
+      .find((button) => button.includes('Delete all user data'))
+  const wrongDeleteButton = findDeleteButton(wrongFactoryHtml)
+  const exactDeleteButton = findDeleteButton(exactFactoryHtml)
+
+  assert.match(settingsHtml, /Reset settings to defaults\?/)
+  assert.match(settingsHtml, /will not be deleted/)
+  assert.match(seasonHtml, /Prepare NHL Edge for a new season\?/)
+  assert.match(seasonHtml, /will be preserved/)
+  assert.match(wrongFactoryHtml, /Type <strong>RESET<\/strong> to continue/)
+  assert.ok(wrongDeleteButton)
+  assert.match(wrongDeleteButton, /disabled/)
+  assert.ok(exactDeleteButton)
+  assert.doesNotMatch(exactDeleteButton, /disabled/)
+  assert.match(exactFactoryHtml, />Cancel<\/button>/)
+})
+
+test('reset API calls are authenticated and never accept a client userId', async () => {
+  const originalFetch = globalThis.fetch
+  const capturedRequests = []
+
+  apiClient.setAuthToken('reset-token')
+  globalThis.fetch = async (url, options = {}) => {
+    capturedRequests.push({
+      body: options.body ? JSON.parse(options.body) : null,
+      headers: options.headers,
+      method: options.method,
+      url,
+    })
+
+    return new Response(JSON.stringify({ success: true }), {
+      headers: { 'Content-Type': 'application/json' },
+      status: 200,
+    })
+  }
+
+  try {
+    await userDataResetApi.resetSettingsToDefaults()
+    await userDataResetApi.resetForNewSeason()
+    await userDataResetApi.factoryResetUserData('RESET')
+  } finally {
+    apiClient.clearAuthToken()
+    globalThis.fetch = originalFetch
+  }
+
+  assert.deepEqual(
+    capturedRequests.map(({ url }) => url),
+    [
+      '/api/settings/reset/settings',
+      '/api/settings/reset/new-season',
+      '/api/settings/reset/factory',
+    ],
+  )
+  assert.equal(capturedRequests.every(({ method }) => method === 'POST'), true)
+  assert.equal(
+    capturedRequests.every(
+      ({ headers }) => headers.get('Authorization') === 'Bearer reset-token',
+    ),
+    true,
+  )
+  assert.deepEqual(capturedRequests[2].body, { confirmation: 'RESET' })
+  assert.equal(
+    capturedRequests.some(({ body }) => Object.hasOwn(body ?? {}, 'userId')),
+    false,
+  )
+})
+
+test('season reset clears only documented browser-local operational state', () => {
+  const originalWindow = globalThis.window
+  const values = new Map([
+    ['nhl-edge-auth-token', 'keep-authenticated'],
+    ['nhl-edge-dashboard-market-odds', '{}'],
+    ['nhl-edge-power-ratings', '{}'],
+    ['nhl-edge-saved-analyses', '[]'],
+    ['nhl-edge-sidebar-collapsed', 'true'],
+  ])
+
+  globalThis.window = {
+    localStorage: {
+      getItem: (key) => values.get(key) ?? null,
+      removeItem: (key) => values.delete(key),
+    },
+  }
+
+  try {
+    assert.equal(userDataResetUtils.clearSeasonOperationalStorage(), 3)
+  } finally {
+    globalThis.window = originalWindow
+  }
+
+  assert.equal(values.has('nhl-edge-dashboard-market-odds'), false)
+  assert.equal(values.has('nhl-edge-power-ratings'), false)
+  assert.equal(values.has('nhl-edge-saved-analyses'), false)
+  assert.equal(values.get('nhl-edge-auth-token'), 'keep-authenticated')
+  assert.equal(values.get('nhl-edge-sidebar-collapsed'), 'true')
 })
 
 test('Model Adjustments exposes current global automatic model point adjustments', () => {
@@ -85,7 +276,7 @@ test('Model Adjustments exposes current global automatic model point adjustments
   assert.doesNotMatch(html, /manual X-factor/i)
 })
 
-test('Home Advantage is editable once and owned by Model Adjustments', () => {
+test('Home Advantage is editable once and owned by Rating Model', () => {
   const html = renderSettings()
   const matches = html.match(/id="engine-setting-homeAdvantage"/g) ?? []
 
@@ -95,7 +286,7 @@ test('Home Advantage is editable once and owned by Model Adjustments', () => {
     html,
     /id="engine-setting-homeAdvantage"[^>]*form="settings-model-adjustments-form"/,
   )
-  assert.match(html, /Save Model Adjustments/)
+  assert.match(html, /Save Rating Model/)
   assert.match(html, /Team Home Adjustment remains on the/)
 })
 
@@ -209,15 +400,13 @@ test('Settings source keeps Model Adjustments and engine save ownership separate
   assert.match(source, /updateRatingEngineModelAdjustments/)
   assert.match(source, /updateRatingEngineParameters/)
   assert.match(source, /hasUnsavedRatingModelAdjustments/)
+  assert.match(source, /hasUnsavedGameContextEngineChanges/)
   assert.match(source, /hasUnsavedModelAdjustmentChanges/)
-  assert.match(
-    source,
-    /updateRatingEngineModelAdjustments\(\{[\s\S]*?maximumGoaliePenalty:/,
-  )
-  assert.match(
-    source,
-    /updateRatingEngineModelAdjustments\(\{[\s\S]*?maximumPlayerInjuryPenalty:/,
-  )
+  assert.match(source, /RATING_MODEL_ADJUSTMENT_KEYS = Object\.freeze/)
+  assert.match(source, /'maximumGoaliePenalty'/)
+  assert.match(source, /'maximumPlayerInjuryPenalty'/)
+  assert.match(source, /GAME_CONTEXT_ENGINE_SETTING_KEYS = Object\.freeze/)
+  assert.match(source, /ownedRatingFields\.includes\(field\)/)
   assert.doesNotMatch(source, /updateRatingEngineSettings\(parsedDraft\.settings\)/)
 })
 

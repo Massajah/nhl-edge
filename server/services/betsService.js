@@ -1,6 +1,7 @@
 const mongoose = require('mongoose')
 const Bet = require('../models/Bet')
 const bankrollService = require('./bankrollService')
+const betSettlementService = require('./betSettlementService')
 
 const RESULT_VALUES = Bet.RESULT_VALUES
 const EDITABLE_FIELDS = [
@@ -582,9 +583,32 @@ const normalizeCreatePayload = (payload = {}) => {
   const goalieSelectionSnapshot = normalizeGoalieSelectionSnapshot(
     payload.goalieSelectionSnapshot,
   )
+  const betType = toText(payload.betType).toLowerCase()
+  const placementId = toText(payload.placementId)
+
+  if (betType && betType !== 'moneyline') {
+    throw new BetsError('betType must be moneyline when provided.', 400, {
+      field: 'betType',
+    })
+  }
+
+  if (betType === 'moneyline' && result !== 'pending') {
+    throw new BetsError('New moneyline bets must start as pending.', 400, {
+      field: 'result',
+    })
+  }
+
+
+  if (placementId.length > 120) {
+    throw new BetsError('placementId must be 120 characters or fewer.', 400, {
+      field: 'placementId',
+    })
+  }
 
   return {
     gameId: toText(payload.gameId),
+    betType,
+    placementId: placementId || null,
     analyzedAt: toDate(payload.analyzedAt ?? new Date(), 'analyzedAt'),
     scheduledStart: toDate(payload.scheduledStart, 'scheduledStart', {
       allowNull: true,
@@ -778,25 +802,122 @@ const getBets = async (userId) => {
   return bets.map(serializeBet)
 }
 
-const createBet = async (userId, payload) => {
+const createBet = async (userId, payload, options = {}) => {
+  const normalizedPayload = normalizeCreatePayload(payload)
+
+  if (normalizedPayload.placementId) {
+    const existingBet = await Bet.findOne({
+      placementId: normalizedPayload.placementId,
+      userId,
+    })
+
+    if (existingBet) {
+      return serializeBet(existingBet)
+    }
+  }
+
   const bet = new Bet({
-    ...normalizeCreatePayload(payload),
+    ...normalizedPayload,
     userId,
   })
 
   applyProfit(bet)
-  await bet.save()
-  await bankrollService.syncBetSettlementForBet(userId, bet)
+
+  try {
+    await bankrollService.runWithOptionalTransaction(async (session) => {
+      const scopedOptions = {
+        ...options,
+        session,
+      }
+      const shouldRecordStake =
+        await bankrollService.shouldUseTransactionalAccounting(
+          userId,
+          bet,
+          scopedOptions,
+        )
+
+      if (shouldRecordStake) {
+        bet.bankrollAccounting = 'transactional'
+        bet.stakeVersion = 1
+      }
+
+      if (session) {
+        await bet.save({ session })
+      } else {
+        await bet.save()
+      }
+
+      if (shouldRecordStake) {
+        try {
+          await bankrollService.recordBetStakeForBet(
+            userId,
+            bet,
+            scopedOptions,
+          )
+        } catch (error) {
+          if (!session && typeof Bet.deleteOne === 'function') {
+            await Bet.deleteOne({
+              _id: bet._id,
+              userId,
+            })
+          }
+
+          throw error
+        }
+      } else if (bet.result !== 'pending') {
+        await bankrollService.syncBetSettlementForBet(
+          userId,
+          bet,
+          scopedOptions,
+        )
+      }
+    }, options)
+  } catch (error) {
+    if (error?.code === 11000 && normalizedPayload.placementId) {
+      const existingBet = await Bet.findOne({
+        placementId: normalizedPayload.placementId,
+        userId,
+      })
+
+      if (existingBet) {
+        return serializeBet(existingBet)
+      }
+    }
+
+    throw error
+  }
 
   return serializeBet(bet)
 }
 
-const updateBet = async (userId, id, payload) => {
+const updateBet = async (userId, id, payload, options = {}) => {
   if (!mongoose.Types.ObjectId.isValid(id)) {
     throw new BetsError('Bet was not found.', 404)
   }
 
   const updates = normalizeUpdatePayload(payload)
+
+  if (updates.result !== undefined) {
+    if (Object.keys(updates).length > 1) {
+      throw new BetsError(
+        'Result changes must be saved separately from other bet edits.',
+        400,
+      )
+    }
+
+    const settlement = await betSettlementService.applySettlement(
+      userId,
+      id,
+      updates.result,
+      {
+        ...options,
+        source: 'manual',
+      },
+    )
+
+    return serializeBet(settlement.bet)
+  }
+
   const bet = await Bet.findOne({
     _id: id,
     userId,
@@ -806,29 +927,111 @@ const updateBet = async (userId, id, payload) => {
     throw new BetsError('Bet was not found.', 404)
   }
 
+  if (updates.stake !== undefined && bet.result !== 'pending') {
+    throw new BetsError(
+      'Stake cannot be edited after a bet has been settled.',
+      409,
+      { field: 'stake' },
+    )
+  }
+
+  if (
+    updates.stake !== undefined &&
+    bet.bankrollAccounting === 'transactional'
+  ) {
+    await bankrollService.runWithOptionalTransaction(async (session) => {
+      await bankrollService.recordBetStakeAdjustment(
+        userId,
+        bet,
+        updates.stake,
+        {
+          ...options,
+          session,
+        },
+      )
+      bet.stakeVersion = (Number(bet.stakeVersion) || 1) + 1
+      Object.assign(bet, updates)
+      applyProfit(bet)
+
+      if (session) {
+        await bet.save({ session })
+      } else {
+        await bet.save()
+      }
+    }, options)
+
+    return serializeBet(bet)
+  }
+
   Object.assign(bet, updates)
   applyProfit(bet)
   await bet.save()
-  await bankrollService.syncBetSettlementForBet(userId, bet)
 
   return serializeBet(bet)
 }
 
-const deleteBet = async (userId, id) => {
+const deleteBet = async (userId, id, options = {}) => {
   if (!mongoose.Types.ObjectId.isValid(id)) {
     throw new BetsError('Bet was not found.', 404)
   }
 
-  const deletedBet = await Bet.findOneAndDelete({
-    _id: id,
-    userId,
-  })
+  if (
+    mongoose.connection.readyState !== 1 &&
+    !options.transactionModel &&
+    !options.profileModel
+  ) {
+    const deletedBet = await Bet.findOneAndDelete({
+      _id: id,
+      userId,
+    })
+
+    if (!deletedBet) {
+      throw new BetsError('Bet was not found.', 404)
+    }
+
+    return serializeBet(deletedBet)
+  }
+
+  const deletedBet = await bankrollService.runWithOptionalTransaction(
+    async (session) => {
+      const bet = await Bet.findOne({
+        _id: id,
+        userId,
+      }).session(session ?? null)
+
+      if (!bet) {
+        throw new BetsError('Bet was not found.', 404)
+      }
+
+      if (bet.result !== 'pending') {
+        throw new BetsError(
+          'Settled bets cannot be deleted because their audit history must be preserved.',
+          409,
+        )
+      }
+
+      if (bet.bankrollAccounting === 'transactional') {
+        await bankrollService.recordPendingBetCancellation(userId, bet, {
+          ...options,
+          session,
+        })
+      }
+
+      return Bet.findOneAndDelete(
+        {
+          _id: id,
+          result: 'pending',
+          userId,
+        },
+        session ? { session } : undefined,
+      )
+    },
+    options,
+  )
 
   if (!deletedBet) {
     throw new BetsError('Bet was not found.', 404)
   }
-
-  await bankrollService.removeBetSettlementForBet(userId, deletedBet._id)
 
   return serializeBet(deletedBet)
 }

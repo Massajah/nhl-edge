@@ -1,6 +1,9 @@
 const mongoose = require('mongoose')
 
 const RESULT_VALUES = ['pending', 'win', 'loss', 'push', 'void']
+const BET_TYPE_VALUES = ['', 'moneyline']
+const BANKROLL_ACCOUNTING_VALUES = ['legacy', 'transactional']
+const SETTLEMENT_SOURCE_VALUES = ['automatic', 'manual']
 
 const teamSchema = new mongoose.Schema(
   {
@@ -74,6 +77,31 @@ const adjustmentsSchema = new mongoose.Schema(
     awayMotivation: { type: Number, default: 0 },
     homeManualAdjustment: { type: Number, default: 0 },
     awayManualAdjustment: { type: Number, default: 0 },
+  },
+  { _id: false },
+)
+
+const settlementCorrectionSchema = new mongoose.Schema(
+  {
+    previousResult: {
+      type: String,
+      enum: RESULT_VALUES,
+      required: true,
+    },
+    newResult: {
+      type: String,
+      enum: RESULT_VALUES,
+      required: true,
+    },
+    correctedAt: {
+      type: Date,
+      required: true,
+    },
+    source: {
+      type: String,
+      enum: SETTLEMENT_SOURCE_VALUES,
+      required: true,
+    },
   },
   { _id: false },
 )
@@ -268,6 +296,17 @@ const betSchema = new mongoose.Schema(
       type: String,
       trim: true,
       default: '',
+    },
+    betType: {
+      type: String,
+      enum: BET_TYPE_VALUES,
+      default: '',
+    },
+    placementId: {
+      type: String,
+      trim: true,
+      maxlength: 120,
+      default: null,
     },
     analyzedAt: {
       type: Date,
@@ -467,6 +506,66 @@ const betSchema = new mongoose.Schema(
       enum: RESULT_VALUES,
       default: 'pending',
     },
+    bankrollAccounting: {
+      type: String,
+      enum: BANKROLL_ACCOUNTING_VALUES,
+      default: 'legacy',
+    },
+    stakeVersion: {
+      type: Number,
+      min: 0,
+      default: 0,
+    },
+    settlementVersion: {
+      type: Number,
+      min: 0,
+      default: 0,
+    },
+    settledAt: {
+      type: Date,
+      default: null,
+    },
+    settlementSource: {
+      type: String,
+      enum: SETTLEMENT_SOURCE_VALUES,
+      default: null,
+    },
+    settledGameId: {
+      type: String,
+      trim: true,
+      default: '',
+    },
+    finalHomeScore: {
+      type: Number,
+      default: null,
+    },
+    finalAwayScore: {
+      type: Number,
+      default: null,
+    },
+    settlementReturn: {
+      type: Number,
+      min: 0,
+      default: 0,
+    },
+    settlementIssue: {
+      type: String,
+      trim: true,
+      default: '',
+    },
+    settlementCheckStatus: {
+      type: String,
+      trim: true,
+      default: '',
+    },
+    lastSettlementCheckAt: {
+      type: Date,
+      default: null,
+    },
+    settlementCorrections: {
+      type: [settlementCorrectionSchema],
+      default: () => [],
+    },
     profit: {
       type: Number,
       default: 0,
@@ -504,6 +603,21 @@ const betSchema = new mongoose.Schema(
 
 betSchema.index({ userId: 1, analyzedAt: -1, createdAt: -1 })
 betSchema.index({ userId: 1, gameId: 1 })
+betSchema.index(
+  { userId: 1, placementId: 1 },
+  {
+    partialFilterExpression: {
+      placementId: {
+        $exists: true,
+        $type: 'string',
+      },
+    },
+    unique: true,
+  },
+)
 
 module.exports = mongoose.model('Bet', betSchema)
+module.exports.BANKROLL_ACCOUNTING_VALUES = BANKROLL_ACCOUNTING_VALUES
+module.exports.BET_TYPE_VALUES = BET_TYPE_VALUES
 module.exports.RESULT_VALUES = RESULT_VALUES
+module.exports.SETTLEMENT_SOURCE_VALUES = SETTLEMENT_SOURCE_VALUES

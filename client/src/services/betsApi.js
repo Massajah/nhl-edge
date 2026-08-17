@@ -37,3 +37,18 @@ export const deleteBet = async (id) => {
 
   return data.bet
 }
+
+export const settleCompletedBets = async () => {
+  const data = await requestBets('/api/bets/settle', {
+    method: 'POST',
+  })
+
+  return data.summary ?? {
+    checked: 0,
+    losses: 0,
+    results: [],
+    settled: 0,
+    stillPending: 0,
+    wins: 0,
+  }
+}

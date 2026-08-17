@@ -1,4 +1,5 @@
 const mongoose = require('mongoose')
+const { BASE_MODEL_V1 } = require('../config/baseModel')
 
 const uppercaseTrim = (value) =>
   typeof value === 'string' ? value.trim().toUpperCase() : value
@@ -31,7 +32,7 @@ const powerRatingSchema = new mongoose.Schema(
     baseRating: {
       type: Number,
       required: true,
-      default: 50,
+      default: BASE_MODEL_V1.startingRatings.center,
     },
     homeAdvantage: {
       type: Number,

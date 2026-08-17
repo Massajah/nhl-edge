@@ -166,6 +166,693 @@
   margin-top: 0;
 }
 
+/* NHL Standings (read-only provider data) */
+.standings-page,
+.standings-sections {
+  display: grid;
+  gap: 18px;
+}
+
+.standings-panel {
+  overflow: hidden;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 12px;
+  background:
+    linear-gradient(145deg, rgba(35, 211, 182, 0.055), transparent 34%),
+    rgba(13, 20, 28, 0.82);
+  box-shadow: 0 18px 45px rgba(2, 8, 16, 0.16);
+}
+
+.standings-heading,
+.standings-toolbar,
+.standings-section-heading,
+.standings-footer-note {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.standings-heading {
+  padding: 22px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+.standings-heading > div:first-child {
+  display: grid;
+  gap: 5px;
+}
+
+.standings-heading .eyebrow,
+.standings-heading h2,
+.standings-heading p,
+.standings-message p,
+.standings-loading-state p {
+  margin: 0;
+}
+
+.standings-heading h2 {
+  color: var(--text-strong);
+  font-size: clamp(1.3rem, 2.2vw, 1.72rem);
+}
+
+.standings-heading p,
+.standings-season-context,
+.standings-footer-note,
+.standings-loading-state p,
+.standings-message p {
+  color: var(--text-muted);
+}
+
+.standings-season-field {
+  width: min(220px, 100%);
+  flex: 0 0 auto;
+}
+
+.standings-season-field select {
+  min-width: 190px;
+}
+
+.standings-toolbar {
+  padding: 14px 22px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.1);
+  background: rgba(8, 14, 21, 0.42);
+}
+
+.standings-view-selector {
+  display: inline-flex;
+  align-items: stretch;
+  gap: 16px;
+}
+
+.standings-layout-view-group {
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 8px;
+  background: rgba(5, 11, 17, 0.56);
+}
+
+.standings-view-selector button {
+  min-height: 34px;
+  padding: 7px 12px;
+  border: 0;
+  border-radius: 6px;
+  color: var(--text-muted);
+  background: transparent;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.standings-view-selector > .standings-playoffs-view-button {
+  min-height: 44px;
+  padding: 7px 16px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  background: rgba(5, 11, 17, 0.56);
+}
+
+.standings-view-selector button:hover,
+.standings-view-selector button.active {
+  color: #dffff8;
+  background: rgba(35, 211, 182, 0.14);
+}
+
+.standings-season-context {
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.standings-clinch-legend {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  padding: 10px 22px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.08);
+  color: var(--text-muted);
+  background: rgba(8, 14, 21, 0.24);
+  font-size: 0.68rem;
+}
+
+.standings-clinch-legend-title {
+  color: #91a7b9;
+  font-size: 0.62rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.standings-clinch-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.standings-clinch-legend .standings-clinch-indicator {
+  margin-left: 0;
+}
+
+.standings-sections {
+  padding: 18px 22px 22px;
+}
+
+.standings-section {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid rgba(148, 163, 184, 0.13);
+  border-radius: 10px;
+  background: rgba(8, 14, 21, 0.48);
+}
+
+.standings-section-heading {
+  padding: 12px 14px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+  background: rgba(20, 31, 42, 0.58);
+}
+
+.standings-section-heading h3 {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: 0.94rem;
+}
+
+.standings-section-heading span {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: 750;
+}
+
+.standings-table-scroll {
+  overflow-x: auto;
+  scrollbar-color: rgba(35, 211, 182, 0.4) rgba(4, 10, 16, 0.5);
+}
+
+.standings-table {
+  width: 100%;
+  min-width: 900px;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+.standings-table th,
+.standings-table td {
+  padding: 9px 10px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.085);
+  color: var(--text-muted);
+  font-size: 0.76rem;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.standings-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  color: #92a6b8;
+  background: #111b25;
+  font-size: 0.66rem;
+  letter-spacing: 0.055em;
+  text-transform: uppercase;
+}
+
+.standings-table tbody tr:last-child th,
+.standings-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.standings-table tbody tr:hover {
+  background: rgba(35, 211, 182, 0.045);
+}
+
+.standings-table .standings-rank {
+  width: 48px;
+  color: #8fa5b7;
+  font-weight: 800;
+  text-align: center;
+}
+
+.standings-table .standings-team-cell {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  min-width: 230px;
+  gap: 9px;
+  color: var(--text-strong);
+  background: #0f1821;
+  text-align: left;
+}
+
+.standings-table thead th:nth-child(2) {
+  left: 0;
+  z-index: 3;
+  min-width: 230px;
+  text-align: left;
+}
+
+.standings-team-logo {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  place-items: center;
+  color: #9db2c3;
+  font-size: 0.58rem;
+  font-weight: 900;
+}
+
+.standings-team-logo img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.standings-team-copy {
+  display: grid;
+  min-width: 0;
+  gap: 1px;
+}
+
+.standings-team-copy strong {
+  color: var(--text-strong);
+  font-size: 0.77rem;
+}
+
+.standings-team-copy span {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 0.67rem;
+  text-overflow: ellipsis;
+}
+
+.standings-clinch-indicator {
+  display: inline-grid;
+  width: 19px;
+  height: 19px;
+  margin-left: auto;
+  place-items: center;
+  border: 1px solid rgba(35, 211, 182, 0.24);
+  border-radius: 50%;
+  color: #7ee8d4;
+  background: rgba(35, 211, 182, 0.08);
+  font-size: 0.61rem;
+  font-weight: 900;
+  text-transform: lowercase;
+}
+
+.standings-clinch-indicator.is-unsupported {
+  border-color: rgba(148, 163, 184, 0.28);
+  color: #b2c0cc;
+  background: rgba(148, 163, 184, 0.08);
+}
+
+.standings-table .standings-points {
+  color: var(--text-strong);
+  font-weight: 900;
+}
+
+.standings-table td.positive {
+  color: #71dfad;
+}
+
+.standings-table td.negative {
+  color: #f28c98;
+}
+
+.standings-loading-state,
+.standings-message {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  margin: 20px 22px;
+  padding: 18px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 9px;
+  background: rgba(8, 14, 21, 0.48);
+}
+
+.standings-loading-state > div,
+.standings-message {
+  align-items: flex-start;
+}
+
+.standings-loading-state > div,
+.standings-message {
+  display: grid;
+  gap: 4px;
+}
+
+.standings-message.error {
+  border-color: rgba(248, 113, 113, 0.3);
+  background: rgba(127, 29, 29, 0.12);
+}
+
+.standings-message button {
+  width: fit-content;
+  margin-top: 5px;
+}
+
+.standings-footer-note {
+  flex-wrap: wrap;
+  padding: 13px 22px;
+  border-top: 1px solid rgba(148, 163, 184, 0.1);
+  font-size: 0.68rem;
+}
+
+/* NHL playoff bracket (official results or standings projection) */
+.playoffs-view {
+  display: grid;
+  gap: 20px;
+  padding: 20px 22px 26px;
+}
+
+.playoffs-mode-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.playoffs-mode-header > div {
+  display: grid;
+  gap: 4px;
+}
+
+.playoffs-mode-header h3,
+.playoffs-mode-header p,
+.playoffs-projection-note,
+.playoff-series-summary,
+.playoff-conference > h3,
+.playoff-round-heading h3,
+.playoff-round-heading h4 {
+  margin: 0;
+}
+
+.playoffs-mode-header h3 {
+  color: var(--text-strong);
+  font-size: 1.08rem;
+}
+
+.playoffs-mode-header p,
+.playoffs-projection-note {
+  color: var(--text-muted);
+  font-size: 0.76rem;
+}
+
+.playoffs-mode-pill {
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  border: 1px solid rgba(35, 211, 182, 0.26);
+  border-radius: 999px;
+  color: #7ee8d4;
+  background: rgba(35, 211, 182, 0.08);
+  font-size: 0.6rem;
+  font-weight: 900;
+  letter-spacing: 0.065em;
+  text-transform: uppercase;
+}
+
+.playoffs-view.mode-projected .playoffs-mode-pill {
+  border-color: rgba(251, 191, 36, 0.28);
+  color: #f5ca61;
+  background: rgba(120, 86, 14, 0.14);
+}
+
+.playoffs-projection-note {
+  padding: 9px 11px;
+  border-left: 2px solid rgba(251, 191, 36, 0.45);
+  background: rgba(120, 86, 14, 0.08);
+}
+
+.playoff-champion-summary {
+  display: flex;
+  align-items: center;
+  width: fit-content;
+  gap: 11px;
+  padding: 11px 14px;
+  border: 1px solid rgba(245, 202, 97, 0.28);
+  border-radius: 9px;
+  background: rgba(120, 86, 14, 0.1);
+}
+
+.playoff-champion-summary > div {
+  display: grid;
+  gap: 2px;
+}
+
+.playoff-champion-summary span {
+  color: #d7b95e;
+  font-size: 0.61rem;
+  font-weight: 900;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.playoff-champion-summary strong {
+  color: var(--text-strong);
+  font-size: 0.9rem;
+}
+
+.playoff-conferences {
+  display: grid;
+  gap: 22px;
+}
+
+.playoff-conference {
+  display: grid;
+  min-width: 0;
+  gap: 12px;
+  padding: 15px;
+  border: 1px solid rgba(148, 163, 184, 0.13);
+  border-radius: 10px;
+  background: rgba(8, 14, 21, 0.48);
+}
+
+.playoff-conference > h3 {
+  color: var(--text-strong);
+  font-size: 0.96rem;
+}
+
+.playoff-rounds {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: 12px;
+}
+
+.playoff-round {
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+}
+
+.playoff-round-heading {
+  display: grid;
+  gap: 2px;
+}
+
+.playoff-round-heading span {
+  color: #7690a4;
+  font-size: 0.56rem;
+  font-weight: 900;
+  letter-spacing: 0.075em;
+  text-transform: uppercase;
+}
+
+.playoff-round-heading h3,
+.playoff-round-heading h4 {
+  color: var(--text-strong);
+  font-size: 0.78rem;
+}
+
+.playoff-series-list {
+  display: grid;
+  gap: 8px;
+}
+
+.playoff-series-card {
+  overflow: hidden;
+  border: 1px solid rgba(148, 163, 184, 0.13);
+  border-radius: 8px;
+  background: rgba(15, 24, 33, 0.86);
+}
+
+.playoff-series-card.status-complete {
+  border-color: rgba(35, 211, 182, 0.2);
+}
+
+.playoff-series-team {
+  display: flex;
+  align-items: center;
+  min-height: 39px;
+  gap: 7px;
+  padding: 6px 8px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.08);
+}
+
+.playoff-series-team.is-winner {
+  background: rgba(35, 211, 182, 0.055);
+}
+
+.playoff-series-team.is-tbd {
+  color: #8094a4;
+}
+
+.playoff-team-logo {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
+  place-items: center;
+  color: #71889a;
+  font-size: 0.58rem;
+  font-weight: 900;
+}
+
+.playoff-team-logo img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.playoff-team-name {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+}
+
+.playoff-team-name strong {
+  color: var(--text-strong);
+  font-size: 0.72rem;
+}
+
+.playoff-team-name span {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 0.59rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.playoff-team-seed,
+.series-winner-label {
+  color: #8197a8;
+  font-size: 0.54rem;
+  font-weight: 850;
+}
+
+.series-winner-label {
+  color: #7ee8d4;
+  text-transform: uppercase;
+}
+
+.playoff-series-score {
+  min-width: 16px;
+  margin-left: auto;
+  color: var(--text-strong);
+  font-size: 0.86rem;
+  text-align: right;
+}
+
+.playoff-series-summary {
+  padding: 5px 8px;
+  color: #8da3b5;
+  background: rgba(6, 12, 18, 0.48);
+  font-size: 0.59rem;
+  font-weight: 750;
+}
+
+.stanley-cup-final {
+  display: grid;
+  width: min(430px, 100%);
+  justify-self: center;
+  gap: 8px;
+  padding: 15px;
+  border: 1px solid rgba(245, 202, 97, 0.24);
+  border-radius: 10px;
+  background:
+    linear-gradient(145deg, rgba(120, 86, 14, 0.11), transparent 58%),
+    rgba(8, 14, 21, 0.58);
+}
+
+@media (max-width: 720px) {
+  .standings-heading,
+  .standings-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .standings-season-field,
+  .standings-season-field select {
+    width: 100%;
+  }
+
+  .standings-view-selector {
+    display: flex;
+    gap: 12px;
+  }
+
+  .standings-layout-view-group {
+    display: grid;
+    min-width: 0;
+    flex: 1;
+    grid-template-columns: repeat(3, 1fr);
+  }
+
+  .standings-view-selector > .standings-playoffs-view-button {
+    flex: 0 0 auto;
+  }
+
+  .standings-sections {
+    padding: 12px;
+  }
+
+  .standings-table {
+    min-width: 820px;
+  }
+
+  .standings-table .standings-team-cell,
+  .standings-table thead th:nth-child(2) {
+    min-width: 170px;
+  }
+
+  .standings-team-copy span {
+    display: none;
+  }
+
+  .standings-loading-state,
+  .standings-message {
+    margin: 14px 12px;
+  }
+
+  .standings-clinch-legend {
+    padding: 10px 12px;
+  }
+
+  .playoffs-view {
+    padding: 14px 12px 18px;
+  }
+
+  .playoffs-mode-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .playoff-conference {
+    padding: 12px;
+  }
+
+  .playoff-rounds {
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+
+  .playoff-team-name span {
+    display: none;
+  }
+}
+
 /* Team Model Values (personal lineup notes only) */
 .model-values-card {
   display: grid;
@@ -1925,6 +2612,248 @@
   border-radius: 8px;
   padding: 18px;
   background: var(--panel);
+}
+
+.settings-panel[hidden] {
+  display: none;
+}
+
+.settings-tabs {
+  display: flex;
+  gap: 0.4rem;
+  overflow-x: auto;
+  padding: 0.35rem;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 14px;
+  background: rgba(7, 18, 33, 0.76);
+  scrollbar-width: thin;
+}
+
+.settings-tab {
+  flex: 0 0 auto;
+  padding: 0.7rem 0.95rem;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  color: var(--muted-text);
+  background: transparent;
+  font: inherit;
+  font-size: 0.86rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition:
+    background 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease;
+}
+
+.settings-tab:hover {
+  color: var(--text-color);
+  background: rgba(148, 163, 184, 0.08);
+}
+
+.settings-tab[aria-selected='true'] {
+  color: #eff6ff;
+  border-color: rgba(56, 189, 248, 0.34);
+  background: rgba(14, 116, 144, 0.24);
+}
+
+.settings-tab:focus-visible {
+  outline: 2px solid #38bdf8;
+  outline-offset: 2px;
+}
+
+.settings-model-adjustments-panel[data-active-settings-tab='rating-model']
+  [data-setting-group='game-context'],
+.settings-model-adjustments-panel[data-active-settings-tab='game-context']
+  [data-setting-group='rating-model'] {
+  display: none;
+}
+
+.settings-reset-intro {
+  margin: 0;
+  color: var(--muted-text);
+  line-height: 1.65;
+}
+
+.settings-reset-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.settings-reset-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+  min-width: 0;
+  padding: 1rem;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 14px;
+  background: rgba(8, 22, 40, 0.72);
+}
+
+.settings-reset-card-low {
+  border-color: rgba(56, 189, 248, 0.25);
+}
+
+.settings-reset-card-medium {
+  border-color: rgba(245, 158, 11, 0.28);
+}
+
+.settings-reset-card-high {
+  border-color: rgba(248, 113, 113, 0.38);
+  background: rgba(69, 10, 10, 0.2);
+}
+
+.settings-reset-card-heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.7rem;
+}
+
+.settings-reset-card-heading svg {
+  flex: 0 0 auto;
+  margin-top: 0.15rem;
+  color: #7dd3fc;
+}
+
+.settings-reset-card-medium .settings-reset-card-heading svg {
+  color: #fbbf24;
+}
+
+.settings-reset-card-high .settings-reset-card-heading svg {
+  color: #f87171;
+}
+
+.settings-reset-card-heading span {
+  display: block;
+  margin-bottom: 0.2rem;
+  color: var(--muted-text);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.settings-reset-card h3,
+.settings-reset-modal h2 {
+  margin: 0;
+}
+
+.settings-reset-card p,
+.settings-reset-card ul,
+.settings-reset-modal p {
+  margin: 0;
+  color: var(--muted-text);
+  line-height: 1.55;
+}
+
+.settings-reset-card ul {
+  display: grid;
+  gap: 0.45rem;
+  padding-left: 1.15rem;
+  font-size: 0.82rem;
+}
+
+.settings-reset-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 2.6rem;
+  margin-top: auto;
+  padding: 0.65rem 0.85rem;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.settings-reset-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.settings-reset-action-low {
+  color: #e0f2fe;
+  border-color: rgba(56, 189, 248, 0.32);
+  background: rgba(14, 116, 144, 0.3);
+}
+
+.settings-reset-action-medium {
+  color: #fef3c7;
+  border-color: rgba(245, 158, 11, 0.38);
+  background: rgba(146, 64, 14, 0.38);
+}
+
+.settings-reset-action-high {
+  color: #fff1f2;
+  border-color: rgba(248, 113, 113, 0.5);
+  background: #991b1b;
+}
+
+.settings-reset-modal-backdrop {
+  position: fixed;
+  z-index: 1000;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  background: rgba(2, 6, 23, 0.78);
+  backdrop-filter: blur(5px);
+}
+
+.settings-reset-modal {
+  display: grid;
+  gap: 1rem;
+  width: min(100%, 34rem);
+  max-height: calc(100vh - 2rem);
+  overflow-y: auto;
+  padding: 1.2rem;
+  border: 1px solid rgba(248, 113, 113, 0.3);
+  border-radius: 16px;
+  background: #081526;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.48);
+}
+
+.settings-reset-modal-heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+}
+
+.settings-reset-modal-heading svg {
+  flex: 0 0 auto;
+  color: #fbbf24;
+}
+
+.settings-reset-confirmation-field {
+  display: grid;
+  gap: 0.5rem;
+  color: var(--text-color);
+  font-size: 0.86rem;
+}
+
+.settings-reset-confirmation-field input {
+  width: 100%;
+  min-height: 2.7rem;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid rgba(248, 113, 113, 0.44);
+  border-radius: 10px;
+  color: var(--text-color);
+  background: rgba(2, 6, 23, 0.72);
+  font: inherit;
+}
+
+.settings-reset-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.65rem;
+}
+
+.settings-reset-modal-actions button {
+  margin-top: 0;
 }
 
 .settings-page-header {
@@ -4698,8 +5627,295 @@
 
 .ratings-summary {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 10px;
+}
+
+.starting-rating-scale-card {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  border: 1px solid rgba(35, 211, 182, 0.28);
+  border-radius: 8px;
+  padding: 14px;
+  background:
+    linear-gradient(145deg, rgba(35, 211, 182, 0.08), transparent 42%),
+    rgba(17, 25, 34, 0.9);
+}
+
+.starting-rating-scale-card.compact-state {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  font-weight: 800;
+}
+
+.starting-rating-scale-card.compact-state.error {
+  border-color: rgba(255, 90, 112, 0.38);
+}
+
+.starting-rating-scale-card.compact-state div {
+  display: grid;
+  gap: 4px;
+}
+
+.starting-rating-scale-card.compact-state strong,
+.starting-rating-scale-heading h3 {
+  color: var(--text-strong);
+}
+
+.starting-rating-scale-card.compact-state button,
+.save-starting-scale-button {
+  min-height: 38px;
+  border: 1px solid rgba(35, 211, 182, 0.5);
+  border-radius: 8px;
+  padding: 0 14px;
+  color: var(--text-strong);
+  background: rgba(35, 211, 182, 0.1);
+  font: inherit;
+  font-size: 0.76rem;
+  font-weight: 850;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.starting-rating-scale-card.compact-state button:hover,
+.save-starting-scale-button:hover {
+  border-color: rgba(35, 211, 182, 0.7);
+  background: rgba(35, 211, 182, 0.16);
+}
+
+.save-starting-scale-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.starting-rating-scale-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.starting-rating-scale-heading h3 {
+  margin: 2px 0 0;
+  font-size: 1.05rem;
+}
+
+.starting-scale-status {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 5px 9px;
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.05);
+  font-size: 0.68rem;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.starting-scale-status.calibrated {
+  border-color: rgba(35, 211, 182, 0.38);
+  color: var(--accent);
+  background: rgba(35, 211, 182, 0.08);
+}
+
+.starting-rating-scale-form {
+  display: grid;
+  grid-template-columns: minmax(300px, 1fr) minmax(250px, 0.7fr) auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.starting-scale-selector {
+  grid-column: 1;
+}
+
+.starting-scale-custom-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(112px, 1fr));
+  gap: 10px;
+}
+
+.starting-rating-scale-form .field {
+  gap: 5px;
+  font-size: 0.74rem;
+}
+
+.starting-rating-scale-form input,
+.starting-rating-scale-form select {
+  min-height: 40px;
+}
+
+.rating-field-error {
+  color: var(--danger);
+  font-size: 0.68rem;
+  font-weight: 800;
+  line-height: 1.3;
+}
+
+.starting-scale-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+
+.starting-scale-summary div {
+  display: grid;
+  gap: 3px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 9px 10px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.starting-scale-summary dt {
+  color: var(--text-muted);
+  font-size: 0.68rem;
+  font-weight: 820;
+}
+
+.starting-scale-summary dd {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: 0.9rem;
+  font-weight: 920;
+  font-variant-numeric: tabular-nums;
+}
+
+.starting-scale-guidance {
+  display: grid;
+  gap: 4px;
+}
+
+.starting-scale-guidance p,
+.starting-scale-edit-context {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  font-weight: 760;
+  line-height: 1.45;
+}
+
+.starting-scale-edit-context {
+  color: var(--text-strong);
+}
+
+.starting-rating-scale-row {
+  display: grid;
+  grid-template-columns: minmax(170px, 0.28fr) minmax(0, 1fr);
+  gap: 7px 14px;
+  align-items: center;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: rgba(17, 25, 34, 0.62);
+}
+
+.starting-rating-scale-row.locked {
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.starting-rating-scale-row.compact-state {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.starting-rating-scale-row.compact-state.error {
+  border-color: rgba(255, 90, 112, 0.38);
+}
+
+.starting-rating-scale-row.compact-state div {
+  display: grid;
+  gap: 3px;
+}
+
+.starting-rating-scale-row.compact-state button {
+  min-height: 34px;
+  border: 1px solid rgba(35, 211, 182, 0.5);
+  border-radius: 8px;
+  padding: 0 12px;
+  color: var(--text-strong);
+  background: rgba(35, 211, 182, 0.1);
+  font: inherit;
+  font-weight: 850;
+  cursor: pointer;
+}
+
+.starting-rating-scale-row .starting-rating-scale-heading {
+  display: grid;
+  gap: 1px;
+}
+
+.starting-rating-scale-row .starting-rating-scale-heading h3 {
+  margin: 0;
+  font-size: 0.92rem;
+}
+
+.starting-rating-scale-row .starting-rating-scale-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  align-items: center;
+}
+
+.starting-rating-scale-row .starting-scale-selector {
+  flex: 1 1 280px;
+  min-width: 220px;
+}
+
+.starting-rating-scale-row select,
+.starting-rating-scale-row input {
+  width: 100%;
+  min-height: 36px;
+}
+
+.starting-rating-scale-row .save-starting-scale-button {
+  min-height: 36px;
+}
+
+.starting-rating-scale-row .starting-scale-custom-fields {
+  display: grid;
+  flex: 1 0 100%;
+  grid-template-columns: repeat(2, minmax(150px, 220px));
+  gap: 7px;
+}
+
+.starting-scale-status.locked {
+  border-color: rgba(255, 181, 71, 0.35);
+  color: var(--accent-warm);
+  background: rgba(255, 181, 71, 0.07);
+}
+
+.starting-rating-scale-row .starting-scale-edit-context,
+.starting-rating-scale-row .starting-scale-calibration-note,
+.starting-rating-scale-row > .form-status {
+  grid-column: 2;
+}
+
+.starting-scale-calibration-note {
+  margin: 0;
+  color: var(--accent-warm);
+  font-size: 0.72rem;
+  font-weight: 780;
+  line-height: 1.4;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 .summary-metric {
@@ -8409,6 +9625,12 @@
   background: rgba(35, 211, 182, 0.12);
 }
 
+.tracker-toolbar button:disabled,
+.secondary-inline-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .delete-bet-button {
   border: 1px solid rgba(255, 90, 112, 0.42);
   color: var(--danger);
@@ -8469,10 +9691,9 @@
 
 .bet-card-main {
   display: grid;
-  grid-template-columns: minmax(130px, 0.42fr) minmax(250px, 1.1fr) minmax(
-      190px,
-      0.78fr
-    );
+  grid-template-columns:
+    minmax(120px, 0.38fr) minmax(230px, 1fr) minmax(170px, 0.68fr)
+    minmax(180px, 0.72fr);
   gap: 12px;
   min-width: 0;
 }
@@ -8480,6 +9701,7 @@
 .bet-date,
 .bet-game,
 .bet-side,
+.bet-settlement-status,
 .bet-stat,
 .tracker-profit {
   min-width: 0;
@@ -8491,6 +9713,37 @@
   display: grid;
   gap: 3px;
   align-content: start;
+}
+
+.bet-settlement-status {
+  display: grid;
+  gap: 3px;
+  align-content: start;
+}
+
+.bet-settlement-status span,
+.bet-settlement-status small {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.bet-settlement-status strong {
+  color: var(--text-strong);
+  font-size: 0.92rem;
+}
+
+.bet-settlement-status.win strong {
+  color: var(--accent);
+}
+
+.bet-settlement-status.loss strong {
+  color: var(--danger);
+}
+
+.bet-settlement-status.void strong,
+.bet-settlement-status.push strong {
+  color: var(--accent-warm);
 }
 
 .bet-date span,
@@ -10928,6 +12181,7 @@ optgroup {
   }
 
   .ratings-summary,
+  .starting-rating-scale-form,
   .ratings-toolbar,
   .teams-toolbar,
   .injury-toolbar,
@@ -10940,6 +12194,14 @@ optgroup {
   .bet-controls,
   .bet-notes-row {
     grid-template-columns: 1fr;
+  }
+
+  .starting-scale-selector {
+    grid-column: auto;
+  }
+
+  .starting-scale-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .bankroll-summary-grid {
@@ -11224,6 +12486,26 @@ optgroup {
 }
 
 @media (max-width: 680px) {
+  .starting-rating-scale-row {
+    grid-template-columns: 1fr;
+  }
+
+  .starting-rating-scale-row.compact-state {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .starting-rating-scale-row .starting-scale-edit-context,
+  .starting-rating-scale-row .starting-scale-calibration-note,
+  .starting-rating-scale-row > .form-status {
+    grid-column: 1;
+  }
+
+  .starting-scale-custom-fields,
+  .starting-scale-summary {
+    grid-template-columns: 1fr;
+  }
+
   .rating-lab-controls-panel,
   .rating-lab-results-panel,
   .rating-lab-board,
@@ -11380,6 +12662,19 @@ optgroup {
 
   .settings-panel {
     padding: 14px;
+  }
+
+  .settings-reset-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-reset-modal-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .settings-reset-modal-actions button {
+    width: 100%;
   }
 
   .profile-grid {

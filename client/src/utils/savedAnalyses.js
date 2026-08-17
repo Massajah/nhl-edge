@@ -412,6 +412,8 @@ export const createBetPayloadFromGameAnalysis = ({
 
   return {
     gameId,
+    betType: 'moneyline',
+    placementId: createId(),
     analyzedAt: savedAnalysis.dateTime,
     scheduledStart,
     homeTeam: toTeamPayload(homeTeam),
@@ -735,6 +737,11 @@ export const normalizeBet = (bet = {}) => {
     ...bet,
     id: toText(bet.id, ''),
     gameId: toText(bet.gameId, ''),
+    betType: toText(bet.betType, ''),
+    bankrollAccounting:
+      bet.bankrollAccounting === 'transactional'
+        ? 'transactional'
+        : 'legacy',
     analyzedAt: toText(bet.analyzedAt, new Date().toISOString()),
     scheduledStart: bet.scheduledStart ?? null,
     homeTeam: {
@@ -749,15 +756,15 @@ export const normalizeBet = (bet = {}) => {
     },
     selectedTeam: {
       teamId: toText(
-        bet.selectedTeam?.teamId ?? bet.selectedSide?.teamId,
+        bet.selectedTeam?.teamId || bet.selectedSide?.teamId,
         '',
       ),
       name: toText(
-        bet.selectedTeam?.name ?? bet.selectedSide?.name,
+        bet.selectedTeam?.name || bet.selectedSide?.name,
         'Selected Team',
       ),
       abbreviation: toText(
-        bet.selectedTeam?.abbreviation ?? bet.selectedSide?.abbreviation,
+        bet.selectedTeam?.abbreviation || bet.selectedSide?.abbreviation,
         '',
       ),
     },
@@ -843,6 +850,20 @@ export const normalizeBet = (bet = {}) => {
         : toNullableOdds(bet.closingOdds),
     result: normalizeResult(bet.result),
     profit: toNumber(bet.profit),
+    settledAt: bet.settledAt ?? null,
+    settlementSource: ['automatic', 'manual'].includes(bet.settlementSource)
+      ? bet.settlementSource
+      : null,
+    settledGameId: toText(bet.settledGameId, ''),
+    finalHomeScore: toNullableNumber(bet.finalHomeScore),
+    finalAwayScore: toNullableNumber(bet.finalAwayScore),
+    settlementReturn: toNumber(bet.settlementReturn),
+    settlementIssue: toText(bet.settlementIssue, ''),
+    settlementCheckStatus: toText(bet.settlementCheckStatus, ''),
+    lastSettlementCheckAt: bet.lastSettlementCheckAt ?? null,
+    settlementCorrections: Array.isArray(bet.settlementCorrections)
+      ? bet.settlementCorrections
+      : [],
     notes: toText(bet.notes, ''),
     kellyRecommendation: normalizeKellyRecommendationSnapshot(
       bet.kellyRecommendation,
@@ -891,3 +912,78 @@ export const normalizeBets = (bets) =>
 
       return toNumber(dateB) - toNumber(dateA)
     })
+
+export const getBetSettlementDisplay = (bet = {}) => {
+  const result = normalizeResult(bet.result)
+  const source = bet.settlementSource
+  const resultLabel = result.charAt(0).toUpperCase() + result.slice(1)
+
+  if (result !== 'pending') {
+    const sourceLabel =
+      source === 'automatic'
+        ? 'Auto-settled'
+        : source === 'manual'
+          ? 'Manual'
+          : 'Settled'
+    const homeScore = toNullableNumber(bet.finalHomeScore)
+    const awayScore = toNullableNumber(bet.finalAwayScore)
+    const finalScore =
+      homeScore === null || awayScore === null
+        ? ''
+        : `${toText(bet.awayTeam?.abbreviation, 'Away')} ${awayScore}–${homeScore} ${toText(bet.homeTeam?.abbreviation, 'Home')}`
+
+    return {
+      finalScore,
+      label: resultLabel,
+      message: sourceLabel,
+      tone: result,
+    }
+  }
+
+  if (bet.settlementIssue) {
+    return {
+      finalScore: '',
+      label: 'Pending',
+      message: bet.settlementIssue,
+      tone: 'pending',
+    }
+  }
+
+  if (
+    !toText(bet.gameId, '') ||
+    !toText(bet.selectedTeam?.teamId, '') &&
+      !toText(bet.selectedSide?.teamId, '')
+  ) {
+    return {
+      finalScore: '',
+      label: 'Pending',
+      message: 'Automatic settlement unavailable — game not linked.',
+      tone: 'pending',
+    }
+  }
+
+  if (bet.betType !== 'moneyline') {
+    return {
+      finalScore: '',
+      label: 'Pending',
+      message: 'Automatic settlement supports moneyline bets only.',
+      tone: 'pending',
+    }
+  }
+
+  return {
+    finalScore: '',
+    label: 'Pending',
+    message: 'Awaiting final result',
+    tone: 'pending',
+  }
+}
+
+export const formatSettlementSummary = (summary = {}) => {
+  const settled = Math.max(0, Number(summary.settled) || 0)
+  const wins = Math.max(0, Number(summary.wins) || 0)
+  const losses = Math.max(0, Number(summary.losses) || 0)
+  const pending = Math.max(0, Number(summary.stillPending) || 0)
+
+  return `${settled} ${settled === 1 ? 'bet' : 'bets'} settled · ${wins} win · ${losses} loss · ${pending} still pending`
+}

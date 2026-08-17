@@ -53,6 +53,87 @@ Protected user-specific routes:
 - `DELETE /api/teams/:teamId/goalie-adjustments/:nhlPlayerId`
 - `PATCH /api/game-context/:gameId/goalies`
 
+Shared read-only NHL provider routes include `GET /api/standings` and
+`GET /api/standings?season=YYYYyyyy`, plus
+`GET /api/standings/playoffs?season=YYYYyyyy`. They contain no user-owned data
+and follow the same public/shared convention as schedule and team-directory
+reads.
+
+## NHL Standings
+
+`GET /api/standings` resolves the current season through the canonical NHL
+season service and returns that season plus the five previous seasons. Clients
+may select one of those canonical IDs with `season`; display IDs such as
+`2024–25` normalize to the same internal `20242025` value. Malformed or older
+out-of-range values are rejected before a provider URL is built.
+
+The data source is the official NHL Web API. Current standings use one
+league-wide `/v1/standings/now` request. Completed historical seasons use one
+`/v1/standings/{YYYY-MM-DD}` request at the canonical final regular-season date
+from existing season metadata. Returned rows must match the requested
+`seasonId` and regular-season game type, so an offseason `/now` response still
+pointing at the prior season becomes the normal `no_standings` preseason state
+instead of displaying the wrong table. No per-team, per-conference, or
+per-division calls are made.
+
+Rows preserve the provider's official league, conference, division, and
+wildcard sequences and normalize team/franchise identity, records, points,
+point percentage, goals, differential, regulation wins, Last 10, streak, and
+clinch indicator. The response also publishes the verified NHL meanings used
+by the client legend: `x` clinched playoff berth, `y` clinched division title,
+`z` clinched conference title, `p` clinched Presidents' Trophy, and `e`
+eliminated from playoff contention. Combined provider codes are preserved and
+qualification is never inferred from points. Provider names and logos remain season-authentic: Arizona
+Coyotes rows display as Arizona while their reusable canonical franchise ID is
+Utah. Current Utah Hockey Club/Mammoth branding is likewise kept as returned.
+
+Current normalized responses are cached for 10 minutes. Completed historical
+responses use a 24-hour normalized cache, while the shared raw NHL requester
+keeps date-addressed standings for 30 days. Both layers deduplicate concurrent
+requests. Provider failures return a safe `provider_error` state; missing
+current data returns `no_standings`, and missing historical data returns
+`unavailable` without substituting another season.
+
+Standings are informational only. The service has no write path and is not
+imported by Power Ratings, probability, Home Advantage, Motivation, betting,
+or Rating Lab calculations. The normalized team/record/rank fields can support
+a future simulator or manually designed motivation feature, but neither is
+implemented here.
+
+## NHL Playoffs
+
+`GET /api/standings/playoffs` uses the same canonical season selection and
+recent six-season window as Standings. Actual brackets come only from the
+official NHL Web API `/v1/playoff-bracket/{postseasonYear}` resource. Its series
+letters, round numbers, season-specific teams/logos, series wins, winning team,
+and final are normalized into Eastern and Western Round 1, Round 2, Conference
+Final, and Stanley Cup Final sections. A completed final exposes the confirmed
+champion. Unknown future slots remain `TBD`; no winner is predicted. Historical
+seasons never reconstruct playoff matchups from final standings.
+
+For the selected current season, an available official bracket always wins. If
+the playoff resource has no series yet, the service builds a clearly marked
+`projected` snapshot from the already normalized current standings. It follows
+the NHL's division-based format: the top three teams in each division qualify,
+the two remaining conference wild cards use official `wildcardSequence`, the
+better division winner faces WC2, the other division winner faces WC1, and D2
+faces D3. Later rounds and the Cup Final stay `TBD`. If standings do not contain
+enough official division/wildcard ordering, the service returns
+`projected_unavailable` instead of inventing a bracket.
+
+Current actual playoff responses use a short two-minute normalized cache;
+projected responses share the 10-minute standings cadence. Completed historical
+brackets use a 30-day normalized cache. All modes deduplicate concurrent
+requests; provider failures return `provider_error`, missing historical data
+returns `unavailable`, and missing projection inputs return
+`projected_unavailable`. The underlying shared NHL requester adds its normal
+five-minute raw-response cache.
+
+Playoff data is read-only and informational. It is not imported by Power
+Ratings, Effective Rating, Motivation, probability, betting, Kelly, or Rating
+Lab services. The normalized shape can support future simulation or series
+models, but none are implemented here.
+
 ## Provider Goalie Adjustments
 
 The existing NHL roster service is authoritative for current team goalies.
@@ -270,6 +351,34 @@ by the Power Rating update engine, probability calculation, fair-odds logic,
 or historical replay. No automatic Special Teams rating adjustment exists in
 this version.
 
+## Starting Rating Scale
+
+Authenticated Power Rating settings persist one canonical initialization scale
+per user as `startingRatingScaleMode`, `startingRatingCenter`, and
+`startingRatingSpread`. Existing users without those fields transparently use
+the Base Model v1 calibrated default: center `46`, total spread `8`, range
+`42–50`. Supported range-first presets are `42–48`, `42–50`, `40–50`, and
+`40–52`; their derived centers are `45`, `46`, `45`, and `46`. Custom mode
+validates finite minimum/maximum values, requires minimum below maximum, keeps
+the range within `0–100`, and derives center and total spread internally.
+
+`GET /api/power-ratings/starting-scale` returns the saved scale plus derived
+`min`/`max` and lifecycle status. The scale is locked when the authenticated
+user has at least one `ProcessedRatingGame` inside the current active season's
+regular-season boundaries. Prior-season records do not lock the next preseason.
+`PUT /api/power-ratings/starting-scale` returns `409` when locked; while
+unlocked, it persists configuration only and never writes team ratings.
+
+New-team seeding and explicit `POST /api/power-ratings/reset` use the selected
+center. A scale change alone never resets or redistributes current ratings, and
+existing live values outside the range are neither clamped nor invalidated.
+The scale lock does not affect normal `PUT /api/power-ratings/:teamId` edits,
+automatic or manual Rating Engine updates, Home Adjustment, or Manual
+Adjustment. The explicit starting-assignment endpoint remains available for
+initialization workflows, but ordinary Power Ratings editing is never routed
+through it automatically. Probability Scale, K factor, rating formulas, Home
+Advantage, and Rating Lab are unchanged.
+
 ## Power Rating Updates
 
 Authenticated users can apply completed NHL regular-season games to their
@@ -311,23 +420,26 @@ curl -X POST http://localhost:5000/api/power-ratings/auto-update \
 
 The automatic endpoint accepts an optional `throughDate` in `YYYY-MM-DD`
 format. It does not accept `userId`; all ratings, settings, and audit records
-are scoped from the authenticated token. When the user already has
-`ProcessedRatingGame` history, the service finds the latest processed game
-date, backs up by a small overlap, and calls the same chronological update
+are scoped from the authenticated token. The service resolves the canonical
+current NHL season and scopes processed-game history to its regular-season
+boundary. When current-season history exists, it finds the latest processed
+game date, backs up by a small overlap, and calls the same chronological update
 workflow used by the manual endpoint. Already processed games are skipped by
 the existing `userId + gameId` uniqueness rule.
 
-If the user has no processed-game audit baseline, automatic updates return
-`status: "requires_initialization"` instead of replaying an arbitrary season on
-Dashboard load. The user should run the existing manual update/replay workflow
-to choose an initial processing point. Full-season recalculation, cron jobs,
-background workers, polling, and automatic replay after setting changes are
-intentionally deferred.
+When no current-season processed-game history exists, the configured Power
+Ratings are the starting state. Automatic processing begins at the canonical
+season start and applies the first eligible completed regular-season games in
+chronological order. If no eligible games exist yet, the response is
+`status: "preseason_ready"`; no marker is created and no rating changes. Manual
+updates remain a maintenance and recovery workflow. Full-season
+recalculation, cron jobs, background workers, polling, and automatic replay
+after setting changes are intentionally deferred.
 
-Automatic responses include `status` (`updated`, `up_to_date`, `partial`,
-`requires_initialization`, or `unavailable`), counts, per-game errors, the
-latest processed game when known, and the Rating Engine settings snapshot used
-for newly processed games. Concurrent automatic requests share a user-scoped
+Automatic responses include `status` (`preseason_ready`, `updated`,
+`up_to_date`, `partial`, or `unavailable`), counts, per-game errors, the latest
+processed game when known, and the Rating Engine settings snapshot used for
+newly processed games. Concurrent automatic requests share a user-scoped
 in-flight update lock; one user's update does not block another user's update.
 
 ## Power Rating Update History
@@ -390,13 +502,15 @@ Indexes on `ProcessedRatingGame` support user-scoped history queries by
 processed timestamp, game date, and team abbreviation. The existing unique
 `userId + gameId` index remains in place for idempotent update processing.
 
-## Bankroll Phase 1
+## Bankroll and moneyline settlement
 
 Authenticated users can initialize and track a transaction-based bankroll from
-Bet Tracker. The ledger is the source of truth: current bankroll is calculated
-from the starting-balance transaction, deposits, withdrawals, and one
-idempotent settlement transaction per settled bet. No authoritative
-`currentBankroll` field is stored.
+Bet Tracker. The ledger is the source of truth and no authoritative
+`currentBankroll` field is stored. New analyzer-created moneyline bets use
+transactional accounting: placement writes `BET_STAKE`, a win writes the full
+decimal-odds return as `BET_WIN_RETURN`, and a void, push, or pending-bet
+cancellation returns stake with `BET_VOID_RETURN`. Corrections write explicit
+`SETTLEMENT_REVERSAL` and correction transactions instead of rewriting history.
 
 Protected endpoints:
 
@@ -405,8 +519,8 @@ Protected endpoints:
   as a `STARTING_BALANCE` transaction at the selected start date. Initialization
   does not infer or import older settled bets.
 - `POST /api/bankroll/deposits` records positive cash inflow.
-- `POST /api/bankroll/withdrawals` records cash outflow. Phase 1 rejects
-  withdrawals greater than the user's current bankroll.
+- `POST /api/bankroll/withdrawals` records cash outflow and rejects withdrawals
+  greater than available bankroll.
 - `GET /api/bankroll/summary?period=all-time|season|custom&season&from&to`
   returns initialization status, currency, starting balance, current bankroll,
   betting profit, deposits, withdrawals, cash flow, settled bet count, pending
@@ -415,20 +529,39 @@ Protected endpoints:
   newest-first, user-scoped ledger page.
 - `GET /api/bankroll/seasons` reuses the centralized NHL regular-season
   metadata used by Power Rating Update History.
+- `POST /api/bets/settle` checks only the authenticated user's pending bets and
+  returns win/loss/pending counts. It is an explicit v1 trigger, not a cron or
+  polling worker.
 
 Money is stored in integer minor units as `amountCents` and serialized with
-both cent and decimal fields. Betting profit uses the existing Bet Tracker
-server-side profit calculation rounded to cents for ledger storage. `Current
-Bankroll` is the full ledger balance. `Available Bankroll` is current bankroll
-minus pending stakes from pending bets on or after the bankroll start date.
-`Betting Profit` includes only `BET_SETTLEMENT` transactions for the selected
-period; deposits and withdrawals are reported separately as cash flow.
+both cent and decimal fields. `Available Bankroll` is the spendable ledger
+balance after recorded stake debits; the summary subtracts pending stake only
+for untouched legacy bets that have no stake transaction. `Current Bankroll`
+adds pending exposure back to available bankroll as an equity view. Pending
+exposure is informational and is never deducted twice. Betting Profit uses
+audited realized-profit deltas, so a win records profit of
+`stake * (odds - 1)` while its bankroll credit remains `stake * odds`.
 
-Settled Bet Tracker bets create or update exactly one `BET_SETTLEMENT`
-transaction per `{ userId, betId }`. Changing stake or result updates that
-transaction, moving a bet back to pending removes it, and deleting a bet removes
-the settlement transaction. The unique partial index on
-`BankrollTransaction` enforces that idempotency.
+Automatic settlement supports `betType = moneyline` only. It requires the NHL
+game ID and selected team ID, loads that exact game through the existing NHL
+API/cache service, accepts only canonical `FINAL` or `OFF` states, verifies the
+selected team belongs to the matchup, and compares the final score. Regulation,
+overtime, and shootout wins are identical for this market; Power Rating result
+multipliers are never used. Missing links, missing games, live/scheduled games,
+and provider errors remain pending with no bankroll movement.
+
+Each financial action has a deterministic unique action key. Settlement first
+claims the user-scoped pending result with a conditional update, then records
+bankroll movement in the same Mongo transaction where supported. Repeated or
+concurrent requests become no-ops. Manual WIN/LOSS/VOID/PUSH changes use the
+same engine; corrections reverse the prior financial effect before applying the
+new one. Transactionally funded pending bets may adjust stake by the difference.
+Settled stake edits and settled-bet deletion are blocked. Deleting a pending
+transactional bet returns its stake exactly once before deletion.
+
+Older bets keep `bankrollAccounting = legacy`. They are not retroactively
+charged, and old `BET_SETTLEMENT` profit transactions remain readable and
+backfillable. Legacy or unknown-type bets without canonical linkage stay manual.
 
 To inspect eligible historical settled bets for one user, run:
 
@@ -440,8 +573,9 @@ To write settlement transactions after reviewing the dry run, add `--confirm`.
 Use `--all` instead of `--userId=<userId>` only when intentionally backfilling
 every initialized bankroll. The script never runs automatically.
 
-Phase 1 intentionally does not add bankroll reset, transaction deletion,
-charts, Dashboard integration, Kelly sizing, or automatic historical inference.
+This implementation intentionally does not add puck-line, totals, props,
+parlays, regulation-only settlement, background scheduling, or automatic
+historical stake migration.
 
 ## Betting Settings
 
@@ -885,11 +1019,11 @@ per-season diagnostics, stability, and combined context counts. Small samples,
 negligible changes, and inconsistent seasons are diagnostic only; there is no
 production Apply workflow.
 
-Base Home Advantage remains stored once in `RatingEngineSettings`, but its
-user-facing save owner is Model Adjustments. The scoped Model Adjustments save
-updates Home Advantage plus the informational Special Teams alert toggle and
-rank threshold; the scoped Power Rating Engine save updates only K, result
-multipliers, and probability scale.
+Base Home Advantage remains stored once in `RatingEngineSettings`, with Rating
+Model as its user-facing save owner. Special Teams alert controls are shown in
+Game Context. Both UI groups use the existing scoped model-adjustment endpoint,
+while preserving the other group's saved values; the scoped Power Rating Engine
+save updates only K, result multipliers, and probability scale.
 
 ## Rating Lab Phase 4: Special Teams Matchup Calibration
 
@@ -943,3 +1077,44 @@ Phase 4 is experimental. It never reads or writes production Special Teams
 Settings, writes Power Ratings or history, changes Dashboard or Analyzer
 probabilities, or applies a result to fair odds. Production remains
 informational alert-only until a result is manually reviewed in a future task.
+
+## User data reset lifecycle
+
+All reset routes are below `/api/settings`, run after the normal authentication
+middleware, and derive their only user scope from `request.user.id`:
+
+- `POST /reset/settings` restores canonical settings defaults.
+- `POST /reset/new-season` prepares current-season operational state for a new
+  season.
+- `POST /reset/factory` requires `{ "confirmation": "RESET" }` and restores
+  the authenticated user to a fresh data state.
+
+`services/userDataResetService.js` coordinates each multi-collection operation
+inside a Mongoose transaction and returns a structured result with reset type,
+affected-record counts, preserved scopes, and a concise message. Successful
+operations write a server log entry containing only reset type, authenticated
+user ID, timestamp, and counts. Missing records are treated as zero-count
+successes, so every reset is idempotent.
+
+Settings reset removes the user's persisted `RatingEngineSettings`,
+`QuickRematchSettings`, `BettingSettings`, `BookmakerPreferences`, and
+`PowerRatingSettings` documents. Reads then resolve through the same canonical
+defaults used for a new user. It does not modify bets, bankroll data, ratings or
+history, injuries, game contexts, or historical datasets. This restores the
+Starting Rating Scale to `42–50`.
+
+New-season reset preserves every settings document and reads the current
+Starting Rating Scale before resetting each current team to that scale's center.
+It clears the authenticated user's current-season `ProcessedRatingGame`
+records, all operational `Injury` records, and persisted `GameContext` rows.
+Deleting the current-season processed markers unlocks the scale lifecycle for
+preseason editing. Bets, settled outcomes, bankroll state/history, team-level
+goalie configuration, settings, and all Rating Lab history remain unchanged.
+
+Factory reset removes the user's settings, bets, bankroll profiles and
+transactions, Power Ratings and processed history, injuries, game contexts,
+goalie adjustments, team goalie lists, and team lineups. It does not delete the
+`User` account. It also deliberately never references the global
+`HistoricalNhlGame`, `HistoricalSeasonDataset`, or
+`HistoricalSpecialTeamsSeason` models, so shared NHL data and provider caches
+survive every user reset. Supplying any client `userId` has no effect on scope.

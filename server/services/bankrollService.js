@@ -17,6 +17,14 @@ const SUMMARY_PERIODS = Object.freeze(['all-time', 'season', 'custom'])
 const SEASON_ALL = 'all'
 const SEASON_CUSTOM = 'custom'
 const SETTLED_RESULTS = Object.freeze(['win', 'loss', 'push', 'void'])
+const BETTING_TRANSACTION_TYPES = new Set([
+  'BET_STAKE',
+  'BET_WIN_RETURN',
+  'BET_VOID_RETURN',
+  'BET_SETTLEMENT',
+  'MANUAL_ADJUSTMENT',
+  'SETTLEMENT_REVERSAL',
+])
 
 class BankrollError extends Error {
   constructor(message, statusCode = 500, details = undefined) {
@@ -300,8 +308,15 @@ const serializeTransaction = (transaction, runningBalanceCents = null) => {
   const amountCents = Number(plainTransaction.amountCents) || 0
 
   return {
+    actionKey: plainTransaction.actionKey ?? null,
     amount: centsToMoney(amountCents),
     amountCents,
+    balanceAfter:
+      plainTransaction.balanceAfterCents === null ||
+      plainTransaction.balanceAfterCents === undefined
+        ? null
+        : centsToMoney(plainTransaction.balanceAfterCents),
+    balanceAfterCents: plainTransaction.balanceAfterCents ?? null,
     betId:
       plainTransaction.betId === null || plainTransaction.betId === undefined
         ? null
@@ -615,6 +630,61 @@ const calculateCurrentBankrollCents = async (userId, options = {}) => {
   return sumAmountCents(Array.isArray(transactions) ? transactions : [])
 }
 
+const getPendingStakeBreakdown = async (userId, profile, options = {}) => {
+  const { betModel } = getModels(options)
+  const pendingBets = await maybeLean(
+    applySession(
+      betModel.find({
+        result: 'pending',
+        userId: toObjectIdIfValid(userId),
+      }),
+      options.session,
+    ),
+  )
+
+  return (Array.isArray(pendingBets) ? pendingBets : []).reduce(
+    (totals, bet) => {
+      const isTransactional = bet.bankrollAccounting === 'transactional'
+
+      if (!isTransactional && !compareBetReferenceDateToProfileStart(bet, profile)) {
+        return totals
+      }
+
+      const stakeCents = roundMoneyToCents(bet.stake)
+
+      totals.totalCents += stakeCents
+
+      if (isTransactional) {
+        totals.transactionalCents += stakeCents
+      } else {
+        totals.legacyCents += stakeCents
+      }
+
+      return totals
+    },
+    {
+      legacyCents: 0,
+      totalCents: 0,
+      transactionalCents: 0,
+    },
+  )
+}
+
+const getAvailableBankrollCents = async (userId, options = {}) => {
+  const profile = options.profile ?? (await getActiveProfile(userId, options))
+
+  if (!profile) {
+    return 0
+  }
+
+  const [transactionBalanceCents, pendingStake] = await Promise.all([
+    calculateCurrentBankrollCents(userId, options),
+    getPendingStakeBreakdown(userId, profile, options),
+  ])
+
+  return transactionBalanceCents - pendingStake.legacyCents
+}
+
 const compareBetReferenceDateToProfileStart = (bet, profile) => {
   const referenceDate = getBetReferenceDate(bet)
   const initializedAt = profile?.initializedAt
@@ -695,6 +765,228 @@ const assertInitialized = async (userId, options = {}) => {
 
   return profile
 }
+
+const shouldUseTransactionalAccounting = async (
+  userId,
+  bet = {},
+  options = {},
+) => {
+  if (bet.betType !== 'moneyline' || bet.result !== 'pending') {
+    return false
+  }
+
+  if (
+    !options.profileModel &&
+    !options.transactionModel &&
+    !canUseDefaultDatabaseModels()
+  ) {
+    return false
+  }
+
+  return Boolean(await getActiveProfile(userId, options))
+}
+
+const isBetFinanciallyTracked = async (userId, bet = {}, options = {}) => {
+  if (bet.bankrollAccounting === 'transactional') {
+    return true
+  }
+
+  if (
+    !options.profileModel &&
+    !options.transactionModel &&
+    !canUseDefaultDatabaseModels()
+  ) {
+    return false
+  }
+
+  const profile = await getActiveProfile(userId, options)
+
+  return Boolean(profile && compareBetReferenceDateToProfileStart(bet, profile))
+}
+
+const createAuditedBetTransaction = async (
+  userId,
+  bet = {},
+  payload = {},
+  options = {},
+) => {
+  const betId = bet.id ?? bet._id
+
+  if (!userId || !betId || !payload.actionKey) {
+    throw new BankrollError('A bet and transaction action key are required.', 400)
+  }
+
+  const { transactionModel } = getModels(options)
+  const normalizedUserId = toObjectIdIfValid(userId)
+  const normalizedBetId = toObjectIdIfValid(betId)
+  const existing = await maybeLean(
+    applySession(
+      transactionModel.findOne({
+        actionKey: payload.actionKey,
+        userId: normalizedUserId,
+      }),
+      options.session,
+    ),
+  )
+
+  if (existing) {
+    return {
+      status: 'already-recorded',
+      transaction: existing,
+    }
+  }
+
+  const amountCents = Number(payload.amountCents)
+
+  if (!Number.isInteger(amountCents)) {
+    throw new BankrollError('Transaction amount must resolve to cents.', 400)
+  }
+
+  const balanceBeforeCents = await calculateCurrentBankrollCents(userId, options)
+  const transaction = new transactionModel({
+    actionKey: payload.actionKey,
+    amountCents,
+    balanceAfterCents: balanceBeforeCents + amountCents,
+    betId: normalizedBetId,
+    description: payload.description ?? '',
+    metadata: payload.metadata ?? {},
+    occurredAt: payload.occurredAt ??
+      (options.nowProvider ? options.nowProvider() : new Date()),
+    type: payload.type,
+    userId: normalizedUserId,
+  })
+
+  try {
+    await saveDocument(transaction, options.session)
+  } catch (error) {
+    if (!isDuplicateKeyError(error)) {
+      throw error
+    }
+
+    const duplicate = await maybeLean(
+      applySession(
+        transactionModel.findOne({
+          actionKey: payload.actionKey,
+          userId: normalizedUserId,
+        }),
+        options.session,
+      ),
+    )
+
+    return {
+      status: 'already-recorded',
+      transaction: duplicate,
+    }
+  }
+
+  return {
+    status: 'recorded',
+    transaction,
+  }
+}
+
+const recordBetStakeForBet = async (userId, bet = {}, options = {}) => {
+  const stakeCents = roundMoneyToCents(bet.stake)
+  const availableCents = await getAvailableBankrollCents(userId, options)
+
+  if (stakeCents <= 0) {
+    throw new BankrollError('Bet stake must be greater than zero.', 400, {
+      field: 'stake',
+    })
+  }
+
+  if (stakeCents > availableCents) {
+    throw new BankrollError('Bet stake exceeds available bankroll.', 400, {
+      availableCents,
+      field: 'stake',
+    })
+  }
+
+  return createAuditedBetTransaction(
+    userId,
+    bet,
+    {
+      actionKey: `bet:${bet._id ?? bet.id}:stake:1`,
+      amountCents: -stakeCents,
+      description: `${buildBetSettlementDescription(bet)} stake`,
+      metadata: {
+        accounting: 'transactional',
+        realizedProfitDeltaCents: 0,
+        stake: Number(bet.stake) || 0,
+      },
+      type: 'BET_STAKE',
+    },
+    options,
+  )
+}
+
+const recordBetStakeAdjustment = async (
+  userId,
+  bet = {},
+  nextStake,
+  options = {},
+) => {
+  const previousStakeCents = roundMoneyToCents(bet.stake)
+  const nextStakeCents = roundMoneyToCents(nextStake)
+  const differenceCents = nextStakeCents - previousStakeCents
+
+  if (differenceCents === 0) {
+    return {
+      status: 'unchanged',
+    }
+  }
+
+  if (differenceCents > 0) {
+    const availableCents = await getAvailableBankrollCents(userId, options)
+
+    if (differenceCents > availableCents) {
+      throw new BankrollError('Stake increase exceeds available bankroll.', 400, {
+        availableCents,
+        field: 'stake',
+      })
+    }
+  }
+
+  const stakeVersion = (Number(bet.stakeVersion) || 1) + 1
+
+  return createAuditedBetTransaction(
+    userId,
+    bet,
+    {
+      actionKey: `bet:${bet._id ?? bet.id}:stake:${stakeVersion}`,
+      amountCents: -differenceCents,
+      description:
+        differenceCents > 0 ? 'Bet stake increase' : 'Bet stake decrease refund',
+      metadata: {
+        accounting: 'transactional',
+        nextStake: Number(nextStake),
+        previousStake: Number(bet.stake),
+        realizedProfitDeltaCents: 0,
+      },
+      type: differenceCents > 0 ? 'BET_STAKE' : 'BET_VOID_RETURN',
+    },
+    options,
+  )
+}
+
+const recordPendingBetCancellation = async (userId, bet = {}, options = {}) =>
+  createAuditedBetTransaction(
+    userId,
+    bet,
+    {
+      actionKey: `bet:${bet._id ?? bet.id}:cancellation`,
+      amountCents: roundMoneyToCents(bet.stake),
+      description: 'Pending bet cancellation refund',
+      metadata: {
+        accounting: 'transactional',
+        cancellation: true,
+        realizedProfitDeltaCents: 0,
+        stake: Number(bet.stake) || 0,
+      },
+      type: 'BET_VOID_RETURN',
+    },
+    options,
+  )
 
 const assertOccurredAtIsOnOrAfterStart = (occurredAt, profile) => {
   const initializedAt = new Date(profile.initializedAt)
@@ -841,14 +1133,15 @@ const createCashTransaction = async (
       type === 'WITHDRAWAL' ? -amountCents : amountCents
 
     if (type === 'WITHDRAWAL') {
-      const currentBankrollCents = await calculateCurrentBankrollCents(userId, {
+      const availableBankrollCents = await getAvailableBankrollCents(userId, {
         ...options,
+        profile,
         session,
       })
 
-      if (amountCents > currentBankrollCents) {
+      if (amountCents > availableBankrollCents) {
         throw new BankrollError('Withdrawal exceeds current bankroll.', 400, {
-          availableCents: currentBankrollCents,
+          availableCents: availableBankrollCents,
           field: 'amount',
         })
       }
@@ -985,21 +1278,49 @@ const syncBetSettlementForBet = async (userId, bet = {}, options = {}) => {
 }
 
 const getPendingStakeCents = async (userId, profile, options = {}) => {
-  const { betModel } = getModels(options)
-  const pendingBets = await maybeLean(
-    betModel.find({
-      result: 'pending',
-      userId: toObjectIdIfValid(userId),
-    }),
-  )
+  const breakdown = await getPendingStakeBreakdown(userId, profile, options)
 
-  return (Array.isArray(pendingBets) ? pendingBets : []).reduce((total, bet) => {
-    if (!compareBetReferenceDateToProfileStart(bet, profile)) {
-      return total
+  return breakdown.totalCents
+}
+
+const getRealizedProfitDeltaCents = (transaction = {}) => {
+  const metadataDelta = Number(transaction.metadata?.realizedProfitDeltaCents)
+
+  if (Number.isInteger(metadataDelta)) {
+    return metadataDelta
+  }
+
+  return transaction.type === 'BET_SETTLEMENT'
+    ? Number(transaction.amountCents) || 0
+    : 0
+}
+
+const countSettledBetTransactions = (transactions = []) => {
+  const countedBetIds = new Set()
+  let withoutBetId = 0
+
+  transactions.forEach((transaction) => {
+    const isLegacySettlement =
+      transaction.type === 'BET_SETTLEMENT' &&
+      transaction.metadata?.realizedProfitDeltaCents === undefined
+    const isInitialSettlement =
+      transaction.metadata?.isSettlementResult === true &&
+      transaction.metadata?.isCorrection !== true
+
+    if (!isLegacySettlement && !isInitialSettlement) {
+      return
     }
 
-    return total + roundMoneyToCents(bet.stake)
-  }, 0)
+    const betId = transaction.betId?.toString?.() ?? ''
+
+    if (betId) {
+      countedBetIds.add(betId)
+    } else {
+      withoutBetId += 1
+    }
+  })
+
+  return countedBetIds.size + withoutBetId
 }
 
 const filterTransactionsByDateRange = (transactions, parsedDates) => {
@@ -1073,7 +1394,7 @@ const getBankrollSummary = async (userId, query = {}, options = {}) => {
     normalizedQuery.parsedDates,
   )
   const startingBalanceCents = await getStartingBalanceCents(userId, options)
-  const currentBankrollCents = sumAmountCents(safeTransactions)
+  const transactionBalanceCents = sumAmountCents(safeTransactions)
   const depositsCents = sumAmountCents(
     periodTransactions.filter((transaction) => transaction.type === 'DEPOSIT'),
   )
@@ -1084,13 +1405,22 @@ const getBankrollSummary = async (userId, query = {}, options = {}) => {
       ),
     ),
   )
-  const bettingProfitCents = sumAmountCents(
-    periodTransactions.filter(
-      (transaction) => transaction.type === 'BET_SETTLEMENT',
-    ),
+  const bettingProfitCents = periodTransactions
+    .filter((transaction) => BETTING_TRANSACTION_TYPES.has(transaction.type))
+    .reduce(
+      (total, transaction) =>
+        total + getRealizedProfitDeltaCents(transaction),
+      0,
+    )
+  const pendingStake = await getPendingStakeBreakdown(
+    userId,
+    profile,
+    options,
   )
-  const pendingStakeCents = await getPendingStakeCents(userId, profile, options)
-  const availableBankrollCents = currentBankrollCents - pendingStakeCents
+  const pendingStakeCents = pendingStake.totalCents
+  const availableBankrollCents =
+    transactionBalanceCents - pendingStake.legacyCents
+  const currentBankrollCents = availableBankrollCents + pendingStakeCents
 
   return {
     availableBankroll: centsToMoney(availableBankrollCents),
@@ -1110,9 +1440,7 @@ const getBankrollSummary = async (userId, query = {}, options = {}) => {
     pendingStake: centsToMoney(pendingStakeCents),
     pendingStakeCents,
     period: normalizedQuery.period,
-    settledBets: periodTransactions.filter(
-      (transaction) => transaction.type === 'BET_SETTLEMENT',
-    ).length,
+    settledBets: countSettledBetTransactions(periodTransactions),
     startingBalance: centsToMoney(startingBalanceCents),
     startingBalanceCents,
     withdrawals: centsToMoney(withdrawalsCents),
@@ -1280,15 +1608,23 @@ module.exports = {
   buildDateFilter,
   calculateCurrentBankrollCents,
   centsToMoney,
+  createAuditedBetTransaction,
+  getAvailableBankrollCents,
   getBankrollSeasons,
   getBankrollSummary,
   getBankrollTransactions,
   getBetReferenceDate,
   initializeBankroll,
+  isBetFinanciallyTracked,
   normalizeSummaryQuery,
   normalizeTransactionQuery,
   parseMoneyToCents,
+  recordBetStakeAdjustment,
+  recordBetStakeForBet,
+  recordPendingBetCancellation,
   removeBetSettlementForBet,
   roundMoneyToCents,
+  runWithOptionalTransaction,
+  shouldUseTransactionalAccounting,
   syncBetSettlementForBet,
 }

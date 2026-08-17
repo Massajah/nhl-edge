@@ -1,4 +1,5 @@
 const betsService = require('../services/betsService')
+const betSettlementService = require('../services/betSettlementService')
 
 const getBets = async (request, response, next) => {
   try {
@@ -44,9 +45,22 @@ const deleteBet = async (request, response, next) => {
   }
 }
 
+const settlePendingBets = async (request, response, next) => {
+  try {
+    const summary = await betSettlementService.settlePendingMoneylineBets(
+      request.user.id,
+    )
+
+    response.json({ summary })
+  } catch (error) {
+    next(error)
+  }
+}
+
 module.exports = {
   createBet,
   deleteBet,
   getBets,
+  settlePendingBets,
   updateBet,
 }

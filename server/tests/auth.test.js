@@ -398,15 +398,27 @@ test('new user receives 32 idempotent Power Ratings', async () => {
       ],
     ],
     async () => {
+      const startingRatingScale = {
+        center: 46,
+        mode: 'standard',
+        spread: 8,
+      }
       const firstInitialization =
-        await powerRatingsService.initializeDefaultPowerRatings(userId)
+        await powerRatingsService.initializeDefaultPowerRatings(userId, {
+          startingRatingScale,
+        })
       const secondInitialization =
-        await powerRatingsService.initializeDefaultPowerRatings(userId)
-      const ratings = await powerRatingsService.getPowerRatings(userId)
+        await powerRatingsService.initializeDefaultPowerRatings(userId, {
+          startingRatingScale,
+        })
+      const ratings = await powerRatingsService.getPowerRatings(userId, {
+        startingRatingScale,
+      })
 
       assert.equal(firstInitialization.insertedCount, 32)
       assert.equal(secondInitialization.insertedCount, 0)
       assert.equal(ratings.length, 32)
+      assert.equal(ratings.every((rating) => rating.baseRating === 46), true)
       assert.equal(ratingsByKey.size, 32)
     },
   )

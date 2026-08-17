@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { readFile } from 'node:fs/promises'
 import { test } from 'node:test'
 import { createInputsForTeams } from '../utils/modelAnalysis.js'
 import {
@@ -97,4 +98,33 @@ test('production analysis inputs use base plus team Home Adjustment', () => {
   )
 
   assert.equal(inputs.home.homeAdvantage, 4.5)
+})
+
+test('Power Ratings page explains calibrated starting scale and live-rating freedom', async () => {
+  const source = (
+    await Promise.all([
+      readFile(
+        new URL('../components/PowerRatings.jsx', import.meta.url),
+        'utf8',
+      ),
+      readFile(
+        new URL('../utils/startingRatingScale.js', import.meta.url),
+        'utf8',
+      ),
+    ])
+  ).join('\n')
+
+  assert.match(source, /Starting Rating Scale/)
+  assert.match(source, /42–50 · Calibrated default/)
+  assert.match(source, /42–48/)
+  assert.match(source, /40–50/)
+  assert.match(source, /40–52/)
+  assert.match(source, /Live ratings may move outside this range/)
+  assert.match(source, /Starting scale cannot be changed after live rating updates begin/)
+  assert.match(source, /Minimum starting rating/)
+  assert.match(source, /Maximum starting rating/)
+  assert.match(source, /Current live range/)
+  assert.match(source, /Non-default starting ranges have not been calibrated/)
+  assert.doesNotMatch(source, /<dt>Center<\/dt>/)
+  assert.doesNotMatch(source, /<dt>Total spread<\/dt>/)
 })

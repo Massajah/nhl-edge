@@ -96,6 +96,86 @@ after(async () => {
   await vite?.close()
 })
 
+test('Starting Rating Scale API uses authenticated Power Ratings endpoints', async () => {
+  const originalFetch = globalThis.fetch
+  const capturedRequests = []
+
+  apiClient.setAuthToken('ratings-token')
+  globalThis.fetch = async (url, options = {}) => {
+    capturedRequests.push({
+      body: options.body ? JSON.parse(options.body) : null,
+      headers: options.headers,
+      method: options.method ?? 'GET',
+      url,
+    })
+
+    if (url.endsWith('/starting/BOS')) {
+      return new Response(
+        JSON.stringify({ rating: { baseRating: 49.5, teamId: 'BOS' } }),
+        { headers: { 'Content-Type': 'application/json' }, status: 200 },
+      )
+    }
+
+    if (url.endsWith('/reset')) {
+      return new Response(JSON.stringify({ ratings: [] }), {
+        headers: { 'Content-Type': 'application/json' },
+        status: 200,
+      })
+    }
+
+    return new Response(
+      JSON.stringify({
+        locked: false,
+        scale: {
+          calibratedDefault: true,
+          center: 46,
+          max: 50,
+          min: 42,
+          mode: 'standard',
+          spread: 8,
+        },
+        success: true,
+      }),
+      { headers: { 'Content-Type': 'application/json' }, status: 200 },
+    )
+  }
+
+  try {
+    await powerRatingsApi.getStartingRatingScale()
+    await powerRatingsApi.updateStartingRatingScale({
+      max: 50,
+      min: 42,
+      mode: 'standard',
+    })
+    await powerRatingsApi.updateStartingPowerRating('BOS', {
+      baseRating: 49.5,
+    })
+    await powerRatingsApi.resetPowerRatings()
+
+    assert.deepEqual(
+      capturedRequests.map(({ method, url }) => ({ method, url })),
+      [
+        { method: 'GET', url: '/api/power-ratings/starting-scale' },
+        { method: 'PUT', url: '/api/power-ratings/starting-scale' },
+        { method: 'PUT', url: '/api/power-ratings/starting/BOS' },
+        { method: 'POST', url: '/api/power-ratings/reset' },
+      ],
+    )
+    assert.deepEqual(capturedRequests[1].body, {
+      max: 50,
+      min: 42,
+      mode: 'standard',
+    })
+    assert.equal(
+      capturedRequests[0].headers.get('Authorization'),
+      'Bearer ratings-token',
+    )
+  } finally {
+    globalThis.fetch = originalFetch
+    apiClient.clearAuthToken()
+  }
+})
+
 test('updatePowerRatings formats a valid date range request', async () => {
   const originalFetch = globalThis.fetch
   const capturedRequests = []
@@ -297,8 +377,8 @@ test('automatic Power Rating update result summary is normalized', () => {
   )
 })
 
-test('automatic update initialization and unavailable responses normalize safely', () => {
-  const initializationResult =
+test('automatic preseason-ready and unavailable responses normalize safely', () => {
+  const preseasonResult =
     updateUtils.normalizeAutomaticPowerRatingUpdateResult({
       dateRange: null,
       errors: [],
@@ -307,12 +387,11 @@ test('automatic update initialization and unavailable responses normalize safely
       gamesProcessed: 0,
       gamesSkipped: 0,
       latestProcessedGame: null,
-      message:
-        'Power Rating automatic updates need an initial processing point.',
+      message: 'Power Ratings are ready for season start.',
       processedGames: [],
       ratingSettingsUsed: null,
-      status: 'requires_initialization',
-      success: false,
+      status: 'preseason_ready',
+      success: true,
     })
   const unavailableResult =
     updateUtils.normalizeAutomaticPowerRatingUpdateResult({
@@ -338,9 +417,9 @@ test('automatic update initialization and unavailable responses normalize safely
       success: false,
     })
 
-  assert.equal(initializationResult.dateRange, null)
-  assert.equal(initializationResult.status, 'requires_initialization')
-  assert.match(initializationResult.message, /initial processing point/)
+  assert.equal(preseasonResult.dateRange, null)
+  assert.equal(preseasonResult.status, 'preseason_ready')
+  assert.match(preseasonResult.message, /ready for season start/)
   assert.equal(unavailableResult.status, 'unavailable')
   assert.equal(unavailableResult.errors[0].reason, 'Schedule unavailable.')
 })
@@ -364,6 +443,27 @@ test('zero newly processed games is a neutral successful result', () => {
   assert.match(
     updateUtils.getPowerRatingUpdateOutcomeMessage(result),
     /already processed/,
+  )
+})
+
+test('zero-game manual update uses a normal eligibility result message', () => {
+  const result = updateUtils.normalizePowerRatingUpdateResult({
+    success: true,
+    dateRange: {
+      from: '2025-09-01',
+      to: '2025-09-07',
+    },
+    gamesFound: 0,
+    gamesAlreadyProcessed: 0,
+    gamesProcessed: 0,
+    gamesSkipped: 0,
+    errors: [],
+    processedGames: [],
+  })
+
+  assert.equal(
+    updateUtils.getPowerRatingUpdateOutcomeMessage(result),
+    'No eligible completed regular-season games found for this range.',
   )
 })
 

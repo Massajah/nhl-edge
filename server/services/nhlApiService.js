@@ -11,9 +11,11 @@ const NHL_API_RETRY_BASE_DELAY_MS = 250
 const NHL_API_RETRY_MAX_DELAY_MS = 5000
 const NHL_API_CACHE_TTLS_MS = Object.freeze({
   currentSchedule: 30 * 1000,
+  currentStandings: 10 * 60 * 1000,
   default: 5 * 60 * 1000,
   futureSchedule: 15 * 60 * 1000,
   historicalSchedule: 30 * 24 * 60 * 60 * 1000,
+  historicalStandings: 30 * 24 * 60 * 60 * 1000,
 })
 const REGULAR_SEASON_GAME_TYPE_ID = 2
 const SPECIAL_TEAMS_CACHE_TTL_MS = 8 * 60 * 60 * 1000
@@ -114,6 +116,14 @@ const getScheduleCacheTtlMs = (path, now = new Date()) => {
 
 const getCacheTtlMs = (path, now = new Date()) => {
   const normalizedPath = normalizeRequestPath(path)
+
+  if (normalizedPath === '/standings/now') {
+    return NHL_API_CACHE_TTLS_MS.currentStandings
+  }
+
+  if (/^\/standings\/\d{4}-\d{2}-\d{2}$/.test(normalizedPath)) {
+    return NHL_API_CACHE_TTLS_MS.historicalStandings
+  }
 
   if (normalizedPath.startsWith('/schedule/')) {
     return getScheduleCacheTtlMs(normalizedPath, now)
@@ -1549,6 +1559,23 @@ const getGoalieStatsForPlayer = async (playerId) => {
 const getScheduleForDate = async (date, options) =>
   requestNhlApi(`/schedule/${date}`, options)
 
+const getGameLanding = async (gameId, options) => {
+  const normalizedGameId = String(gameId ?? '').trim()
+
+  if (!/^\d{10}$/.test(normalizedGameId)) {
+    throw new NhlApiError('NHL game ID must use 10 digits.', {
+      statusCode: 400,
+    })
+  }
+
+  const game = await requestNhlApi(
+    `/gamecenter/${encodeURIComponent(normalizedGameId)}/landing`,
+    options,
+  )
+
+  return simplifyGame(game)
+}
+
 const getClubScheduleSeason = async (teamAbbreviation, seasonId) => {
   const normalizedAbbreviation = normalizeTeamAbbreviation(teamAbbreviation)
   const normalizedSeasonId = String(seasonId ?? '').trim()
@@ -1819,6 +1846,43 @@ const getGamesForDate = async (date) => {
 
 const getTodaysGames = async () => getGamesForDate(getTodayNhlDate())
 
+const getLeagueStandings = async (standingDate = 'now') => {
+  const normalizedDate = String(standingDate ?? '').trim()
+
+  if (normalizedDate !== 'now' && !isValidScheduleDate(normalizedDate)) {
+    throw new NhlApiError(
+      'Standings date must be now or use YYYY-MM-DD format.',
+      { statusCode: 400 },
+    )
+  }
+
+  return requestNhlApi(
+    `/standings/${encodeURIComponent(normalizedDate)}`,
+    {
+      allowStale: true,
+      includeMetadata: true,
+    },
+  )
+}
+
+const getPlayoffBracket = async (postseasonYear) => {
+  const normalizedYear = String(postseasonYear ?? '').trim()
+
+  if (!/^20\d{2}$/.test(normalizedYear)) {
+    throw new NhlApiError('Playoff year must use YYYY format.', {
+      statusCode: 400,
+    })
+  }
+
+  return requestNhlApi(
+    `/playoff-bracket/${encodeURIComponent(normalizedYear)}`,
+    {
+      allowStale: true,
+      includeMetadata: true,
+    },
+  )
+}
+
 const getTeams = async () => {
   const standings = await requestNhlApi('/standings/now')
   const standingsTeams = Array.isArray(standings.standings)
@@ -1896,12 +1960,15 @@ module.exports = {
   getClubScheduleSeason,
   getCacheTtlMs,
   getCurrentSeasonContext,
+  getGameLanding,
   getGamesForDate,
   getGoalieSummariesForTeam,
   getGoalieStatsForPlayer,
   getHistoricalSeasonSpecialTeamsRows,
   getHistoricalScheduleRangeCacheKey,
+  getLeagueStandings,
   getLeagueSpecialTeamsMatchupData,
+  getPlayoffBracket,
   getRosterForTeam,
   getScheduleGamesForDateRange,
   getScheduleForDate,

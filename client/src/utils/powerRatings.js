@@ -1,4 +1,5 @@
 import { NHL_TEAMS } from '../data/teams.js'
+import { BASE_MODEL_V1 } from '../config/baseModel.js'
 
 export const POWER_RATINGS_STORAGE_KEY = 'nhl-edge-power-ratings'
 export const DEFAULT_HOME_ADJUSTMENT = 0
@@ -8,7 +9,7 @@ export const HOME_ADJUSTMENT_LIMITS = Object.freeze({
 })
 
 export const DEFAULT_POWER_RATING_VALUES = {
-  baseRating: 50,
+  baseRating: BASE_MODEL_V1.startingRatings.center,
   homeAdjustment: DEFAULT_HOME_ADJUSTMENT,
   manualAdjustment: 0,
   lastRatingChange: 0,

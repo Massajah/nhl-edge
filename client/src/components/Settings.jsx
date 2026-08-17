@@ -1,12 +1,15 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
   Gauge,
+  AlertTriangle,
+  CalendarRange,
   KeyRound,
   LoaderCircle,
   Mail,
   Percent,
   RotateCcw,
   Save,
+  Trash2,
   UserCircle,
   WalletCards,
 } from 'lucide-react'
@@ -71,6 +74,32 @@ import {
   formatBankrollCurrency,
 } from '../utils/bankroll.js'
 import { BASE_MODEL_V1 } from '../config/baseModel.js'
+import {
+  factoryResetUserData,
+  resetForNewSeason,
+  resetSettingsToDefaults,
+} from '../services/userDataResetApi.js'
+import { clearSeasonOperationalStorage } from '../utils/userDataReset.js'
+
+const SETTINGS_TABS = Object.freeze([
+  { id: 'general', label: 'General' },
+  { id: 'rating-model', label: 'Rating Model' },
+  { id: 'game-context', label: 'Game Context' },
+  { id: 'betting', label: 'Betting' },
+  { id: 'data-reset', label: 'Data & Reset' },
+])
+
+const SETTINGS_TAB_IDS = new Set(SETTINGS_TABS.map(({ id }) => id))
+
+const getInitialSettingsTab = () => {
+  if (typeof window === 'undefined') {
+    return 'general'
+  }
+
+  const tab = new URLSearchParams(window.location.search).get('tab')
+
+  return SETTINGS_TAB_IDS.has(tab) ? tab : 'general'
+}
 
 const providerLabels = {
   both: 'Email and Google',
@@ -106,6 +135,22 @@ const MAXIMUM_GOALIE_PENALTY_FIELD = RATING_ENGINE_SETTING_FIELDS.find(
 const MAXIMUM_PLAYER_INJURY_PENALTY_FIELD = RATING_ENGINE_SETTING_FIELDS.find(
   (field) => field.key === 'maximumPlayerInjuryPenalty',
 )
+
+const RATING_MODEL_ADJUSTMENT_KEYS = Object.freeze([
+  'homeAdvantage',
+  'maximumGoaliePenalty',
+  'maximumPlayerInjuryPenalty',
+])
+
+const GAME_CONTEXT_ENGINE_SETTING_KEYS = Object.freeze([
+  'specialTeamsAlertsEnabled',
+  'specialTeamsRankThreshold',
+])
+
+const MODEL_ADJUSTMENT_SETTING_KEYS = Object.freeze([
+  ...RATING_MODEL_ADJUSTMENT_KEYS,
+  ...GAME_CONTEXT_ENGINE_SETTING_KEYS,
+])
 
 const SPECIAL_TEAMS_LEAGUE_TEAM_COUNT = NHL_TEAMS.length
 
@@ -162,10 +207,27 @@ const formatSignedValue = (value) => {
 
 function Settings({
   initialBookmakerPreferences = null,
+  initialFactoryConfirmation = '',
   initialMarketOddsStatus = null,
+  initialResetDialog = null,
+  initialTab = null,
   onRatingEngineSettingsChanged,
+  onUserDataReset,
 }) {
   const { user } = useAuth()
+  const [activeTab, setActiveTab] = useState(() =>
+    SETTINGS_TAB_IDS.has(initialTab) ? initialTab : getInitialSettingsTab(),
+  )
+  const [dataResetDialog, setDataResetDialog] = useState(
+    ['factory', 'new-season', 'settings'].includes(initialResetDialog)
+      ? initialResetDialog
+      : null,
+  )
+  const [dataResetStatus, setDataResetStatus] = useState('idle')
+  const [dataResetMessage, setDataResetMessage] = useState('')
+  const [factoryConfirmation, setFactoryConfirmation] = useState(
+    initialFactoryConfirmation,
+  )
   const [settingsStatus, setSettingsStatus] = useState('loading')
   const [saveStatus, setSaveStatus] = useState('idle')
   const [resetStatus, setResetStatus] = useState('idle')
@@ -246,6 +308,43 @@ function Settings({
   )
   const [bookmakerPreferencesMessage, setBookmakerPreferencesMessage] =
     useState(initialBookmakerPreferences?.warning ?? '')
+
+  const selectTab = (tabId) => {
+    if (!SETTINGS_TAB_IDS.has(tabId)) {
+      return
+    }
+
+    setActiveTab(tabId)
+
+    if (typeof window !== 'undefined') {
+      const url = new URL(window.location.href)
+
+      url.searchParams.set('tab', tabId)
+      window.history.replaceState(window.history.state, '', url)
+    }
+  }
+
+  const handleTabKeyDown = (event, tabIndex) => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
+      return
+    }
+
+    event.preventDefault()
+    const nextIndex =
+      event.key === 'Home'
+        ? 0
+        : event.key === 'End'
+          ? SETTINGS_TABS.length - 1
+          : (tabIndex + (event.key === 'ArrowRight' ? 1 : -1) +
+              SETTINGS_TABS.length) %
+            SETTINGS_TABS.length
+    const nextTab = SETTINGS_TABS[nextIndex]
+
+    selectTab(nextTab.id)
+    event.currentTarget.parentElement
+      ?.querySelector(`[data-settings-tab="${nextTab.id}"]`)
+      ?.focus()
+  }
 
   useEffect(() => {
     let isCurrent = true
@@ -493,8 +592,18 @@ function Settings({
     [draftSettings, savedSettings],
   )
   const hasUnsavedChanges = ratingEngineDirtyOwnership.ratingEngine
-  const hasUnsavedRatingModelAdjustments =
-    ratingEngineDirtyOwnership.modelAdjustments
+  const hasDirtyRatingEngineFields = (fields) =>
+    fields.some(
+      (field) =>
+        parsedDraft.fieldErrors[field] ||
+        parsedDraft.settings[field] !== savedSettings[field],
+    )
+  const hasUnsavedRatingModelAdjustments = hasDirtyRatingEngineFields(
+    RATING_MODEL_ADJUSTMENT_KEYS,
+  )
+  const hasUnsavedGameContextEngineChanges = hasDirtyRatingEngineFields(
+    GAME_CONTEXT_ENGINE_SETTING_KEYS,
+  )
   const hasUnsavedBettingChanges = useMemo(() => {
     if (!parsedBettingDraft.isValid) {
       return true
@@ -519,19 +628,24 @@ function Settings({
     [parsedQuickRematchDraft, savedQuickRematchSettings],
   )
   const hasUnsavedModelAdjustmentChanges =
-    hasUnsavedRatingModelAdjustments || hasUnsavedQuickRematchChanges
-  const modelAdjustmentsUseDefaults =
+    activeTab === 'game-context'
+      ? hasUnsavedGameContextEngineChanges || hasUnsavedQuickRematchChanges
+      : hasUnsavedRatingModelAdjustments
+  const ratingModelAdjustmentsUseDefaults =
+    RATING_MODEL_ADJUSTMENT_KEYS.every(
+      (field) =>
+        savedSettings[field] === DEFAULT_RATING_ENGINE_SETTINGS[field],
+    )
+  const gameContextSettingsUseDefaults =
     quickRematchUsingDefaults &&
-    savedSettings.homeAdvantage ===
-      DEFAULT_RATING_ENGINE_SETTINGS.homeAdvantage &&
-    savedSettings.maximumGoaliePenalty ===
-      DEFAULT_RATING_ENGINE_SETTINGS.maximumGoaliePenalty &&
-    savedSettings.maximumPlayerInjuryPenalty ===
-      DEFAULT_RATING_ENGINE_SETTINGS.maximumPlayerInjuryPenalty &&
-    savedSettings.specialTeamsAlertsEnabled ===
-      DEFAULT_RATING_ENGINE_SETTINGS.specialTeamsAlertsEnabled &&
-    savedSettings.specialTeamsRankThreshold ===
-      DEFAULT_RATING_ENGINE_SETTINGS.specialTeamsRankThreshold
+    GAME_CONTEXT_ENGINE_SETTING_KEYS.every(
+      (field) =>
+        savedSettings[field] === DEFAULT_RATING_ENGINE_SETTINGS[field],
+    )
+  const modelAdjustmentsUseDefaults =
+    activeTab === 'game-context'
+      ? gameContextSettingsUseDefaults
+      : ratingModelAdjustmentsUseDefaults
   const isPending =
     settingsStatus === 'loading' ||
     saveStatus === 'saving' ||
@@ -820,24 +934,23 @@ function Settings({
   const handleSaveQuickRematchSettings = async (event) => {
     event.preventDefault()
 
-    if (isQuickRematchPending) {
+    if (isQuickRematchPending || isPending) {
       return
     }
 
+    const isGameContextSave = activeTab === 'game-context'
+    const ownedRatingFields = isGameContextSave
+      ? GAME_CONTEXT_ENGINE_SETTING_KEYS
+      : RATING_MODEL_ADJUSTMENT_KEYS
+
     const ratingModelAdjustmentErrors = Object.fromEntries(
-      [
-        'homeAdvantage',
-        'maximumGoaliePenalty',
-        'maximumPlayerInjuryPenalty',
-        'specialTeamsAlertsEnabled',
-        'specialTeamsRankThreshold',
-      ]
+      ownedRatingFields
         .filter((field) => parsedDraft.fieldErrors[field])
         .map((field) => [field, parsedDraft.fieldErrors[field]]),
     )
 
     if (
-      !parsedQuickRematchDraft.isValid ||
+      (isGameContextSave && !parsedQuickRematchDraft.isValid) ||
       Object.keys(ratingModelAdjustmentErrors).length > 0
     ) {
       setQuickRematchFieldErrors({
@@ -866,21 +979,22 @@ function Settings({
 
     try {
       const [quickRematchResult, modelAdjustmentsResult] = await Promise.all([
-        hasUnsavedQuickRematchChanges
+        isGameContextSave && hasUnsavedQuickRematchChanges
           ? updateQuickRematchSettings(parsedQuickRematchDraft.settings)
           : null,
-        hasUnsavedRatingModelAdjustments
-          ? updateRatingEngineModelAdjustments({
-              homeAdvantage: parsedDraft.settings.homeAdvantage,
-              maximumGoaliePenalty:
-                parsedDraft.settings.maximumGoaliePenalty,
-              maximumPlayerInjuryPenalty:
-                parsedDraft.settings.maximumPlayerInjuryPenalty,
-              specialTeamsAlertsEnabled:
-                parsedDraft.settings.specialTeamsAlertsEnabled,
-              specialTeamsRankThreshold:
-                parsedDraft.settings.specialTeamsRankThreshold,
-            })
+        (isGameContextSave
+          ? hasUnsavedGameContextEngineChanges
+          : hasUnsavedRatingModelAdjustments)
+          ? updateRatingEngineModelAdjustments(
+              Object.fromEntries(
+                MODEL_ADJUSTMENT_SETTING_KEYS.map((field) => [
+                  field,
+                  ownedRatingFields.includes(field)
+                    ? parsedDraft.settings[field]
+                    : savedSettings[field],
+                ]),
+              ),
+            )
           : null,
       ])
 
@@ -901,34 +1015,30 @@ function Settings({
         )
         setSavedSettings((current) => ({
           ...current,
-          homeAdvantage: nextRatingEngineSettings.homeAdvantage,
-          maximumGoaliePenalty:
-            nextRatingEngineSettings.maximumGoaliePenalty,
-          maximumPlayerInjuryPenalty:
-            nextRatingEngineSettings.maximumPlayerInjuryPenalty,
-          specialTeamsAlertsEnabled:
-            nextRatingEngineSettings.specialTeamsAlertsEnabled,
-          specialTeamsRankThreshold:
-            nextRatingEngineSettings.specialTeamsRankThreshold,
+          ...Object.fromEntries(
+            ownedRatingFields.map((field) => [
+              field,
+              nextRatingEngineSettings[field],
+            ]),
+          ),
         }))
         const nextDraft = createRatingEngineSettingsDraft(
           nextRatingEngineSettings,
         )
         setDraftSettings((current) => ({
           ...current,
-          homeAdvantage: nextDraft.homeAdvantage,
-          maximumGoaliePenalty: nextDraft.maximumGoaliePenalty,
-          maximumPlayerInjuryPenalty:
-            nextDraft.maximumPlayerInjuryPenalty,
-          specialTeamsAlertsEnabled:
-            nextDraft.specialTeamsAlertsEnabled,
-          specialTeamsRankThreshold:
-            nextDraft.specialTeamsRankThreshold,
+          ...Object.fromEntries(
+            ownedRatingFields.map((field) => [field, nextDraft[field]]),
+          ),
         }))
         onRatingEngineSettingsChanged?.(nextRatingEngineSettings)
       }
       setQuickRematchSaveStatus('success')
-      setQuickRematchMessage('Model adjustments saved.')
+      setQuickRematchMessage(
+        isGameContextSave
+          ? 'Game Context settings saved.'
+          : 'Rating Model adjustments saved.',
+      )
     } catch (error) {
       setQuickRematchFieldErrors(formatApiFieldErrors(error.details))
       setQuickRematchSaveStatus('error')
@@ -937,9 +1047,14 @@ function Settings({
   }
 
   const handleResetQuickRematchSettings = async () => {
+    const isGameContextReset = activeTab === 'game-context'
     const confirmed =
       typeof window === 'undefined' ||
-      window.confirm('Reset Model Adjustments to defaults?')
+      window.confirm(
+        isGameContextReset
+          ? 'Reset Game Context settings to defaults?'
+          : 'Reset Rating Model adjustments to defaults?',
+      )
 
     if (!confirmed || isQuickRematchPending || isPending) {
       return
@@ -952,55 +1067,186 @@ function Settings({
     setQuickRematchFieldErrors({})
 
     try {
+      const ownedRatingFields = isGameContextReset
+        ? GAME_CONTEXT_ENGINE_SETTING_KEYS
+        : RATING_MODEL_ADJUSTMENT_KEYS
       const [result, ratingEngineResult] = await Promise.all([
-        resetQuickRematchSettings(),
-        resetRatingEngineSettings('model-adjustments'),
+        isGameContextReset ? resetQuickRematchSettings() : null,
+        updateRatingEngineModelAdjustments(
+          Object.fromEntries(
+            MODEL_ADJUSTMENT_SETTING_KEYS.map((field) => [
+              field,
+              ownedRatingFields.includes(field)
+                ? DEFAULT_RATING_ENGINE_SETTINGS[field]
+                : savedSettings[field],
+            ]),
+          ),
+        ),
       ])
-      const nextSettings = normalizeQuickRematchSettings(result.settings)
+      const nextSettings = result
+        ? normalizeQuickRematchSettings(result.settings)
+        : savedQuickRematchSettings
       const nextRatingEngineSettings = normalizeRatingEngineSettings(
         ratingEngineResult.settings,
       )
 
-      setSavedQuickRematchSettings(nextSettings)
-      setDraftQuickRematchSettings(
-        createQuickRematchSettingsDraft(nextSettings),
-      )
-      setQuickRematchUsingDefaults(Boolean(result.usingDefaults))
+      if (result) {
+        setSavedQuickRematchSettings(nextSettings)
+        setDraftQuickRematchSettings(
+          createQuickRematchSettingsDraft(nextSettings),
+        )
+        setQuickRematchUsingDefaults(Boolean(result.usingDefaults))
+      }
       setSavedSettings((current) => ({
         ...current,
-        homeAdvantage: nextRatingEngineSettings.homeAdvantage,
-        maximumGoaliePenalty:
-          nextRatingEngineSettings.maximumGoaliePenalty,
-        maximumPlayerInjuryPenalty:
-          nextRatingEngineSettings.maximumPlayerInjuryPenalty,
-        specialTeamsAlertsEnabled:
-          nextRatingEngineSettings.specialTeamsAlertsEnabled,
-        specialTeamsRankThreshold:
-          nextRatingEngineSettings.specialTeamsRankThreshold,
+        ...Object.fromEntries(
+          ownedRatingFields.map((field) => [
+            field,
+            nextRatingEngineSettings[field],
+          ]),
+        ),
       }))
       const nextRatingDraft = createRatingEngineSettingsDraft(
         nextRatingEngineSettings,
       )
       setDraftSettings((current) => ({
         ...current,
-        homeAdvantage: nextRatingDraft.homeAdvantage,
-        maximumGoaliePenalty: nextRatingDraft.maximumGoaliePenalty,
-        maximumPlayerInjuryPenalty:
-          nextRatingDraft.maximumPlayerInjuryPenalty,
-        specialTeamsAlertsEnabled:
-          nextRatingDraft.specialTeamsAlertsEnabled,
-        specialTeamsRankThreshold:
-          nextRatingDraft.specialTeamsRankThreshold,
+        ...Object.fromEntries(
+          ownedRatingFields.map((field) => [
+            field,
+            nextRatingDraft[field],
+          ]),
+        ),
       }))
       setUsingDefaults(Boolean(ratingEngineResult.usingDefaults))
       onRatingEngineSettingsChanged?.(nextRatingEngineSettings)
       setQuickRematchResetStatus('success')
       setQuickRematchSaveStatus('success')
-      setQuickRematchMessage('Model adjustments reset to defaults.')
+      setQuickRematchMessage(
+        isGameContextReset
+          ? 'Game Context settings reset to defaults.'
+          : 'Rating Model adjustments reset to defaults.',
+      )
     } catch (error) {
       setQuickRematchResetStatus('idle')
       setQuickRematchSaveStatus('error')
       setQuickRematchMessage(error.message)
+    }
+  }
+
+  const applyResetDefaults = (defaults) => {
+    if (!defaults) {
+      return
+    }
+
+    const nextRatingSettings = normalizeRatingEngineSettings(
+      defaults.ratingEngine,
+    )
+    const nextQuickRematchSettings = normalizeQuickRematchSettings(
+      defaults.quickRematch,
+    )
+    const nextBettingSettings = normalizeBettingSettings(defaults.betting)
+
+    setSavedSettings(nextRatingSettings)
+    setDraftSettings(createRatingEngineSettingsDraft(nextRatingSettings))
+    setUsingDefaults(true)
+    setSettingsStatus('success')
+    setSavedQuickRematchSettings(nextQuickRematchSettings)
+    setDraftQuickRematchSettings(
+      createQuickRematchSettingsDraft(nextQuickRematchSettings),
+    )
+    setQuickRematchUsingDefaults(true)
+    setQuickRematchStatus('success')
+    setSavedBettingSettings(nextBettingSettings)
+    setDraftBettingSettings(createBettingSettingsDraft(nextBettingSettings))
+    setBettingUsingDefaults(true)
+    setBettingStatus('success')
+    setFieldErrors({})
+    setQuickRematchFieldErrors({})
+    setBettingFieldErrors({})
+    onRatingEngineSettingsChanged?.(nextRatingSettings)
+  }
+
+  const openDataResetDialog = (resetType) => {
+    setDataResetDialog(resetType)
+    setDataResetStatus('idle')
+    setFactoryConfirmation('')
+  }
+
+  const closeDataResetDialog = () => {
+    if (dataResetStatus === 'saving') {
+      return
+    }
+
+    setDataResetDialog(null)
+    setFactoryConfirmation('')
+  }
+
+  const refreshBookmakerPreferencesAfterReset = async () => {
+    const { preferences } = await fetchBookmakerPreferences()
+
+    setBookmakerPreferences(preferences)
+    setDraftEnabledBookmakerKeys(preferences.enabledBookmakerKeys)
+    setBookmakerPreferencesStatus('success')
+    setBookmakerPreferencesMessage(preferences.warning ?? '')
+  }
+
+  const handleDataResetConfirm = async () => {
+    if (
+      !dataResetDialog ||
+      dataResetStatus === 'saving' ||
+      (dataResetDialog === 'factory' && factoryConfirmation !== 'RESET')
+    ) {
+      return
+    }
+
+    setDataResetStatus('saving')
+    setDataResetMessage('')
+
+    try {
+      const result =
+        dataResetDialog === 'settings'
+          ? await resetSettingsToDefaults()
+          : dataResetDialog === 'new-season'
+            ? await resetForNewSeason()
+            : await factoryResetUserData(factoryConfirmation)
+
+      if (dataResetDialog === 'settings' || dataResetDialog === 'factory') {
+        applyResetDefaults(result.defaults)
+        try {
+          await refreshBookmakerPreferencesAfterReset()
+        } catch (error) {
+          setBookmakerPreferencesStatus('error')
+          setBookmakerPreferencesMessage(error.message)
+        }
+      }
+
+      if (dataResetDialog === 'new-season' || dataResetDialog === 'factory') {
+        clearSeasonOperationalStorage()
+        await onUserDataReset?.({ resetType: result.resetType })
+      }
+
+      if (dataResetDialog === 'factory') {
+        try {
+          const summary = await getBankrollSummary()
+
+          setBankrollSummary(summary)
+          setBankrollStatus('success')
+          setBankrollError('')
+        } catch (error) {
+          setBankrollSummary(null)
+          setBankrollStatus('error')
+          setBankrollError(error.message)
+        }
+      }
+
+      setDataResetStatus('success')
+      setDataResetMessage(result.message)
+      setDataResetDialog(null)
+      setFactoryConfirmation('')
+    } catch (error) {
+      setDataResetStatus('error')
+      setDataResetMessage(error.message)
     }
   }
 
@@ -1144,7 +1390,41 @@ function Settings({
         </p>
       </header>
 
-      <div className="settings-panel">
+      <div
+        className="settings-tabs"
+        role="tablist"
+        aria-label="Settings sections"
+      >
+        {SETTINGS_TABS.map((tab, tabIndex) => (
+          <button
+            aria-controls={
+              tab.id === 'betting'
+                ? 'betting-staking-settings'
+                : `settings-tab-panel-${tab.id}`
+            }
+            aria-selected={activeTab === tab.id}
+            className="settings-tab"
+            data-settings-tab={tab.id}
+            id={`settings-tab-${tab.id}`}
+            key={tab.id}
+            onClick={() => selectTab(tab.id)}
+            onKeyDown={(event) => handleTabKeyDown(event, tabIndex)}
+            role="tab"
+            tabIndex={activeTab === tab.id ? 0 : -1}
+            type="button"
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      <div
+        aria-labelledby="settings-tab-general"
+        className="settings-panel"
+        hidden={activeTab !== 'general'}
+        id="settings-tab-panel-general"
+        role="tabpanel"
+      >
         <div className="panel-header">
           <div>
             <p className="eyebrow">Profile</p>
@@ -1192,7 +1472,11 @@ function Settings({
         </div>
       </div>
 
-      <div className="settings-panel settings-market-data-panel">
+      <div
+        aria-label="General market data settings"
+        className="settings-panel settings-market-data-panel"
+        hidden={activeTab !== 'general'}
+      >
         <div className="section-heading">
           <div>
             <p className="eyebrow">External data</p>
@@ -1321,6 +1605,9 @@ function Settings({
       <div
         id="betting-staking-settings"
         className="settings-panel settings-betting-panel"
+        aria-labelledby="settings-tab-betting"
+        hidden={activeTab !== 'betting'}
+        role="tabpanel"
       >
         <div className="section-heading">
           <div>
@@ -1717,12 +2004,34 @@ function Settings({
 
       <div
         className="settings-panel settings-model-adjustments-panel"
-        aria-labelledby="settings-model-adjustments-heading"
+        aria-labelledby={
+          activeTab === 'game-context'
+            ? 'settings-tab-game-context'
+            : 'settings-tab-rating-model'
+        }
+        data-active-settings-tab={activeTab}
+        hidden={
+          activeTab !== 'rating-model' && activeTab !== 'game-context'
+        }
+        id={
+          activeTab === 'game-context'
+            ? 'settings-tab-panel-game-context'
+            : 'settings-tab-panel-rating-model'
+        }
+        role="tabpanel"
       >
         <div className="section-heading">
           <div>
-            <p className="eyebrow">Model Configuration</p>
-            <h2 id="settings-model-adjustments-heading">Model Adjustments</h2>
+            <p className="eyebrow">
+              {activeTab === 'game-context'
+                ? 'Matchup Configuration'
+                : 'Model Configuration'}
+            </p>
+            <h2 id="settings-model-adjustments-heading">
+              {activeTab === 'game-context'
+                ? 'Game Context'
+                : 'Rating Model'}
+            </h2>
           </div>
           <span>
             {modelAdjustmentsUseDefaults
@@ -1783,7 +2092,10 @@ function Settings({
         ) : null}
 
         <div className="settings-model-grid">
-          <article className="settings-rule-card settings-home-advantage-card">
+          <article
+            className="settings-rule-card settings-home-advantage-card"
+            data-setting-group="rating-model"
+          >
             <div className="settings-rule-card-heading">
               <div>
                 <h3>Home Advantage</h3>
@@ -1822,7 +2134,10 @@ function Settings({
             noValidate
             onSubmit={handleSaveQuickRematchSettings}
           >
-            <article className="settings-rule-card settings-rest-fatigue-card">
+            <article
+              className="settings-rule-card settings-rest-fatigue-card"
+              data-setting-group="game-context"
+            >
               <div className="settings-rule-card-heading">
                 <div>
                   <h3>Rest &amp; Fatigue</h3>
@@ -1928,10 +2243,13 @@ function Settings({
               </details>
             </article>
 
-            <article className="settings-rule-card settings-quick-rematch-card">
+            <article
+              className="settings-rule-card settings-quick-rematch-card"
+              data-setting-group="game-context"
+            >
               <div className="settings-rule-card-heading">
                 <div>
-                  <h3>Quick Rematch</h3>
+                  <h3>Quick Rematch / Revenge</h3>
                   <p>Independent and additive to the selected rest/fatigue rule.</p>
                 </div>
                 <span>Additive</span>
@@ -2026,7 +2344,10 @@ function Settings({
               </div>
             </article>
 
-            <article className="settings-rule-card settings-goalie-card">
+            <article
+              className="settings-rule-card settings-goalie-card"
+              data-setting-group="rating-model"
+            >
               <div className="settings-rule-card-heading">
                 <div>
                   <h3>Goalie</h3>
@@ -2058,7 +2379,10 @@ function Settings({
               </p>
             </article>
 
-            <article className="settings-rule-card settings-injury-card">
+            <article
+              className="settings-rule-card settings-injury-card"
+              data-setting-group="rating-model"
+            >
               <div className="settings-rule-card-heading">
                 <div>
                   <h3>Injury</h3>
@@ -2094,7 +2418,10 @@ function Settings({
               </p>
             </article>
 
-            <article className="settings-rule-card settings-special-teams-alerts-card">
+            <article
+              className="settings-rule-card settings-special-teams-alerts-card"
+              data-setting-group="game-context"
+            >
               <div className="settings-rule-card-heading">
                 <div>
                   <h3>Special Teams Matchup Alerts</h3>
@@ -2188,8 +2515,12 @@ function Settings({
             <div className="settings-form-actions">
               <span className="settings-dirty-state">
                 {hasUnsavedModelAdjustmentChanges
-                  ? 'Unsaved model-adjustment changes'
-                  : 'No model-adjustment changes'}
+                  ? activeTab === 'game-context'
+                    ? 'Unsaved game-context changes'
+                    : 'Unsaved rating-model changes'
+                  : activeTab === 'game-context'
+                    ? 'No game-context changes'
+                    : 'No rating-model changes'}
               </span>
               <button
                 className="save-ratings-button"
@@ -2213,7 +2544,9 @@ function Settings({
                 <span>
                   {quickRematchSaveStatus === 'saving'
                     ? 'Saving...'
-                    : 'Save Model Adjustments'}
+                    : activeTab === 'game-context'
+                      ? 'Save Game Context'
+                      : 'Save Rating Model'}
                 </span>
               </button>
 
@@ -2236,7 +2569,9 @@ function Settings({
                 <span>
                   {quickRematchResetStatus === 'saving'
                     ? 'Resetting...'
-                    : 'Reset to Defaults'}
+                    : activeTab === 'game-context'
+                      ? 'Reset Game Context to Defaults'
+                      : 'Reset Rating Model to Defaults'}
                 </span>
               </button>
             </div>
@@ -2245,7 +2580,11 @@ function Settings({
         </div>
       </div>
 
-      <div className="settings-panel settings-engine-panel">
+      <div
+        aria-label="Rating Model engine settings"
+        className="settings-panel settings-engine-panel"
+        hidden={activeTab !== 'rating-model'}
+      >
         <div className="section-heading">
           <div>
             <p className="eyebrow">Live model</p>
@@ -2415,6 +2754,215 @@ function Settings({
           </form>
         ) : null}
       </div>
+
+      <div
+        aria-labelledby="settings-tab-data-reset"
+        className="settings-panel settings-data-reset-panel"
+        hidden={activeTab !== 'data-reset'}
+        id="settings-tab-panel-data-reset"
+        role="tabpanel"
+      >
+        <div className="section-heading">
+          <div>
+            <p className="eyebrow">Lifecycle controls</p>
+            <h2>Data &amp; Reset</h2>
+          </div>
+          <span>Choose scope carefully</span>
+        </div>
+
+        <p className="settings-reset-intro">
+          Each reset level has a distinct scope. Shared NHL historical datasets
+          and provider caches are never deleted by these actions.
+        </p>
+
+        {dataResetMessage ? (
+          <p className={`form-status ${dataResetStatus}`} role="status">
+            {dataResetMessage}
+          </p>
+        ) : null}
+
+        <div className="settings-reset-grid">
+          <article className="settings-reset-card settings-reset-card-low">
+            <div className="settings-reset-card-heading">
+              <RotateCcw aria-hidden="true" size={22} strokeWidth={2} />
+              <div>
+                <span>Configuration only</span>
+                <h3>Reset Settings to Defaults</h3>
+              </div>
+            </div>
+            <p>
+              Restore model, context, betting, bookmaker, and Starting Rating
+              Scale defaults without deleting user data.
+            </p>
+            <ul>
+              <li>Starting Rating Scale returns to 42–50.</li>
+              <li>Bets, bankroll, ratings, injuries, and analyses stay intact.</li>
+            </ul>
+            <button
+              className="settings-reset-action settings-reset-action-low"
+              onClick={() => openDataResetDialog('settings')}
+              type="button"
+            >
+              Reset Settings to Defaults
+            </button>
+          </article>
+
+          <article className="settings-reset-card settings-reset-card-medium">
+            <div className="settings-reset-card-heading">
+              <CalendarRange aria-hidden="true" size={22} strokeWidth={2} />
+              <div>
+                <span>Season maintenance</span>
+                <h3>Reset for New Season</h3>
+              </div>
+            </div>
+            <p>
+              Clear current-season hockey state while preserving betting history
+              and reusable settings.
+            </p>
+            <ul>
+              <li>Ratings return to the configured starting-scale center.</li>
+              <li>The current scale is preserved and unlocked for preseason.</li>
+              <li>Bets, bankroll, settings, and Rating Lab data stay intact.</li>
+            </ul>
+            <button
+              className="settings-reset-action settings-reset-action-medium"
+              onClick={() => openDataResetDialog('new-season')}
+              type="button"
+            >
+              Reset for New Season
+            </button>
+          </article>
+
+          <article className="settings-reset-card settings-reset-card-high">
+            <div className="settings-reset-card-heading">
+              <Trash2 aria-hidden="true" size={22} strokeWidth={2} />
+              <div>
+                <span>Permanent user-data deletion</span>
+                <h3>Factory Reset / Delete All Data</h3>
+              </div>
+            </div>
+            <p>
+              Delete all user-owned NHL Edge data and restore a fresh-account
+              configuration.
+            </p>
+            <ul>
+              <li>Deletes bets, bankroll, ratings history, injuries, and game inputs.</li>
+              <li>Restores settings and the 42–50 Starting Rating Scale.</li>
+              <li>Shared NHL history and provider caches stay intact.</li>
+            </ul>
+            <button
+              className="settings-reset-action settings-reset-action-high"
+              onClick={() => openDataResetDialog('factory')}
+              type="button"
+            >
+              Factory Reset / Delete All Data
+            </button>
+          </article>
+        </div>
+      </div>
+
+      {dataResetDialog ? (
+        <div className="settings-reset-modal-backdrop">
+          <div
+            aria-describedby="settings-reset-dialog-description"
+            aria-labelledby="settings-reset-dialog-title"
+            aria-modal="true"
+            className="settings-reset-modal"
+            role="dialog"
+          >
+            <div className="settings-reset-modal-heading">
+              <AlertTriangle aria-hidden="true" size={24} strokeWidth={2} />
+              <h2 id="settings-reset-dialog-title">
+                {dataResetDialog === 'settings'
+                  ? 'Reset settings to defaults?'
+                  : dataResetDialog === 'new-season'
+                    ? 'Prepare NHL Edge for a new season?'
+                    : 'Delete all NHL Edge user data?'}
+              </h2>
+            </div>
+
+            <div id="settings-reset-dialog-description">
+              {dataResetDialog === 'settings' ? (
+                <p>
+                  This restores NHL Edge model, context, and betting settings to
+                  their default values. Your bets, bankroll, Power Ratings,
+                  injuries, and historical data will not be deleted.
+                </p>
+              ) : dataResetDialog === 'new-season' ? (
+                <p>
+                  This clears current-season Power Ratings history, injuries,
+                  saved game inputs, and season-specific analysis state. Your bet
+                  history, bankroll history, settings, and Rating Lab historical
+                  datasets will be preserved.
+                </p>
+              ) : (
+                <p>
+                  This permanently deletes your bets, bankroll history, Power
+                  Ratings history, injuries, saved analyses, game inputs, and
+                  custom settings. Shared NHL historical datasets and provider
+                  caches are not deleted. This action cannot be undone.
+                </p>
+              )}
+            </div>
+
+            {dataResetDialog === 'factory' ? (
+              <label className="settings-reset-confirmation-field">
+                <span>
+                  Type <strong>RESET</strong> to continue
+                </span>
+                <input
+                  autoComplete="off"
+                  autoFocus
+                  onChange={(event) =>
+                    setFactoryConfirmation(event.target.value)
+                  }
+                  spellCheck="false"
+                  value={factoryConfirmation}
+                />
+              </label>
+            ) : null}
+
+            {dataResetStatus === 'error' && dataResetMessage ? (
+              <p className="form-status error" role="alert">
+                {dataResetMessage}
+              </p>
+            ) : null}
+
+            <div className="settings-reset-modal-actions">
+              <button
+                className="reset-button"
+                disabled={dataResetStatus === 'saving'}
+                onClick={closeDataResetDialog}
+                type="button"
+              >
+                Cancel
+              </button>
+              <button
+                className={
+                  dataResetDialog === 'factory'
+                    ? 'settings-reset-action settings-reset-action-high'
+                    : 'settings-reset-action settings-reset-action-medium'
+                }
+                disabled={
+                  dataResetStatus === 'saving' ||
+                  (dataResetDialog === 'factory' &&
+                    factoryConfirmation !== 'RESET')
+                }
+                onClick={handleDataResetConfirm}
+                type="button"
+              >
+                {dataResetStatus === 'saving'
+                  ? 'Resetting...'
+                  : dataResetDialog === 'settings'
+                    ? 'Reset settings'
+                    : dataResetDialog === 'new-season'
+                      ? 'Reset for new season'
+                      : 'Delete all user data'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </section>
   )
 }

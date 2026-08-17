@@ -8,6 +8,7 @@ const test = require('node:test')
 const mongoose = require('mongoose')
 const app = require('../app')
 const authService = require('../services/authService')
+const powerRatingsService = require('../services/powerRatingsService')
 const {
   RESULT_TYPES,
   WINNERS,
@@ -36,6 +37,12 @@ const DEFAULT_TEST_ENGINE_SETTINGS = Object.freeze({
   overtimeMultiplier: 0.7,
   shootoutMultiplier: 0.5,
   probabilityScale: 20,
+})
+const DEFAULT_TEST_SEASON = Object.freeze({
+  endDate: '2025-04-30',
+  id: '20242025',
+  isCurrent: true,
+  startDate: '2024-10-01',
 })
 
 const assertAlmostEqual = (actual, expected, tolerance = 1e-9) => {
@@ -163,19 +170,40 @@ const makeModels = ({ processedGames = [], ratings = [] }) => {
     processedRatingGameModel: {
       find(filter) {
         const requestedGameIds = filter.gameId?.$in ?? []
+        const startTimestamp = filter.gameDate?.$gte?.getTime()
+        const endTimestamp = filter.gameDate?.$lte?.getTime()
 
         return queryOf(
           processedGames.filter(
-            (game) =>
-              sameUser(game.userId, filter.userId) &&
-              (requestedGameIds.length === 0 ||
-                requestedGameIds.includes(Number(game.gameId))),
+            (game) => {
+              const gameTimestamp = new Date(game.gameDate).getTime()
+
+              return (
+                sameUser(game.userId, filter.userId) &&
+                (requestedGameIds.length === 0 ||
+                  requestedGameIds.includes(Number(game.gameId))) &&
+                (!Number.isFinite(startTimestamp) ||
+                  gameTimestamp >= startTimestamp) &&
+                (!Number.isFinite(endTimestamp) || gameTimestamp <= endTimestamp)
+              )
+            },
           ),
         )
       },
       findOne(filter) {
         const [latestProcessedGame] = processedGames
-          .filter((game) => sameUser(game.userId, filter.userId))
+          .filter((game) => {
+            const gameTimestamp = new Date(game.gameDate).getTime()
+            const startTimestamp = filter.gameDate?.$gte?.getTime()
+            const endTimestamp = filter.gameDate?.$lte?.getTime()
+
+            return (
+              sameUser(game.userId, filter.userId) &&
+              (!Number.isFinite(startTimestamp) ||
+                gameTimestamp >= startTimestamp) &&
+              (!Number.isFinite(endTimestamp) || gameTimestamp <= endTimestamp)
+            )
+          })
           .sort((gameA, gameB) => {
             const dateDifference =
               new Date(gameB.gameDate).getTime() -
@@ -290,6 +318,12 @@ const runAutomaticUpdateWithOptions = (
     processedRatingGameModel: models.processedRatingGameModel,
     settingsProvider: async (userId) =>
       options.settingsByUser?.[String(userId)] ?? DEFAULT_TEST_ENGINE_SETTINGS,
+    seasonMetadataProvider:
+      options.seasonMetadataProvider ??
+      (async () => ({
+        currentSeasonId: DEFAULT_TEST_SEASON.id,
+        seasons: [DEFAULT_TEST_SEASON],
+      })),
     todayProvider: () => options.today ?? '2025-03-05',
     useTransactions: false,
   })
@@ -452,6 +486,34 @@ test('completed games are applied chronologically and sequentially', async () =>
   )
 })
 
+test('live Rating Engine updates remain free outside the 42–50 starting scale', async () => {
+  const firstGame = cloneGame(eligibilityFixtures.regularSeason, {
+    id: 3101,
+    startTimeUTC: '2025-03-01T00:00:00Z',
+  })
+  const secondGame = cloneGame(eligibilityFixtures.regularSeason, {
+    id: 3102,
+    startTimeUTC: '2025-03-02T00:00:00Z',
+  })
+  const ratings = [
+    makeRatingDocument({ baseRating: 50.4, teamId: 'BOS' }),
+    makeRatingDocument({ baseRating: 41.8, teamId: 'TOR' }),
+  ]
+  const models = makeModels({ ratings })
+  const result = await runUpdate([secondGame, firstGame], models, {
+    from: '2025-03-01',
+    to: '2025-03-02',
+  })
+
+  assert.equal(result.gamesProcessed, 2)
+  assert.equal(models.processedGames[0].homeRatingAfter > 50.5, true)
+  assert.equal(models.processedGames[1].homeRatingAfter > 51, true)
+  assert.equal(models.processedGames[0].awayRatingAfter < 42, true)
+  assert.equal(models.processedGames[1].awayRatingAfter < 42, true)
+  assert.equal(ratings.find((rating) => rating.teamId === 'BOS').baseRating > 51, true)
+  assert.equal(ratings.find((rating) => rating.teamId === 'TOR').baseRating < 42, true)
+})
+
 test('already processed games are not applied again', async () => {
   const ratings = [
     makeRatingDocument({ teamId: 'BOS' }),
@@ -560,6 +622,41 @@ test('only completed regular-season games are eligible for live updates', async 
   assert.equal(result.gamesProcessed, 1)
   assert.equal(result.gamesSkipped, 0)
   assert.equal(models.processedGames[0].gameId, eligibilityFixtures.regularSeason.id)
+})
+
+test('zero-game manual update leaves ratings and preseason lifecycle unchanged', async () => {
+  const models = makeModels({
+    ratings: [
+      makeRatingDocument({ teamId: 'BOS' }),
+      makeRatingDocument({ teamId: 'TOR' }),
+    ],
+  })
+  const ratingsBefore = structuredClone(models.ratings)
+  const result = await runUpdate(
+    [eligibilityFixtures.preseason, eligibilityFixtures.scheduled],
+    models,
+    {
+      from: '2025-03-01',
+      to: '2025-03-01',
+    },
+  )
+  const lifecycle = await powerRatingsService.getStartingRatingScaleLifecycle(
+    USER_ID,
+    {
+      processedRatingGameModel: models.processedRatingGameModel,
+      seasonMetadataProvider: async () => ({
+        currentSeasonId: DEFAULT_TEST_SEASON.id,
+        seasons: [DEFAULT_TEST_SEASON],
+      }),
+    },
+  )
+
+  assert.equal(result.gamesFound, 0)
+  assert.equal(result.gamesProcessed, 0)
+  assert.deepEqual(models.ratings, ratingsBefore)
+  assert.equal(models.processedGames.length, 0)
+  assert.equal(models.updateCalls.length, 0)
+  assert.equal(lifecycle.locked, false)
 })
 
 test('live rating update uses the requesting user persisted settings', async () => {
@@ -681,7 +778,32 @@ test('changing settings does not alter already processed games', async () => {
   assert.equal(models.processedGames[1].engineSettingsSnapshot.kFactor, 2)
 })
 
-test('automatic update requires initialization when no processed baseline exists', async () => {
+test('automatic update reports preseason ready when no eligible current-season games exist', async () => {
+  const models = makeModels({
+    ratings: [
+      makeRatingDocument({ teamId: 'BOS' }),
+      makeRatingDocument({ teamId: 'TOR' }),
+    ],
+  })
+  const ratingsBefore = structuredClone(models.ratings)
+  const result = await runAutomaticUpdateWithOptions(
+    [eligibilityFixtures.preseason, eligibilityFixtures.scheduled],
+    models,
+  )
+
+  assert.equal(result.status, AUTOMATIC_UPDATE_STATUSES.PRESEASON_READY)
+  assert.equal(result.success, true)
+  assert.equal(result.gamesProcessed, 0)
+  assert.deepEqual(result.dateRange, {
+    from: DEFAULT_TEST_SEASON.startDate,
+    to: '2025-03-05',
+  })
+  assert.deepEqual(models.ratings, ratingsBefore)
+  assert.equal(models.processedGames.length, 0)
+  assert.equal(models.updateCalls.length, 0)
+})
+
+test('automatic update waits quietly before the current regular season begins', async () => {
   let gamesRequested = false
   const models = makeModels({
     ratings: [
@@ -694,17 +816,105 @@ test('automatic update requires initialization when no processed baseline exists
       gamesRequested = true
       return []
     },
+    seasonMetadataProvider: async () => ({
+      currentSeasonId: '20252026',
+      seasons: [
+        {
+          endDate: '2026-04-30',
+          id: '20252026',
+          isCurrent: true,
+          startDate: '2025-10-01',
+        },
+      ],
+    }),
+    today: '2025-09-15',
   })
 
-  assert.equal(
-    result.status,
-    AUTOMATIC_UPDATE_STATUSES.REQUIRES_INITIALIZATION,
-  )
-  assert.equal(result.success, false)
-  assert.equal(result.gamesProcessed, 0)
+  assert.equal(result.status, AUTOMATIC_UPDATE_STATUSES.PRESEASON_READY)
+  assert.equal(result.success, true)
   assert.equal(result.dateRange, null)
   assert.equal(gamesRequested, false)
-  assert.match(result.message, /initial processing point/)
+  assert.match(result.message, /ready for season start/i)
+})
+
+test('automatic update processes the first eligible games from starting ratings', async () => {
+  const firstGame = cloneGame(eligibilityFixtures.regularSeason, {
+    id: 3002,
+    startTimeUTC: '2025-03-01T00:00:00.000Z',
+  })
+  const secondGame = cloneGame(eligibilityFixtures.regularSeason, {
+    id: 3003,
+    startTimeUTC: '2025-03-02T00:00:00.000Z',
+  })
+  const models = makeModels({
+    ratings: [
+      makeRatingDocument({ teamId: 'BOS' }),
+      makeRatingDocument({ teamId: 'TOR' }),
+    ],
+  })
+  const result = await runAutomaticUpdateWithOptions(
+    [secondGame, firstGame],
+    models,
+  )
+  const lifecycle = await powerRatingsService.getStartingRatingScaleLifecycle(
+    USER_ID,
+    {
+      processedRatingGameModel: models.processedRatingGameModel,
+      seasonMetadataProvider: async () => ({
+        currentSeasonId: DEFAULT_TEST_SEASON.id,
+        seasons: [DEFAULT_TEST_SEASON],
+      }),
+    },
+  )
+
+  assert.equal(result.status, AUTOMATIC_UPDATE_STATUSES.UPDATED)
+  assert.equal(result.gamesProcessed, 2)
+  assert.deepEqual(
+    models.processedGames.map((game) => game.gameId),
+    [3002, 3003],
+  )
+  assert.equal(models.updateCalls.length, 4)
+  assert.equal(result.latestProcessedGame.gameId, 3003)
+  assert.equal(lifecycle.locked, true)
+  assert.equal(lifecycle.seasonId, DEFAULT_TEST_SEASON.id)
+})
+
+test('previous-season processed history does not initialize the current season', async () => {
+  let requestedRange = null
+  const previousSeasonGame = makeProcessedGameRecord({
+    gameDate: '2024-04-15T00:00:00.000Z',
+    gameId: 2998,
+  })
+  const currentSeasonGame = cloneGame(eligibilityFixtures.regularSeason, {
+    id: 3004,
+    startTimeUTC: '2025-03-02T00:00:00.000Z',
+  })
+  const models = makeModels({
+    processedGames: [previousSeasonGame],
+    ratings: [
+      makeRatingDocument({ teamId: 'BOS' }),
+      makeRatingDocument({ teamId: 'TOR' }),
+    ],
+  })
+  const result = await runAutomaticUpdateWithOptions(
+    [currentSeasonGame],
+    models,
+    {},
+    {
+      onGamesRequest: (range) => {
+        requestedRange = range
+      },
+    },
+  )
+
+  assert.equal(requestedRange.dateFrom, DEFAULT_TEST_SEASON.startDate)
+  assert.equal(result.status, AUTOMATIC_UPDATE_STATUSES.UPDATED)
+  assert.equal(result.gamesProcessed, 1)
+  assert.equal(result.latestProcessedGame.gameId, 3004)
+  assert.deepEqual(
+    models.processedGames.map((game) => game.gameId),
+    [2998, 3004],
+  )
 })
 
 test('automatic update input validates throughDate safely', () => {

@@ -1,11 +1,18 @@
 const path = require('path')
 const { pathToFileURL } = require('url')
 const PowerRating = require('../models/PowerRating')
+const ProcessedRatingGame = require('../models/ProcessedRatingGame')
+const { BASE_MODEL_V1 } = require('../config/baseModel')
 const {
   DEFAULT_HOME_ADJUSTMENT,
   HOME_ADJUSTMENT_LIMITS,
   getRatingHomeAdjustment,
 } = require('./homeAdvantageService')
+const {
+  getStartingRatingScale,
+  updateStartingRatingScale,
+  validateStartingRatingAssignment,
+} = require('./startingRatingScaleService')
 
 const NUMERIC_FIELDS = [
   'baseRating',
@@ -14,7 +21,7 @@ const NUMERIC_FIELDS = [
   'lastRatingChange',
 ]
 const IMMUTABLE_FIELDS = ['teamId', 'teamName', 'abbreviation']
-const DEFAULT_BASE_RATING = 50
+const DEFAULT_BASE_RATING = BASE_MODEL_V1.startingRatings.center
 const FIELD_STORAGE_MAP = Object.freeze({
   homeAdjustment: 'homeAdvantage',
 })
@@ -55,8 +62,18 @@ const serializeRating = (rating) => {
   return plainRating
 }
 
-const getRatingsForUser = async (userId) =>
-  PowerRating.find({ userId }).sort({ teamName: 1 })
+const getPowerRatingModel = (options = {}) =>
+  options.powerRatingModel ?? PowerRating
+
+const getRatingsForUser = async (userId, options = {}) => {
+  const query = getPowerRatingModel(options)
+    .find({ userId })
+    .sort({ teamName: 1 })
+
+  return options.session && typeof query.session === 'function'
+    ? query.session(options.session)
+    : query
+}
 
 const findDuplicates = (values) => {
   const seenValues = new Set()
@@ -194,8 +211,22 @@ const validateUpdatePayload = (payload = {}) => {
   }, {})
 }
 
-const initializeDefaultPowerRatings = async (userId) => {
+const resolveStartingRatingScale = async (userId, options = {}) => {
+  if (options.startingRatingScale) {
+    return options.startingRatingScale
+  }
+
+  const result = await (
+    options.getStartingRatingScale ?? getStartingRatingScale
+  )(userId)
+
+  return result.scale
+}
+
+const initializeDefaultPowerRatings = async (userId, options = {}) => {
+  const powerRatingModel = getPowerRatingModel(options)
   const seedTeams = await getSeedTeams()
+  const startingRatingScale = await resolveStartingRatingScale(userId, options)
   const operations = seedTeams.map((team) => ({
     updateOne: {
       filter: {
@@ -205,7 +236,7 @@ const initializeDefaultPowerRatings = async (userId) => {
       update: {
         $setOnInsert: {
           abbreviation: team.abbreviation,
-          baseRating: DEFAULT_BASE_RATING,
+          baseRating: startingRatingScale.center,
           homeAdvantage: DEFAULT_HOME_ADJUSTMENT,
           lastRatingChange: 0,
           manualAdjustment: 0,
@@ -219,7 +250,10 @@ const initializeDefaultPowerRatings = async (userId) => {
   }))
 
   try {
-    const result = await PowerRating.bulkWrite(operations, { ordered: false })
+    const result = await powerRatingModel.bulkWrite(operations, {
+      ordered: false,
+      ...(options.session ? { session: options.session } : {}),
+    })
 
     return {
       insertedCount: result.upsertedCount ?? 0,
@@ -238,8 +272,8 @@ const initializeDefaultPowerRatings = async (userId) => {
   }
 }
 
-const getPowerRatings = async (userId) => {
-  await initializeDefaultPowerRatings(userId)
+const getPowerRatings = async (userId, options = {}) => {
+  await initializeDefaultPowerRatings(userId, options)
 
   const ratings = await getRatingsForUser(userId)
 
@@ -290,15 +324,155 @@ const updatePowerRating = async (userId, teamId, payload) => {
   return serializeRating(rating)
 }
 
-const seedPowerRatings = async (userId) => {
-  const result = await initializeDefaultPowerRatings(userId)
-  const ratings = await getRatingsForUser(userId)
+const updateStartingPowerRating = async (
+  userId,
+  teamId,
+  payload,
+  options = {},
+) => {
+  if (
+    payload &&
+    !Array.isArray(payload) &&
+    typeof payload === 'object' &&
+    Object.hasOwn(payload, 'baseRating')
+  ) {
+    const startingRatingScale = await resolveStartingRatingScale(userId, options)
+
+    validateStartingRatingAssignment(payload.baseRating, startingRatingScale)
+  }
+
+  return updatePowerRating(userId, teamId, payload)
+}
+
+const getStartingRatingScaleLifecycle = async (userId, options = {}) => {
+  const processedRatingGameModel =
+    options.processedRatingGameModel ?? ProcessedRatingGame
+  const seasonMetadataProvider =
+    options.seasonMetadataProvider ??
+    (() =>
+      require('./nhlSeasonService').getAvailablePowerRatingHistorySeasons())
+  const seasonMetadata = await seasonMetadataProvider()
+  const currentSeason = seasonMetadata?.seasons?.find(
+    (season) =>
+      season.id === seasonMetadata.currentSeasonId || season.isCurrent,
+  )
+
+  if (!currentSeason?.startDate || !currentSeason?.endDate) {
+    return {
+      locked: false,
+      seasonId: seasonMetadata?.currentSeasonId ?? null,
+      status: 'preseason',
+    }
+  }
+
+  const processedGame = await processedRatingGameModel
+    .findOne({
+      gameDate: {
+        $gte: new Date(`${currentSeason.startDate}T00:00:00.000Z`),
+        $lte: new Date(`${currentSeason.endDate}T23:59:59.999Z`),
+      },
+      userId,
+    })
+    .select('_id')
+    .lean()
+  const locked = Boolean(processedGame)
+
+  return {
+    locked,
+    seasonId: currentSeason.id,
+    status: locked ? 'locked' : 'preseason',
+  }
+}
+
+const getStartingRatingScaleConfiguration = async (userId, options = {}) => {
+  const [scaleResult, lifecycle] = await Promise.all([
+    getStartingRatingScale(userId, options),
+    getStartingRatingScaleLifecycle(userId, options),
+  ])
+
+  return {
+    ...scaleResult,
+    ...lifecycle,
+  }
+}
+
+const updateStartingRatingScaleConfiguration = async (
+  userId,
+  payload,
+  options = {},
+) => {
+  const lifecycle = await getStartingRatingScaleLifecycle(userId, options)
+
+  if (lifecycle.locked) {
+    throw new PowerRatingsError(
+      'Starting scale cannot be changed after live rating updates begin.',
+      409,
+      { seasonId: lifecycle.seasonId },
+    )
+  }
+
+  const result = await updateStartingRatingScale(userId, payload, options)
+
+  return {
+    ...result,
+    ...lifecycle,
+  }
+}
+
+const seedPowerRatings = async (userId, options = {}) => {
+  const startingRatingScale = await resolveStartingRatingScale(userId, options)
+  const result = await initializeDefaultPowerRatings(userId, {
+    ...options,
+    startingRatingScale,
+  })
+  const ratings = await getRatingsForUser(userId, options)
 
   return {
     insertedCount: result.insertedCount,
     skippedCount: result.totalTeams - result.insertedCount,
+    startingRatingScale,
     totalTeams: result.totalTeams,
     ratings: ratings.map(serializeRating),
+  }
+}
+
+const resetPowerRatings = async (userId, options = {}) => {
+  const powerRatingModel = getPowerRatingModel(options)
+  const seedTeams = await getSeedTeams()
+  const startingRatingScale = await resolveStartingRatingScale(userId, options)
+  const operations = seedTeams.map((team) => ({
+    updateOne: {
+      filter: {
+        teamId: team.teamId,
+        userId,
+      },
+      update: {
+        $set: {
+          abbreviation: team.abbreviation,
+          baseRating: startingRatingScale.center,
+          homeAdvantage: DEFAULT_HOME_ADJUSTMENT,
+          lastRatingChange: 0,
+          manualAdjustment: 0,
+          teamId: team.teamId,
+          teamName: team.teamName,
+          userId,
+        },
+      },
+      upsert: true,
+    },
+  }))
+
+  await powerRatingModel.bulkWrite(operations, {
+    ordered: false,
+    ...(options.session ? { session: options.session } : {}),
+  })
+
+  const ratings = await getRatingsForUser(userId, options)
+
+  return {
+    ratings: ratings.map(serializeRating),
+    startingRatingScale,
+    totalTeams: seedTeams.length,
   }
 }
 
@@ -308,7 +482,12 @@ module.exports = {
   PowerRatingsError,
   getPowerRatings,
   getSeedTeams,
+  getStartingRatingScaleConfiguration,
+  getStartingRatingScaleLifecycle,
   initializeDefaultPowerRatings,
+  resetPowerRatings,
   seedPowerRatings,
+  updateStartingRatingScaleConfiguration,
+  updateStartingPowerRating,
   updatePowerRating,
 }

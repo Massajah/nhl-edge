@@ -92,8 +92,12 @@ test('default team Home Adjustment is zero', async () => {
     ],
     async () => {
       const result =
-        await powerRatingsService.initializeDefaultPowerRatings(userId)
-      const ratings = await powerRatingsService.getPowerRatings(userId)
+        await powerRatingsService.initializeDefaultPowerRatings(userId, {
+          startingRatingScale: { center: 46, mode: 'standard', spread: 8 },
+        })
+      const ratings = await powerRatingsService.getPowerRatings(userId, {
+        startingRatingScale: { center: 46, mode: 'standard', spread: 8 },
+      })
 
       assert.equal(result.insertedCount, 32)
       assert.equal(
@@ -103,6 +107,7 @@ test('default team Home Adjustment is zero', async () => {
         true,
       )
       assert.equal(ratings.length, 32)
+      assert.equal(ratings.every((rating) => rating.baseRating === 46), true)
       assert.equal(
         ratings.every((rating) => rating.homeAdjustment === 0),
         true,
@@ -160,5 +165,295 @@ test('invalid Home Adjustment values are rejected', async () => {
     (error) =>
       error.statusCode === 400 &&
       error.message === 'homeAdjustment must be between -5 and 5.',
+  )
+})
+
+test('explicit starting assignments use the selected scale while live edits remain free', async () => {
+  const userId = new mongoose.Types.ObjectId().toString()
+  const document = {
+    _id: new mongoose.Types.ObjectId(),
+    abbreviation: 'BOS',
+    baseRating: 46,
+    homeAdvantage: 0,
+    lastRatingChange: 0,
+    manualAdjustment: 0,
+    save: async () => {},
+    teamId: 'BOS',
+    teamName: 'Boston Bruins',
+    toJSON() {
+      return {
+        ...this,
+        id: this._id.toString(),
+        userId,
+      }
+    },
+    userId,
+  }
+  const startingRatingScale = {
+    center: 46,
+    mode: 'standard',
+    spread: 8,
+  }
+
+  await withPatches(
+    [[PowerRating, 'findOne', async () => document]],
+    async () => {
+      for (const baseRating of [42, 46, 50]) {
+        const rating = await powerRatingsService.updateStartingPowerRating(
+          userId,
+          'BOS',
+          { baseRating },
+          { startingRatingScale },
+        )
+
+        assert.equal(rating.baseRating, baseRating)
+      }
+
+      await assert.rejects(
+        () =>
+          powerRatingsService.updateStartingPowerRating(
+            userId,
+            'BOS',
+            { baseRating: 41.99 },
+            { startingRatingScale },
+          ),
+        /Starting rating must be between 42\.00 and 50\.00/,
+      )
+      await assert.rejects(
+        () =>
+          powerRatingsService.updateStartingPowerRating(
+            userId,
+            'BOS',
+            { baseRating: 50.01 },
+            { startingRatingScale },
+          ),
+        /Starting rating must be between 42\.00 and 50\.00/,
+      )
+
+      const liveRating = await powerRatingsService.updatePowerRating(
+        userId,
+        'BOS',
+        { baseRating: 51.4 },
+      )
+
+      assert.equal(liveRating.baseRating, 51.4)
+
+      const unchangedLiveRating =
+        await powerRatingsService.updateStartingPowerRating(
+          userId,
+          'BOS',
+          { homeAdjustment: 0.5 },
+          { startingRatingScale },
+        )
+
+      assert.equal(unchangedLiveRating.baseRating, 51.4)
+      assert.equal(unchangedLiveRating.homeAdjustment, 0.5)
+    },
+  )
+})
+
+test('Starting Rating Scale locks only after a current-season game is processed', async () => {
+  const queryOfValue = (value) => ({
+    lean() {
+      return this
+    },
+    select() {
+      return this
+    },
+    then(resolve, reject) {
+      return Promise.resolve(value).then(resolve, reject)
+    },
+  })
+  const seasonMetadataProvider = async () => ({
+    currentSeasonId: '20262027',
+    seasons: [
+      {
+        endDate: '2027-04-30',
+        id: '20262027',
+        isCurrent: true,
+        startDate: '2026-10-01',
+      },
+    ],
+  })
+  const createProcessedRatingGameModel = (gameDates) => ({
+    findOne(filter) {
+      const processedGame = gameDates.find((gameDate) => {
+        const timestamp = new Date(gameDate).getTime()
+
+        return (
+          timestamp >= filter.gameDate.$gte.getTime() &&
+          timestamp <= filter.gameDate.$lte.getTime()
+        )
+      })
+
+      return queryOfValue(
+        processedGame ? { _id: 'processed-game', gameDate: processedGame } : null,
+      )
+    },
+  })
+
+  assert.deepEqual(
+    await powerRatingsService.getStartingRatingScaleLifecycle('user-1', {
+      processedRatingGameModel: createProcessedRatingGameModel([]),
+      seasonMetadataProvider,
+    }),
+    { locked: false, seasonId: '20262027', status: 'preseason' },
+  )
+  assert.deepEqual(
+    await powerRatingsService.getStartingRatingScaleLifecycle('user-1', {
+      processedRatingGameModel: createProcessedRatingGameModel([
+        '2026-03-01T00:00:00.000Z',
+      ]),
+      seasonMetadataProvider,
+    }),
+    { locked: false, seasonId: '20262027', status: 'preseason' },
+  )
+  assert.deepEqual(
+    await powerRatingsService.getStartingRatingScaleLifecycle('user-1', {
+      processedRatingGameModel: createProcessedRatingGameModel([
+        '2026-10-10T00:00:00.000Z',
+      ]),
+      seasonMetadataProvider,
+    }),
+    { locked: true, seasonId: '20262027', status: 'locked' },
+  )
+})
+
+test('preseason scale is editable and locked scale cannot be changed', async () => {
+  const seasonMetadataProvider = async () => ({
+    currentSeasonId: '20262027',
+    seasons: [
+      {
+        endDate: '2027-04-30',
+        id: '20262027',
+        isCurrent: true,
+        startDate: '2026-10-01',
+      },
+    ],
+  })
+  const queryOfProcessedGame = (value) => ({
+    lean() {
+      return this
+    },
+    select() {
+      return this
+    },
+    then(resolve, reject) {
+      return Promise.resolve(value).then(resolve, reject)
+    },
+  })
+  const settings = new Map()
+  const settingsModel = {
+    async findOneAndUpdate({ userId }, update) {
+      const document = { ...update.$set, userId }
+
+      settings.set(String(userId), document)
+      return document
+    },
+  }
+  const unlocked = await powerRatingsService.updateStartingRatingScaleConfiguration(
+    'user-1',
+    { max: 48, min: 42, mode: 'standard' },
+    {
+      processedRatingGameModel: {
+        findOne: () => queryOfProcessedGame(null),
+      },
+      seasonMetadataProvider,
+      settingsModel,
+    },
+  )
+
+  assert.equal(unlocked.locked, false)
+  assert.equal(unlocked.scale.min, 42)
+  assert.equal(unlocked.scale.max, 48)
+
+  await assert.rejects(
+    () =>
+      powerRatingsService.updateStartingRatingScaleConfiguration(
+        'user-1',
+        { max: 50, min: 40, mode: 'standard' },
+        {
+          processedRatingGameModel: {
+            findOne: () =>
+              queryOfProcessedGame({ _id: 'current-season-game' }),
+          },
+          seasonMetadataProvider,
+          settingsModel,
+        },
+      ),
+    (error) =>
+      error.statusCode === 409 &&
+      error.message ===
+        'Starting scale cannot be changed after live rating updates begin.',
+  )
+  assert.equal(settings.get('user-1').startingRatingSpread, 6)
+})
+
+test('explicit reset applies the selected center without distributing teams', async () => {
+  const userId = new mongoose.Types.ObjectId()
+  const ratingsByKey = new Map()
+
+  await withPatches(
+    [
+      [
+        PowerRating,
+        'bulkWrite',
+        async (operations) => {
+          operations.forEach(({ updateOne }) => {
+            const key = `${updateOne.filter.userId}-${updateOne.filter.teamId}`
+            const values = updateOne.update.$set
+            const document = {
+              ...(ratingsByKey.get(key) ?? {}),
+              ...values,
+              _id:
+                ratingsByKey.get(key)?._id ?? new mongoose.Types.ObjectId(),
+            }
+
+            document.toJSON = () => ({
+              ...document,
+              id: document._id.toString(),
+              userId: document.userId.toString(),
+            })
+            ratingsByKey.set(key, document)
+          })
+
+          return { matchedCount: 0, modifiedCount: 32, upsertedCount: 32 }
+        },
+      ],
+      [
+        PowerRating,
+        'find',
+        (filter) =>
+          queryOf(
+            [...ratingsByKey.values()].filter(
+              (rating) => rating.userId.toString() === filter.userId.toString(),
+            ),
+          ),
+      ],
+    ],
+    async () => {
+      const result = await powerRatingsService.resetPowerRatings(userId, {
+        startingRatingScale: {
+          center: 47.5,
+          max: 52,
+          min: 43,
+          mode: 'custom',
+          spread: 9,
+        },
+      })
+
+      assert.equal(result.ratings.length, 32)
+      assert.equal(
+        result.ratings.every((rating) => rating.baseRating === 47.5),
+        true,
+      )
+      assert.equal(
+        result.ratings.every(
+          (rating) =>
+            rating.homeAdjustment === 0 && rating.manualAdjustment === 0,
+        ),
+        true,
+      )
+    },
   )
 })

@@ -6,6 +6,10 @@ const router = express.Router()
 
 router.use(authenticate)
 
+router.post('/reset/settings', settingsController.resetSettingsToDefaults)
+router.post('/reset/new-season', settingsController.resetForNewSeason)
+router.post('/reset/factory', settingsController.factoryResetUserData)
+
 router.get('/betting', settingsController.getBettingSettings)
 router.put('/betting', settingsController.updateBettingSettings)
 router.post('/betting/reset', settingsController.resetBettingSettings)

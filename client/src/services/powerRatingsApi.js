@@ -30,9 +30,35 @@ export const seedPowerRatings = async () =>
     method: 'POST',
   })
 
+export const resetPowerRatings = async () =>
+  requestPowerRatings('/api/power-ratings/reset', {
+    method: 'POST',
+  })
+
+export const getStartingRatingScale = async () =>
+  requestPowerRatings('/api/power-ratings/starting-scale')
+
+export const updateStartingRatingScale = async (scale) =>
+  requestPowerRatings('/api/power-ratings/starting-scale', {
+    body: JSON.stringify(scale),
+    method: 'PUT',
+  })
+
 export const updatePowerRating = async (teamId, values) => {
   const data = await requestPowerRatings(
     `/api/power-ratings/${encodeURIComponent(teamId)}`,
+    {
+      body: JSON.stringify(values),
+      method: 'PUT',
+    },
+  )
+
+  return data.rating
+}
+
+export const updateStartingPowerRating = async (teamId, values) => {
+  const data = await requestPowerRatings(
+    `/api/power-ratings/starting/${encodeURIComponent(teamId)}`,
     {
       body: JSON.stringify(values),
       method: 'PUT',

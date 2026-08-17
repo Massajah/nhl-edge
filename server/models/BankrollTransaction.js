@@ -4,7 +4,12 @@ const BANKROLL_TRANSACTION_TYPES = Object.freeze([
   'STARTING_BALANCE',
   'DEPOSIT',
   'WITHDRAWAL',
+  'BET_STAKE',
+  'BET_WIN_RETURN',
+  'BET_VOID_RETURN',
   'BET_SETTLEMENT',
+  'MANUAL_ADJUSTMENT',
+  'SETTLEMENT_REVERSAL',
   'ADJUSTMENT',
 ])
 
@@ -43,6 +48,19 @@ const bankrollTransactionSchema = new mongoose.Schema(
       ref: 'Bet',
       default: null,
     },
+    actionKey: {
+      type: String,
+      trim: true,
+      default: null,
+    },
+    balanceAfterCents: {
+      type: Number,
+      default: null,
+      validate: {
+        message: 'balanceAfterCents must be an integer.',
+        validator: (value) => value === null || Number.isInteger(value),
+      },
+    },
     metadata: {
       type: mongoose.Schema.Types.Mixed,
       default: () => ({}),
@@ -64,6 +82,18 @@ const bankrollTransactionSchema = new mongoose.Schema(
 
 bankrollTransactionSchema.index({ userId: 1, occurredAt: -1, createdAt: -1 })
 bankrollTransactionSchema.index({ userId: 1, type: 1, occurredAt: -1 })
+bankrollTransactionSchema.index(
+  { userId: 1, actionKey: 1 },
+  {
+    partialFilterExpression: {
+      actionKey: {
+        $exists: true,
+        $type: 'string',
+      },
+    },
+    unique: true,
+  },
+)
 bankrollTransactionSchema.index(
   { userId: 1, betId: 1, type: 1 },
   {

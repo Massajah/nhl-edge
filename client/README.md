@@ -1,5 +1,57 @@
 # NHL Edge Frontend
 
+## NHL Standings
+
+The sidebar includes a read-only `Standings` page after Teams. It defaults to
+the canonical current NHL season and offers the current season plus five recent
+historical regular seasons. Conference is the default hockey-focused view;
+League and Division views regroup the same normalized league-wide response
+without additional provider requests.
+
+Each compact table follows official NHL ordering and displays Rank, Team, GP,
+W, L, OT, PTS, P%, GF, GA, DIFF, Last 10, and streak. Provider logos and
+season-specific names are retained, including Arizona Coyotes, Utah Hockey
+Club, and Utah Mammoth branding. Official clinch markers are shown when the NHL
+response includes them; the client does not infer playoff qualification. A
+compact legend immediately below the controls explains `x` playoff berth, `y`
+division title, `z` conference title, `p` Presidents' Trophy, and `e`
+elimination. Each badge also has its own accessible label and tooltip. Combined
+codes render as separate badges, while an unknown provider code remains visible
+with a neutral official-indicator description rather than a guessed meaning.
+
+The selector keeps League, Conference, and Division in one visual group and
+places Playoffs on the same row after a 16px gap. Only one view is active. The
+existing Season selector controls both standings and playoffs, and switching
+back restores the already loaded standings view.
+
+Playoffs shows official NHL bracket series and results for completed seasons
+and an active current postseason. Conference sections progress through Round 1,
+Round 2, and Conference Final, followed by a dedicated Stanley Cup Final. Cards
+show season-specific team identity, logos, series wins, an explicit text winner,
+and TBD for unknown future teams. A completed official final adds a compact
+Stanley Cup Champion summary. Rounds stack vertically on narrow screens.
+
+Before the current playoffs begin, the same view is labeled `Projected` and
+`If playoffs started today`. These matchups come from the official standings
+division and wildcard order and are explicitly described as a standings
+snapshot—not NHL Edge model predictions. Future-round teams remain TBD. Clean
+loading, `provider_error`, `unavailable`, and `projected_unavailable` states
+replace empty bracket shells.
+
+Current standings come from the official NHL Web API's latest standings
+resource. Historical selections are final regular-season snapshots requested
+at each season's canonical end date. The client caches loaded seasons for the
+life of the page, while the server applies short current and long historical
+caches. Preseason, unsupported historical data, loading, and safe provider
+failure states stay inside the page and never blank the application.
+
+Standings are explicitly informational. The page imports no model calculation
+pipeline and does not change Power Ratings, Effective Rating, probabilities,
+Home Advantage, Motivation, bet recommendations, or Rating Lab. Its normalized
+records and conference/division ranks are reusable for a future Season
+Simulator, but no simulator, playoff probability, series probability,
+date-specific standings snapshot, or automatic Motivation feature is included.
+
 ## Market Odds Phase 1
 
 Authenticated Dashboard loads request current NHL moneyline odds from the NHL
@@ -186,7 +238,7 @@ cached dataset.
 - Away PP versus Home PK and Home PP versus Away PK are evaluated
   independently, so both teams may have signals in one game.
 
-Settings > Model Adjustments contains `Special Teams Matchup Alerts`, with an
+Settings > Game Context contains `Special Teams Matchup Alerts`, with an
 enabled toggle and a validated integer threshold from `3` through `12`. These
 values are authenticated, user-scoped fields in the existing rating-engine
 settings document. Missing PP/PK ranks produce an unavailable/quiet state and
@@ -202,6 +254,31 @@ probability, fair odds, Dashboard preliminary analysis, Analyzer adjustment
 totals, Kelly sizing, or saved bets. A future Rating Lab phase may evaluate
 thresholds and adjustment magnitudes without changing the shared detector;
 there is no automatic Special Teams adjustment in this version.
+
+## Starting Rating Scale
+
+The Power Ratings page owns the persisted `Starting Rating Scale`. It is an
+initialization guardrail, not a live-rating boundary. The compact control uses
+range-first presets: `42–48`, `42–50` (the Base Model v1 calibrated default),
+`40–50`, and `40–52`. Custom mode accepts minimum and maximum starting ratings;
+center and total spread are derived internally and persisted.
+
+The scale remains editable during preseason. It locks only after the current
+active season contains a real processed production rating game, using season
+metadata rather than the calendar date alone. Prior-season history does not
+lock an upcoming preseason. Once locked, the saved range remains visible but
+the selector and Custom inputs cannot be changed.
+
+The lock applies only to scale configuration. Manual live Rating, Home
+Adjustment, and Manual Adjustment edits remain available, Rating Engine updates
+are never clamped, and ratings can move above or below the starting range.
+Changing or saving an unlocked selector does not redistribute or rewrite team
+ratings; only explicit seed/reset behavior uses the selected center. No
+automatic rank-to-rating distribution is implemented.
+
+Non-default ranges have not been calibrated to the same degree as `42–50`.
+`Probability Scale`, K factor, Home Advantage, and other model parameters are
+not changed by this control. Rating Lab keeps its own calibration controls.
 
 ## Manual Power Rating Updates
 
@@ -291,7 +368,7 @@ optimal or as guaranteed predictive performance.
 
 Settings keeps Probability Scale inside the collapsed Power Rating Engine
 Advanced Model Settings. Maximum Goalie Penalty and Maximum Player Injury
-Penalty appear in dedicated Goalie and Injury cards under Model Adjustments
+Penalty appear in dedicated Goalie and Injury cards under Rating Model
 while remaining persisted in the same authenticated user's Power Rating Engine
 settings document. They default to `-4.00` and `-2.50`; the injury value uses
 `0.50` increments and limits one skater record rather than the team total.
@@ -299,7 +376,7 @@ Probability Scale is used by Dashboard
 preliminary analysis, Game Analyzer, fair odds, and future automatic rating
 updates. Power Rating Engine reset restores scale `20`, K `1.3`, and result
 multipliers `1.0`/`0.4`/`0.1` without resetting Base Home Advantage, Maximum
-Goalie Penalty, or Maximum Player Injury Penalty. Model Adjustments reset
+Goalie Penalty, or Maximum Player Injury Penalty. Rating Model reset
 restores Base Home Advantage `3.5`, Maximum Goalie Penalty `-4.00`, and Maximum
 Player Injury Penalty `-2.50` within its own scope. Previously processed Power
 Rating history is never recalculated.
@@ -361,16 +438,20 @@ Dashboard analysis recalculates without a page reload.
 Automatic updates only process newly completed eligible NHL regular-season
 games. If update history already exists, the backend starts from the latest
 processed game date with a small overlap and relies on idempotency to avoid
-duplicate movement. If there is no processed-game audit baseline, Dashboard
-shows `Power Rating initialization required` and links to the existing manual
-update workflow instead of replaying an entire season automatically.
+duplicate movement. If current-season history is empty, the backend uses the
+configured ratings as the starting state and processes eligible games from the
+canonical current-season start. Before the first eligible game, Dashboard
+shows the neutral `Power Ratings ready for season start` state; it does not ask
+the user to run an empty manual update.
 
 The compact Dashboard status row can show checking, updated, up to date,
-partial, unavailable, or initialization-required states. Manual updates remain
-available for initialization, historical ranges, recovery, testing, and detailed
-processed-game inspection. Cron jobs, polling, WebSockets, full-season
-recalculation, and automatic replay after setting changes are intentionally
-deferred.
+preseason-ready, unprocessed-games, partial, or unavailable states. An
+unprocessed-games state uses an `Update Power Ratings` maintenance action.
+Manual updates remain available for recovery, testing, selected date ranges,
+and detailed processed-game inspection. A zero-game manual run creates no
+history marker and does not lock the Starting Rating Scale. Cron jobs, polling,
+WebSockets, full-season recalculation, and automatic replay after setting
+changes are intentionally deferred.
 
 ## Power Rating Update History
 
@@ -435,10 +516,11 @@ Currency. The starting balance becomes the first ledger transaction; existing
 historical bets are not imported automatically.
 
 After initialization, summary cards show Current Bankroll, Available Bankroll,
-Betting Profit, Pending Exposure, Deposits, and Withdrawals. Current Bankroll is
-the full transaction-ledger balance. Available Bankroll subtracts pending stake
-exposure. Betting Profit is separate from deposits and withdrawals so cash
-movement does not inflate model performance.
+Betting Profit, Pending Exposure, Deposits, and Withdrawals. Available Bankroll
+is spendable balance after new-bet stake debits. Current Bankroll adds open
+exposure back as an equity view, while Pending Exposure is informational and is
+not deducted twice. Betting Profit is separate from bankroll returns, deposits,
+and withdrawals so cash movement does not inflate betting performance.
 
 The period selector supports All time, available NHL seasons, and custom date
 ranges using the same season metadata conventions as Power Rating Update
@@ -447,12 +529,22 @@ with the usual future-date and inverted-range validation. The ledger can also
 be filtered by transaction type and paged with the row-count selector.
 
 Deposits and withdrawals are recorded from compact inline forms. Withdrawals are
-validated client-side and server-side against current bankroll; the backend is
+validated client-side and server-side against available bankroll; the backend is
 authoritative for insufficient-funds errors.
 
-Settled saved bets synchronize into the bankroll ledger from the server. Editing
-a settled result or stake updates the related settlement transaction, moving the
-bet back to pending removes it, and deleting the bet removes the settlement.
+Saving a new linked moneyline bet deducts stake immediately. `Settle completed
+bets` deliberately calls one authenticated backend action, then refreshes bets
+and bankroll data. Only final linked NHL games settle automatically. Regulation,
+overtime, and shootout all count for moneyline; a win credits the full
+`stake * decimal odds` return, a loss adds no further bankroll movement, and a
+manual void or push returns stake. Cards show Pending, Auto-settled, or Manual
+source labels and reuse stored final scores without an extra display request.
+
+Unlinked legacy bets explain that automatic settlement is unavailable and keep
+the manual result selector. Manual corrections reverse prior bankroll effects
+before applying the new result. Stake is locked after settlement, settled bets
+cannot be deleted, and deleting a pending transactionally funded bet returns its
+stake exactly once. No background polling or scheduler runs from the client.
 
 ## Betting Settings
 
@@ -583,8 +675,8 @@ Rematch fields. Phase 3 uses the same canonical season IDs and regular-season
 eligibility filter as Base Model Calibration; zero context occurrences still
 produce a valid control comparison rather than an empty-season error.
 
-In Settings, Base Home Advantage remains visually under Model Adjustments and
-is saved by Save Model Adjustments. Save Rating Engine owns only K, the result
+In Settings, Base Home Advantage remains visually under Rating Model and is
+saved by Save Rating Model. Save Rating Engine owns only K, the result
 multipliers, and Probability Scale; their dirty states remain separate.
 
 ## Rating Lab Special Teams (Phase 4)
@@ -624,3 +716,45 @@ The workflow is experimental and has no Apply action. It does not modify the
 production Special Teams alert toggle or threshold, Dashboard or Analyzer
 probabilities, fair odds, Power Ratings, or saved Settings. Production remains
 informational alert-only.
+
+## Settings tabs and reset lifecycle
+
+Settings is organized into five keyboard-accessible tabs. The selected tab is
+also reflected in the `?tab=` query parameter without reloading the application:
+
+- `General` owns account information, Market Odds status, and Preferred
+  Bookmakers.
+- `Rating Model` owns Base Home Advantage, goalie/injury guardrails, K Factor,
+  result multipliers, and Probability Scale.
+- `Game Context` owns Rest & Fatigue, Well Rested, 3 Games in 4 Days,
+  Back-to-Back variants, the existing Quick Rematch setting (displayed as
+  Quick Rematch / Revenge), and informational Special Teams alerts.
+- `Betting` owns Kelly, stake caps, edge thresholds, rounding, and bankroll
+  basis configuration. Bet history remains in Bet Tracker.
+- `Data & Reset` owns the three explicit reset workflows below.
+
+The controls continue to use their existing authenticated APIs, stored keys,
+validation, defaults, and separate save groups. Changing tabs does not recreate
+the settings drafts, so unsaved input remains available until it is saved or
+locally reset.
+
+`Reset Settings to Defaults` restores configuration only. It preserves bets,
+bankroll and its transaction history, current Power Ratings and update history,
+injuries, saved analyses, game inputs, and all historical datasets. Starting
+Rating Scale returns to the calibrated `42–50` default.
+
+`Reset for New Season` resets teams to the center of the currently configured
+Starting Rating Scale, clears current-season rating history/processed markers,
+injuries, game contexts, browser-local analyses, and current Dashboard odds.
+The scale configuration is preserved and becomes editable because the new
+season has no processed marker. Settings, bets, settled outcomes, bankroll,
+Rating Lab datasets, and provider caches are preserved.
+
+`Factory Reset / Delete All Data` requires the exact typed confirmation
+`RESET`. It deletes all authenticated user-owned settings, bets, bankroll data,
+Power Ratings/history, injuries, team goalie/lineup data, game contexts, and
+browser-local analysis state. The signed-in account and authentication token
+remain valid. Starting Rating Scale returns to `42–50`; ratings are initialized
+from the resulting fresh state when reloaded. Shared `HistoricalNhlGame`,
+`HistoricalSeasonDataset`, `HistoricalSpecialTeamsSeason`, and provider caches
+are never deleted.

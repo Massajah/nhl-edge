@@ -3,6 +3,33 @@ const powerRatingHistoryService = require('../services/powerRatingHistoryService
 const nhlSeasonService = require('../services/nhlSeasonService')
 const ratingUpdateService = require('../services/ratingUpdateService')
 
+const getStartingRatingScale = async (request, response, next) => {
+  try {
+    const result =
+      await powerRatingsService.getStartingRatingScaleConfiguration(
+        request.user.id,
+      )
+
+    response.json(result)
+  } catch (error) {
+    next(error)
+  }
+}
+
+const updateStartingRatingScale = async (request, response, next) => {
+  try {
+    const result =
+      await powerRatingsService.updateStartingRatingScaleConfiguration(
+        request.user.id,
+        request.body,
+      )
+
+    response.json(result)
+  } catch (error) {
+    next(error)
+  }
+}
+
 const getPowerRatings = async (request, response, next) => {
   try {
     const ratings = await powerRatingsService.getPowerRatings(request.user.id)
@@ -27,11 +54,35 @@ const updatePowerRating = async (request, response, next) => {
   }
 }
 
+const updateStartingPowerRating = async (request, response, next) => {
+  try {
+    const rating = await powerRatingsService.updateStartingPowerRating(
+      request.user.id,
+      request.params.teamId,
+      request.body,
+    )
+
+    response.json({ rating })
+  } catch (error) {
+    next(error)
+  }
+}
+
 const seedPowerRatings = async (request, response, next) => {
   try {
     const result = await powerRatingsService.seedPowerRatings(request.user.id)
 
     response.status(201).json(result)
+  } catch (error) {
+    next(error)
+  }
+}
+
+const resetPowerRatings = async (request, response, next) => {
+  try {
+    const result = await powerRatingsService.resetPowerRatings(request.user.id)
+
+    response.json(result)
   } catch (error) {
     next(error)
   }
@@ -92,7 +143,11 @@ module.exports = {
   getPowerRatingHistory,
   getPowerRatingHistorySeasons,
   getPowerRatings,
+  getStartingRatingScale,
+  resetPowerRatings,
   seedPowerRatings,
+  updateStartingPowerRating,
+  updateStartingRatingScale,
   updatePowerRating,
   updatePowerRatingsFromCompletedGames,
 }

@@ -11,6 +11,7 @@ const playersRoutes = require('./routes/playersRoutes')
 const powerRatingSimulationsRoutes = require('./routes/powerRatingSimulationsRoutes')
 const powerRatingsRoutes = require('./routes/powerRatingsRoutes')
 const settingsRoutes = require('./routes/settingsRoutes')
+const standingsRoutes = require('./routes/standingsRoutes')
 const teamsRoutes = require('./routes/teamsRoutes')
 const { getCorsOptions } = require('./config/cors')
 
@@ -44,6 +45,7 @@ app.use('/api/players', playersRoutes)
 app.use('/api/power-rating-simulations', powerRatingSimulationsRoutes)
 app.use('/api/power-ratings', powerRatingsRoutes)
 app.use('/api/settings', settingsRoutes)
+app.use('/api/standings', standingsRoutes)
 app.use('/api/teams', teamsRoutes)
 
 app.get('/api/schedule/today', async (_request, response, next) => {

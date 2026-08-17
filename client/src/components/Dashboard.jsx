@@ -1198,6 +1198,31 @@ const getAutomaticRatingUpdatePresentation = ({
     }
   }
 
+  if (
+    result.status ===
+    AUTOMATIC_POWER_RATING_UPDATE_STATUSES.PRESEASON_READY
+  ) {
+    return {
+      detail: result.message,
+      status: result.status,
+      title: 'Power Ratings ready for season start',
+      tone: 'neutral',
+    }
+  }
+
+  if (
+    result.status ===
+    AUTOMATIC_POWER_RATING_UPDATE_STATUSES.UNPROCESSED_GAMES
+  ) {
+    return {
+      detail:
+        result.message || 'Completed games are waiting to be processed.',
+      status: result.status,
+      title: 'Power Rating update available',
+      tone: 'warning',
+    }
+  }
+
   if (result.status === AUTOMATIC_POWER_RATING_UPDATE_STATUSES.PARTIAL) {
     return {
       detail: [
@@ -1216,20 +1241,6 @@ const getAutomaticRatingUpdatePresentation = ({
         .join(' | '),
       status: result.status,
       title: 'Power Rating update partially completed',
-      tone: 'warning',
-    }
-  }
-
-  if (
-    result.status ===
-    AUTOMATIC_POWER_RATING_UPDATE_STATUSES.REQUIRES_INITIALIZATION
-  ) {
-    return {
-      detail:
-        result.message ||
-        'Power Rating automatic updates need an initial processing point.',
-      status: result.status,
-      title: 'Power Rating initialization required',
       tone: 'warning',
     }
   }
@@ -1262,9 +1273,9 @@ function AutomaticPowerRatingUpdateStatus({
     return null
   }
 
-  const requiresInitialization =
+  const hasUnprocessedGames =
     presentation.status ===
-    AUTOMATIC_POWER_RATING_UPDATE_STATUSES.REQUIRES_INITIALIZATION
+    AUTOMATIC_POWER_RATING_UPDATE_STATUSES.UNPROCESSED_GAMES
 
   return (
     <div
@@ -1275,9 +1286,9 @@ function AutomaticPowerRatingUpdateStatus({
         <strong>{presentation.title}</strong>
         {presentation.detail ? <span>{presentation.detail}</span> : null}
       </div>
-      {requiresInitialization && typeof onOpenManualUpdate === 'function' ? (
+      {hasUnprocessedGames && typeof onOpenManualUpdate === 'function' ? (
         <button type="button" onClick={onOpenManualUpdate}>
-          Open manual update
+          Update Power Ratings
         </button>
       ) : null}
     </div>

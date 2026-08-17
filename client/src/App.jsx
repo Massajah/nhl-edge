@@ -4,6 +4,7 @@ import {
   ClipboardList,
   FlaskConical,
   LayoutDashboard,
+  ListOrdered,
   Settings as SettingsIcon,
   Shield,
   Target,
@@ -18,6 +19,7 @@ import AppLayout from "./components/layout/AppLayout.jsx";
 import PowerRatings from "./components/PowerRatings.jsx";
 import RatingLab from "./components/RatingLab.jsx";
 import SettingsPage from "./components/Settings.jsx";
+import Standings from "./components/Standings.jsx";
 import Teams from "./components/Teams.jsx";
 import { useAuth } from "./context/AuthContext.jsx";
 import { NHL_TEAMS } from "./data/teams.js";
@@ -25,6 +27,7 @@ import { fetchTeamInjurySummary } from "./services/injuriesApi.js";
 import {
   autoUpdatePowerRatings,
   fetchPowerRatings,
+  resetPowerRatings,
   seedPowerRatings,
   updatePowerRating,
   updatePowerRatings,
@@ -67,6 +70,13 @@ const pages = [
     label: "Teams",
     path: "/teams",
     title: "Teams",
+  },
+  {
+    id: "standings",
+    Icon: ListOrdered,
+    label: "Standings",
+    path: "/standings",
+    title: "Standings",
   },
   {
     id: "ratings",
@@ -456,26 +466,8 @@ function AuthenticatedApp({ authUser, onLogout }) {
   );
 
   const handleResetPowerRatings = useCallback(async () => {
-    await seedPowerRatings();
-
-    const defaultRatings = createDefaultPowerRatings();
-    const updates = NHL_TEAMS.reduce((teamUpdates, team) => {
-      teamUpdates[team.id] = {
-        baseRating: defaultRatings[team.id].baseRating,
-        homeAdjustment: defaultRatings[team.id].homeAdjustment,
-        lastRatingChange: defaultRatings[team.id].lastRatingChange,
-        manualAdjustment: defaultRatings[team.id].manualAdjustment,
-      };
-
-      return teamUpdates;
-    }, {});
-
-    const updatedRatings = await Promise.all(
-      Object.entries(updates).map(([teamId, values]) =>
-        updatePowerRating(teamId, values),
-      ),
-    );
-    const nextRatings = normalizePowerRatings(updatedRatings);
+    const result = await resetPowerRatings();
+    const nextRatings = normalizePowerRatings(result.ratings);
 
     setPowerRatings(nextRatings);
     setPowerRatingsStatus("success");
@@ -485,6 +477,16 @@ function AuthenticatedApp({ authUser, onLogout }) {
 
     return nextRatings;
   }, [updateMigrationAvailability]);
+
+  const handleUserDataReset = useCallback(async () => {
+    setMigrationAvailable(false);
+
+    await Promise.allSettled([
+      loadMongoPowerRatings({ seedIfMissing: true }),
+      loadInjurySummaries(),
+      loadRatingEngineSettings(),
+    ]);
+  }, [loadInjurySummaries, loadMongoPowerRatings, loadRatingEngineSettings]);
 
   const handleUpdatePowerRatings = useCallback(
     async (range) => {
@@ -710,6 +712,8 @@ function AuthenticatedApp({ authUser, onLogout }) {
           powerRatings={powerRatings}
           powerRatingsStatus={powerRatingsStatus}
         />
+      ) : activePage === "standings" ? (
+        <Standings />
       ) : activePage === "ratings" ? (
         <PowerRatings
           baseHomeAdvantage={ratingEngineSettings.homeAdvantage}
@@ -740,7 +744,10 @@ function AuthenticatedApp({ authUser, onLogout }) {
           onInjuriesChanged={loadInjurySummaries}
         />
       ) : activePage === "settings" ? (
-        <SettingsPage onRatingEngineSettingsChanged={applyRatingEngineSettings} />
+        <SettingsPage
+          onRatingEngineSettingsChanged={applyRatingEngineSettings}
+          onUserDataReset={handleUserDataReset}
+        />
       ) : (
         <BetTracker />
       )}

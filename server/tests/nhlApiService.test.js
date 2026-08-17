@@ -103,6 +103,24 @@ test('NHL API requester serves cached schedule responses within TTL', async () =
   )
 })
 
+test('standings cache uses short current and long historical TTLs', () => {
+  const now = new Date('2026-08-17T12:00:00.000Z')
+
+  assert.equal(
+    getCacheTtlMs('/standings/now', now),
+    NHL_API_CACHE_TTLS_MS.currentStandings,
+  )
+  assert.equal(
+    getCacheTtlMs('/standings/2025-04-17', now),
+    NHL_API_CACHE_TTLS_MS.historicalStandings,
+  )
+  assert.equal(
+    NHL_API_CACHE_TTLS_MS.currentStandings <
+      NHL_API_CACHE_TTLS_MS.historicalStandings,
+    true,
+  )
+})
+
 test('NHL API requester limits concurrent distinct upstream requests', async () => {
   let activeCount = 0
   let maxActiveCount = 0
