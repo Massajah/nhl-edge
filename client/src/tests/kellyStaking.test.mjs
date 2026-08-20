@@ -114,6 +114,51 @@ const createStakeRecommendation = (overrides = {}) =>
     settings: overrides.settings ?? baseBettingSettings,
   })
 
+const createAnalyzerScenario = ({
+  edgePercentagePoints,
+  modelProbability = 0.401,
+}) => {
+  const decimalOdds = 1 / (modelProbability - edgePercentagePoints / 100)
+  const comparison = calculateGameUtils.calculateMarketComparison({
+    marketOdds: decimalOdds,
+    modelProbability,
+  })
+  const stakeRecommendation = createStakeRecommendation({
+    decimalOdds,
+    modelProbability,
+  })
+  const inputs = {
+    away: { ...baseInputs.away, marketOdds: '' },
+    home: { ...baseInputs.home, marketOdds: decimalOdds },
+  }
+  const result = {
+    ...calculateGameUtils.calculateGame(inputs.home, inputs.away),
+    homeEdge: comparison.probabilityEdge,
+    homeExpectedValue: comparison.expectedValue,
+    homeFairOdds: comparison.fairOdds,
+    homeImpliedProbability: comparison.impliedProbability,
+    homeModelStatus: comparison.modelStatus,
+    homeOddsDifference: comparison.oddsDifference,
+    homeRecommendation: comparison.recommendation,
+    homeWinProbability: modelProbability,
+  }
+
+  return {
+    comparison,
+    decimalOdds,
+    html: renderResultCard({
+      inputs,
+      result,
+      stake: '5',
+      stakeRecommendation,
+      stakeRecommendations: { home: stakeRecommendation },
+    }),
+    inputs,
+    result,
+    stakeRecommendation,
+  }
+}
+
 const currencyPattern = (amountText) =>
   new RegExp(`${amountText}(?:&nbsp;|\\s)*(?:\\u20ac|EUR)`)
 
@@ -204,6 +249,101 @@ test('Kelly reasons cover no edge, exact zero edge, below minimum and negative K
       modelProbability: 0.55,
     }).reason,
     reasons.NON_POSITIVE_KELLY,
+  )
+})
+
+test('Analyzer recommendation states distinguish below-threshold value, candidates, and no value', () => {
+  const states = kellyStaking.ANALYZER_RECOMMENDATION_STATES
+  const belowThreshold = createAnalyzerScenario({
+    edgePercentagePoints: 1.96,
+  })
+  const candidate = createAnalyzerScenario({ edgePercentagePoints: 2.9 })
+  const noValue = createAnalyzerScenario({ edgePercentagePoints: -1 })
+
+  assert.ok(belowThreshold.comparison.expectedValue > 0)
+  assert.equal(belowThreshold.stakeRecommendation.reason, 'BELOW_MINIMUM_EDGE')
+  assert.equal(
+    kellyStaking.getAnalyzerRecommendationState({
+      expectedValue: belowThreshold.comparison.expectedValue,
+      recommendation: belowThreshold.stakeRecommendation,
+    }),
+    states.POSITIVE_VALUE_BELOW_THRESHOLD,
+  )
+  assert.match(
+    belowThreshold.html,
+    /market-side positive-value-below-threshold/,
+  )
+  assert.match(
+    belowThreshold.html,
+    /market-side positive-value-below-threshold[\s\S]*?recommendation-badge positive-value-below-threshold">Positive Value · Below Threshold/,
+  )
+  assert.match(
+    belowThreshold.html,
+    /stake-recommendation-panel positive-value-below-threshold[\s\S]*?recommendation-badge positive-value-below-threshold">Below Threshold/,
+  )
+  assert.match(
+    belowThreshold.html,
+    /Edge \+1\.96 pp is below your \+2\.00 pp minimum\. No stake recommended\./,
+  )
+  assert.match(belowThreshold.html, /No stake recommended/)
+  assert.match(belowThreshold.html, /Below 2\.00 pp betting threshold/)
+  assert.match(
+    belowThreshold.html,
+    /NHL Edge does not recommend a stake under the current betting rules/,
+  )
+  assert.match(
+    belowThreshold.html,
+    /id="stake-recommendation-your-stake"[^>]+value="5"/,
+  )
+
+  assert.equal(candidate.stakeRecommendation.eligible, true)
+  assert.equal(
+    kellyStaking.getAnalyzerRecommendationState({
+      expectedValue: candidate.comparison.expectedValue,
+      recommendation: candidate.stakeRecommendation,
+    }),
+    states.BET_CANDIDATE,
+  )
+  assert.match(candidate.html, /market-side bet-candidate/)
+  assert.match(candidate.html, /Bet Candidate/)
+  assert.match(candidate.html, /Kelly stake recommended/)
+
+  assert.ok(noValue.comparison.expectedValue <= 0)
+  assert.equal(
+    kellyStaking.getAnalyzerRecommendationState({
+      expectedValue: noValue.comparison.expectedValue,
+      recommendation: noValue.stakeRecommendation,
+    }),
+    states.NO_VALUE,
+  )
+  assert.match(noValue.html, /market-side no-value/)
+  assert.match(noValue.html, /No Value/)
+  assert.doesNotMatch(noValue.html, /Bet Candidate/)
+})
+
+test('exact minimum edge passes while displayed rounding never drives eligibility', () => {
+  const states = kellyStaking.ANALYZER_RECOMMENDATION_STATES
+  const exactThreshold = createAnalyzerScenario({ edgePercentagePoints: 2 })
+  const roundedUpBelowThreshold = createAnalyzerScenario({
+    edgePercentagePoints: 1.996,
+  })
+
+  assert.equal(exactThreshold.stakeRecommendation.eligible, true)
+  assert.equal(
+    kellyStaking.getAnalyzerRecommendationState({
+      expectedValue: exactThreshold.comparison.expectedValue,
+      recommendation: exactThreshold.stakeRecommendation,
+    }),
+    states.BET_CANDIDATE,
+  )
+  assert.equal(
+    roundedUpBelowThreshold.stakeRecommendation.reason,
+    'BELOW_MINIMUM_EDGE',
+  )
+  assert.match(roundedUpBelowThreshold.html, /Edge <strong>\+2\.00 pp/)
+  assert.match(
+    roundedUpBelowThreshold.html,
+    /Positive Value · Below Threshold/,
   )
 })
 
@@ -416,7 +556,7 @@ test('reason messages explain below-minimum edge and no-bankroll states', () => 
 
   assert.match(
     kellyStaking.getKellyRecommendationReasonMessage(belowMinimum),
-    /below your 2\.00 percentage-point minimum/,
+    /below your \+2\.00 pp minimum/,
   )
   assert.match(
     kellyStaking.getKellyRecommendationReasonMessage(noBankroll),
@@ -456,13 +596,114 @@ test('ResultCard renders recommendation actions without overwriting actual stake
   })
 
   assert.match(html, /Stake Recommendation/)
-  assert.match(html, /Recommended Amount/)
+  assert.match(html, /Recommended stake/)
   assert.match(html, /Your Stake/)
   assert.match(html, /Use Recommended Stake/)
   assert.match(html, /Edit Betting Settings/)
   assert.match(html, /id="stake-recommendation-your-stake"[^>]+value="1"/)
   assert.match(html, /id="save-bet-stake"[^>]+value="1"/)
   assert.doesNotMatch(html, /NaN|Infinity|undefined/)
+})
+
+test('market odds update the same compact cards without mounting duplicate result sections', () => {
+  const noOddsInputs = {
+    away: { ...baseInputs.away, marketOdds: '' },
+    home: { ...baseInputs.home, marketOdds: '' },
+  }
+  const noOddsResult = calculateGameUtils.calculateGame(
+    noOddsInputs.home,
+    noOddsInputs.away,
+  )
+  const beforeHtml = renderResultCard({
+    inputs: noOddsInputs,
+    isBetReviewOpen: false,
+    result: noOddsResult,
+  })
+  const afterHtml = renderResultCard({ isBetReviewOpen: false })
+
+  for (const html of [beforeHtml, afterHtml]) {
+    assert.equal((html.match(/class="market-side /g) ?? []).length, 2)
+    assert.equal((html.match(/class="market-outcome-row /g) ?? []).length, 2)
+    assert.equal((html.match(/stake-recommendation-panel/g) ?? []).length, 1)
+    assert.match(html, /id="projection-away-marketOdds"/)
+    assert.match(html, /id="projection-home-marketOdds"/)
+    assert.match(html, /id="stake-recommendation-your-stake"/)
+    assert.doesNotMatch(html, /market-value-grid/)
+  }
+
+  assert.match(beforeHtml, /Enter market odds to calculate value/)
+  assert.match(
+    afterHtml,
+    /data-testid="home-market-outcome"[\s\S]*?Edge[\s\S]*?EV/,
+  )
+})
+
+test('positive and no-value odds use the same compact market outcome row', () => {
+  const noValueInputs = {
+    away: { ...baseInputs.away, marketOdds: '' },
+    home: { ...baseInputs.home, marketOdds: 1.5 },
+  }
+  const noValueHtml = renderResultCard({
+    inputs: noValueInputs,
+    isBetReviewOpen: false,
+    result: calculateGameUtils.calculateGame(
+      noValueInputs.home,
+      noValueInputs.away,
+    ),
+  })
+  const positiveHtml = renderResultCard({ isBetReviewOpen: false })
+
+  assert.match(
+    noValueHtml,
+    /class="market-outcome-row no-value"[\s\S]*?Edge[\s\S]*?EV/,
+  )
+  assert.match(
+    positiveHtml,
+    /class="market-outcome-row positive-value"[\s\S]*?Edge[\s\S]*?EV/,
+  )
+  assert.equal((noValueHtml.match(/market-outcome-row/g) ?? []).length, 2)
+  assert.equal((positiveHtml.match(/market-outcome-row/g) ?? []).length, 2)
+})
+
+test('Kelly diagnostics and analysis snapshot are collapsed behind accessible controls', () => {
+  const html = renderResultCard({
+    notes: 'Confirm the starter.',
+    stake: '10',
+    stakeRecommendation: createStakeRecommendation(),
+  })
+  const reviewPanel = html.match(
+    /<section class="save-bet-panel"[\s\S]*?<\/section><\/article>$/,
+  )?.[0] ?? ''
+  const visibleReview = reviewPanel.split('<div class="analysis-snapshot">')[0]
+
+  assert.match(
+    html,
+    /aria-expanded="false"[^>]*>View betting details<\/button>/,
+  )
+  assert.match(
+    html,
+    /class="betting-details-panel" hidden=""[\s\S]*?Full Kelly[\s\S]*?Maximum Stake Applied/,
+  )
+  assert.match(reviewPanel, /Boston Bruins ML @ 2\.10/)
+  assert.match(reviewPanel, /<span>Edge<\/span>[\s\S]*?<span>EV<\/span>/)
+  assert.match(reviewPanel, /id="save-bet-stake"[^>]+value="10"/)
+  assert.match(reviewPanel, /id="save-bet-notes"[^>]*>Confirm the starter\./)
+  assert.match(
+    reviewPanel,
+    /aria-expanded="false"[^>]*>View analysis snapshot<\/button>/,
+  )
+  assert.match(
+    reviewPanel,
+    /class="analysis-snapshot-panel" hidden=""[\s\S]*?Configured maximum[\s\S]*?Adjustments/,
+  )
+  assert.doesNotMatch(
+    visibleReview,
+    /Fair odds|Model probability|Kelly recommendation|Configured maximum|Adjustments/,
+  )
+  assert.match(
+    reviewPanel,
+    /<button class="secondary-save-button"[^>]*>Cancel<\/button><button class="save-analysis-button"[^>]*>Save Bet<\/button>/,
+  )
 })
 
 test('ResultCard shows no-bankroll action and no fabricated zero amount', () => {
@@ -481,9 +722,9 @@ test('ResultCard shows no-bankroll action and no fabricated zero amount', () => 
   })
 
   assert.match(html, /Bankroll required/)
-  assert.match(html, /Bankroll required for amount/)
+  assert.match(html, /Bankroll required/)
   assert.match(html, /Set Up Bankroll/)
-  assert.match(html, /3\.00 % of available bankroll/)
+  assert.match(html, /Fractional Kelly/)
   assert.match(html, /id="stake-recommendation-your-stake"[^>]+value="5"/)
   assert.match(html, /Use Recommended Stake/)
   assert.match(html, /<button[^>]+disabled=""[^>]*>Use Recommended Stake/)
@@ -501,7 +742,7 @@ test('eligible Kelly recommendation shows actionable percent and currency amount
     stakeRecommendation,
   })
 
-  assert.equal(presentation.statusLabel, 'Kelly stake recommended')
+  assert.equal(presentation.statusLabel, 'Bet Candidate')
   assert.equal(presentation.canUseRecommendedStake, true)
   assert.equal(presentation.recommendedPercentText, '3.00 %')
   assert.match(presentation.recommendedAmountText, /30,00|\u20ac|EUR/)
@@ -580,7 +821,7 @@ test('Maximum Stake Applied is always rendered with user-friendly Yes and No val
   assert.match(cappedHtml, /Maximum Stake Applied<\/span><strong>Yes<\/strong>/)
   assert.match(uncappedHtml, /Maximum Stake Applied/)
   assert.match(uncappedHtml, /Maximum Stake Applied<\/span><strong>No<\/strong>/)
-  assert.match(cappedHtml, /Your Kelly recommendation was limited by Maximum Stake/)
+  assert.match(cappedHtml, /amount was limited by Maximum Stake/)
   assert.doesNotMatch(cappedHtml, /Cap Applied/)
   assert.doesNotMatch(uncappedHtml, /Cap Applied/)
 })
@@ -775,11 +1016,14 @@ test('below minimum edge shows no Kelly stake while preserving Fractional Kelly 
     kellyStaking.getKellyRecommendationPresentation(stakeRecommendation)
 
   assert.equal(stakeRecommendation.reason, 'BELOW_MINIMUM_EDGE')
-  assert.equal(presentation.statusLabel, 'No Kelly stake recommended')
+  assert.equal(presentation.statusLabel, 'Positive Value · Below Threshold')
   assert.equal(presentation.recommendedPercentText, 'No Kelly recommendation')
-  assert.equal(presentation.recommendedAmountText, 'No Kelly recommendation')
-  assert.match(html, /No Kelly stake recommended/)
-  assert.match(html, /Edge \+1\.40 percentage points is below your 2\.00 percentage-point minimum/)
+  assert.equal(presentation.recommendedAmountText, 'No stake recommended')
+  assert.match(html, /Positive Value · Below Threshold/)
+  assert.match(
+    html,
+    /Edge \+1\.40 pp is below your \+2\.00 pp minimum\. No stake recommended\./,
+  )
   assert.match(html, /Fractional Kelly/)
   assert.match(html, /0\.70 %/)
   assert.match(html, /id="stake-recommendation-your-stake"[^>]+value="5"/)
@@ -812,15 +1056,15 @@ test('no positive edge and bankroll-not-initialized states allow manual stake en
     stakeRecommendation: bankrollMissing,
   })
 
-  assert.match(noEdgeHtml, /No Kelly stake recommended/)
+  assert.match(noEdgeHtml, /No stake recommended/)
   assert.match(noEdgeHtml, /does not show a positive edge/)
   assert.match(
     noEdgeHtml,
     /id="stake-recommendation-your-stake"[^>]+value="6.25"/,
   )
-  assert.match(noBankrollHtml, /Bankroll required for amount/)
+  assert.match(noBankrollHtml, /Bankroll required/)
   assert.match(noBankrollHtml, /Set up your bankroll in Bet Tracker/)
-  assert.match(noBankrollHtml, /3\.00 % of available bankroll/)
+  assert.match(noBankrollHtml, /Fractional Kelly/)
   assert.match(
     noBankrollHtml,
     /id="stake-recommendation-your-stake"[^>]+value="7.50"/,
@@ -1034,9 +1278,29 @@ test('manual stake can be saved when Kelly recommendation is absent', () => {
   assert.equal(stakeRecommendation.eligible, false)
   assert.equal(stakeRecommendation.reason, 'BELOW_MINIMUM_EDGE')
   assert.equal(payload.stake, 5)
+  assert.equal(
+    payload.recommendationState,
+    'POSITIVE_VALUE_BELOW_THRESHOLD',
+  )
+  assert.equal(payload.modelStatus, 'Positive Value · Below Threshold')
   assert.equal(payload.kellyRecommendation.eligible, false)
   assert.equal(payload.kellyRecommendation.reason, 'BELOW_MINIMUM_EDGE')
+  assert.equal(payload.kellyRecommendation.minimumEdgePercent, 2)
+  assert.equal(
+    payload.kellyRecommendation.recommendationState,
+    'POSITIVE_VALUE_BELOW_THRESHOLD',
+  )
   assert.equal(payload.kellyRecommendation.recommendedStakeAmount, null)
+
+  const reloaded = savedAnalyses.normalizeBet(payload)
+
+  assert.equal(reloaded.expectedValue, payload.expectedValue)
+  assert.equal(reloaded.probabilityEdge, payload.probabilityEdge)
+  assert.equal(reloaded.kellyRecommendation.minimumEdgePercent, 2)
+  assert.equal(
+    reloaded.recommendationState,
+    'POSITIVE_VALUE_BELOW_THRESHOLD',
+  )
 })
 
 test('manual over-maximum stake can still be saved unchanged', () => {

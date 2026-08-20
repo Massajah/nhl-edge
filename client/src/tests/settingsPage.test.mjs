@@ -94,7 +94,7 @@ test('each Settings tab exposes its owned content without duplicating controls',
   assert.match(contextHtml, /data-setting-group="game-context"/)
   assert.match(contextHtml, /Rest &amp; Fatigue/)
   assert.match(contextHtml, /Quick Rematch \/ Revenge/)
-  assert.match(contextHtml, /Special Teams Matchup Alerts/)
+  assert.match(contextHtml, /Special Teams Matchup Mode/)
   assert.match(
     bettingHtml,
     /id="betting-staking-settings"[^>]*aria-labelledby="settings-tab-betting"/,
@@ -308,19 +308,22 @@ test('Rest and Quick Rematch explanatory behavior renders compactly', () => {
   )
 })
 
-test('Model Adjustments exposes informational Special Teams alert controls', () => {
+test('Game Context exposes persisted Special Teams mode and adjustment controls', () => {
   const html = renderSettings()
 
-  assert.match(html, /Special Teams Matchup Alerts/)
-  assert.match(html, /Enable Special Teams Matchup Alerts/)
+  assert.match(html, /Special Teams Matchup Mode/)
+  assert.match(html, /<option value="off">Off<\/option>/)
+  assert.match(html, /<option value="alert_only" selected="">Alert only<\/option>/)
+  assert.match(html, /<option value="automatic">Automatic adjustment<\/option>/)
   assert.match(
     html,
     /id="special-teams-rank-threshold"[^>]*min="3"[^>]*max="12"[^>]*value="6"/,
   )
   assert.match(html, /Top\/Bottom 6 means ranks 1–6 and 27–32/)
-  assert.match(html, /top-ranked 3-season power play/)
-  assert.match(html, /Alerts do not change Power Ratings, model probability/)
-  assert.doesNotMatch(html, /Special Teams Rating Adjustment/)
+  assert.match(html, /id="special-teams-adjustment"/)
+  assert.match(html, /0\.50 rating points/)
+  assert.match(html, /Alert only shows the matchup without changing ratings/)
+  assert.match(html, /Historical calibration showed only a small improvement/)
 })
 
 test('Maximum Goalie Penalty is a dedicated Model Adjustments card', () => {

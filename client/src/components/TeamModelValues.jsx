@@ -102,7 +102,7 @@ function SummaryLoadState({ loadStatus }) {
   if (loadStatus === 'loading') {
     return (
       <p className="model-values-section-state">
-        Loading saved model values…
+        Loading saved lineup…
       </p>
     )
   }
@@ -136,10 +136,11 @@ export function ModelValuesCard({
     <section className="model-values-card" aria-labelledby="model-values-title">
       <div className="model-values-heading">
         <div>
-          <p className="eyebrow">User-maintained Model Values</p>
-          <h3 id="model-values-title">Model Values</h3>
+          <p className="eyebrow">User-maintained Lineup &amp; Notes</p>
+          <h3 id="model-values-title">Lineup &amp; Notes</h3>
           <p>
-            Optional personal lineup notes. Does not affect model calculations.
+            Personal lineup and team notes for analysis context. These do not
+            automatically change model calculations.
           </p>
         </div>
         <button
@@ -148,7 +149,7 @@ export function ModelValuesCard({
           type="button"
           onClick={onManageModelValues}
         >
-          Manage Model Values
+          Manage Lineup
         </button>
       </div>
 
@@ -254,13 +255,13 @@ export function ModelValuesCard({
           </section>
         </div>
 
-        <section className="model-values-summary-row">
-          <div className="model-values-summary-copy">
+        <section className="model-values-summary-row model-values-notes-row">
+          <div className="model-values-summary-copy model-values-notes-panel">
             <strong>Team Notes</strong>
             <SummaryLoadState loadStatus={loadStatus} />
             {loadStatus === 'success' ? (
               <p className="model-values-note-preview">
-                {normalized.lineupNote.trim() || 'No notes'}
+                {normalized.lineupNote.trim() || 'No team notes.'}
               </p>
             ) : null}
           </div>
@@ -485,11 +486,14 @@ export function LineupEditorModal({
         <form onSubmit={handleSubmit}>
           <header className="lineup-modal-header">
             <div>
-              <p className="eyebrow">User-maintained values</p>
+              <p className="eyebrow">User-maintained Lineup &amp; Notes</p>
               <h3 id="lineup-editor-title">
-                Manage Model Values - {teamName}
+                Manage Lineup &amp; Notes — {teamName}
               </h3>
-              <p>Optional personal lineup notes. Does not affect model calculations.</p>
+              <p>
+                Personal lineup and team notes for analysis context. These do
+                not automatically change model calculations.
+              </p>
             </div>
             <button disabled={isSaving} type="button" onClick={onCancel}>
               Close
@@ -705,7 +709,7 @@ export function LineupEditorModal({
               disabled={isSaving}
               type="submit"
             >
-              {actionStatus === 'saving' ? 'Saving...' : 'Save Lines'}
+              {actionStatus === 'saving' ? 'Saving...' : 'Save Lineup'}
             </button>
           </footer>
         </form>
@@ -837,7 +841,7 @@ function TeamModelValues({
         normalizeTeamModelValues(result.modelValues, team.abbreviation),
       )
       setLoadStatus('success')
-      setFeedbackMessage('Lines and personal note saved.')
+      setFeedbackMessage('Lineup and personal note saved.')
       closeEditor()
     } catch (error) {
       if (latestRequestRef.current === requestId) {

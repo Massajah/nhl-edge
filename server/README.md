@@ -323,7 +323,7 @@ Phase 1 has no PP/PK units, automatic lineup feed, historical versions,
 game-specific lineups, or lineup automation. Provider goalie adjustments
 remain a separate persisted feature and retain their existing model effects.
 
-## Special Teams Matchup Alerts
+## Special Teams Matchup production modes
 
 `GET /api/teams/special-teams` exposes a compact league dataset for Dashboard
 and Game Analyzer using only the existing Previous 3 seasons PP/PK averages and
@@ -334,11 +334,14 @@ perform one upstream request per displayed game or team. The response includes
 `leagueTeamCount`, the three source season IDs, and canonical team
 abbreviations with 3-season PP and PK ranks.
 
-`RatingEngineSettings` stores two authenticated user-scoped presentation
-controls: `specialTeamsAlertsEnabled` (default `true`) and
-`specialTeamsRankThreshold` (default `6`, integer range `3–12`). Existing
-documents missing either field receive schema/service defaults, while explicit
-values are preserved. Model Adjustments reset restores both defaults.
+`RatingEngineSettings` is the single authenticated, user-scoped source for
+`specialTeamsMode` (`off`, `alert_only`, or `automatic`),
+`specialTeamsRankThreshold` (integer `3–12`), and the symmetric
+`specialTeamsAdjustment` (`0.25`, `0.50`, `0.75`, or `1.00`). The defaults are
+Alert only, Top/Bottom 6, and `0.50`. The legacy
+`specialTeamsAlertsEnabled` field remains a derived compatibility alias;
+documents without a mode map an explicit legacy `false` to Off and otherwise
+default to Alert only. Model Adjustments reset restores all canonical defaults.
 
 Detection evaluates Away PP versus Home PK and Home PP versus Away PK
 independently. Top N PP versus Bottom N PK is positive; Bottom N PP versus Top
@@ -346,10 +349,14 @@ N PK is negative. The bottom boundary is calculated as
 `leagueTeamCount - N + 1`. Missing or invalid ranks are unavailable rather than
 alerts.
 
-This feature is informational only. Its settings and matchup data are not read
-by the Power Rating update engine, probability calculation, fair-odds logic,
-or historical replay. No automatic Special Teams rating adjustment exists in
-this version.
+The shared detector produces one normalized result per team. Off suppresses the
+signal and applies zero. Alert only keeps the existing context visible and
+applies zero. Automatic maps a positive signal to `+X` and a negative signal to
+`-X`; missing or neutral data remains zero. Game calculation adds that one
+normalized field exactly once to Effective Rating, so probability, fair odds,
+and edge naturally follow. Saved bets retain each side's signal, ranks, mode,
+threshold, and applied adjustment for audit. This game-specific layer is not
+read by the permanent Power Rating update engine or Rating Lab replay.
 
 ## Starting Rating Scale
 
@@ -1020,10 +1027,11 @@ negligible changes, and inconsistent seasons are diagnostic only; there is no
 production Apply workflow.
 
 Base Home Advantage remains stored once in `RatingEngineSettings`, with Rating
-Model as its user-facing save owner. Special Teams alert controls are shown in
-Game Context. Both UI groups use the existing scoped model-adjustment endpoint,
-while preserving the other group's saved values; the scoped Power Rating Engine
-save updates only K, result multipliers, and probability scale.
+Model as its user-facing save owner. Special Teams production mode, threshold,
+and magnitude are shown in Game Context. Both UI groups use the existing scoped
+model-adjustment endpoint while preserving the other group's saved values; the
+scoped Power Rating Engine save updates only K, result multipliers, and
+probability scale.
 
 ## Rating Lab Phase 4: Special Teams Matchup Calibration
 
@@ -1075,8 +1083,8 @@ Frozen rankings and their source identities are returned for audit.
 
 Phase 4 is experimental. It never reads or writes production Special Teams
 Settings, writes Power Ratings or history, changes Dashboard or Analyzer
-probabilities, or applies a result to fair odds. Production remains
-informational alert-only until a result is manually reviewed in a future task.
+probabilities, or applies a result to fair odds. Production uses its independently
+persisted mode, threshold, and magnitude; Alert only remains the default.
 
 ## User data reset lifecycle
 

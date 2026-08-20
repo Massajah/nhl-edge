@@ -25,6 +25,7 @@ import {
   createKellyRecommendationSnapshot,
   createKellyStakeRecommendation,
   formatStakeInputValue,
+  getAnalyzerRecommendationState,
 } from '../utils/kellyStaking.js'
 import {
   applyGameContextToInputs,
@@ -52,7 +53,10 @@ import MarketOddsDetails from './MarketOddsDetails.jsx'
 import { teamsDataCoordinator } from '../services/teamsDataCoordinator.js'
 import {
   SPECIAL_TEAMS_MATCHUP_STATUSES,
-  getSpecialTeamsMatchupForTeams,
+  SPECIAL_TEAMS_MODES,
+  applySpecialTeamsContextToInputs,
+  getSpecialTeamsContextForTeams,
+  normalizeSpecialTeamsMode,
 } from '../utils/specialTeamsMatchups.js'
 import { DEFAULT_MAXIMUM_GOALIE_PENALTY } from '../config/baseModel.js'
 
@@ -148,9 +152,15 @@ function GameAnalyzer({
   prefillMatchup,
   ratingEngineSettingsError,
   ratingEngineSettingsStatus,
+  specialTeamsAdjustment = 0.5,
   specialTeamsAlertsEnabled = true,
+  specialTeamsMode,
   specialTeamsRankThreshold = 6,
 }) {
+  const resolvedSpecialTeamsMode = normalizeSpecialTeamsMode(
+    specialTeamsMode,
+    specialTeamsAlertsEnabled,
+  )
   const initialGameContext = normalizeGameContext(prefillMatchup?.gameContext)
   const [matchup, setMatchup] = useState(() => {
     const initialTeams = normalizeSelectedTeams(prefillMatchup ?? defaultTeams)
@@ -202,7 +212,7 @@ function GameAnalyzer({
     initialSpecialTeamsStatus ??
       (initialSpecialTeams ? 'success' : 'idle'),
   )
-  const { teams, inputs } = matchup
+  const { teams, inputs: baseInputs } = matchup
 
   const homeTeam = findTeam(teams.home)
   const awayTeam = findTeam(teams.away)
@@ -245,11 +255,49 @@ function GameAnalyzer({
     isUsingPrefilledGameTeams,
     prefillMatchup,
   ])
+  const specialTeamsContext = useMemo(() => {
+    const calculatedContext = getSpecialTeamsContextForTeams({
+      adjustment: specialTeamsAdjustment,
+      awayTeam: awayTeam.abbreviation,
+      homeTeam: homeTeam.abbreviation,
+      mode: resolvedSpecialTeamsMode,
+      specialTeams:
+        specialTeamsStatus === 'success' ? specialTeams : null,
+      threshold: specialTeamsRankThreshold,
+    })
+    const prefilledContext = isUsingPrefilledGameTeams
+      ? prefillMatchup?.specialTeamsContext
+      : null
+
+    if (
+      resolvedSpecialTeamsMode !== SPECIAL_TEAMS_MODES.OFF &&
+      specialTeamsStatus !== 'success' &&
+      prefilledContext?.mode === resolvedSpecialTeamsMode
+    ) {
+      return prefilledContext
+    }
+
+    return calculatedContext
+  }, [
+    awayTeam.abbreviation,
+    homeTeam.abbreviation,
+    isUsingPrefilledGameTeams,
+    prefillMatchup?.specialTeamsContext,
+    resolvedSpecialTeamsMode,
+    specialTeams,
+    specialTeamsAdjustment,
+    specialTeamsRankThreshold,
+    specialTeamsStatus,
+  ])
+  const inputs = useMemo(
+    () => applySpecialTeamsContextToInputs(baseInputs, specialTeamsContext),
+    [baseInputs, specialTeamsContext],
+  )
 
   useEffect(() => {
     let isCurrent = true
 
-    if (!specialTeamsAlertsEnabled) {
+    if (resolvedSpecialTeamsMode === SPECIAL_TEAMS_MODES.OFF) {
       return () => {
         isCurrent = false
       }
@@ -288,7 +336,7 @@ function GameAnalyzer({
     return () => {
       isCurrent = false
     }
-  }, [specialTeamsAlertsEnabled])
+  }, [resolvedSpecialTeamsMode])
   const goalieSelectionPayload = useMemo(
     () => ({
       away: createGoalieSelectionPayload(inputs.away, awayTeam.id),
@@ -626,21 +674,41 @@ function GameAnalyzer({
     }
   }, [loadBankrollSummary])
 
-  const selectedStakeRecommendation = useMemo(
+  const stakeRecommendations = useMemo(
     () =>
-      createKellyStakeRecommendation({
-        bankrollSummary,
-        decimalOdds: selectedMarket.marketOdds,
-        modelProbability: selectedMarket.modelProbability,
-        settings: bettingSettings,
-      }),
+      Object.fromEntries(
+        [
+          ['home', homeMarket],
+          ['away', awayMarket],
+        ].map(([side, market]) => {
+          const recommendation = createKellyStakeRecommendation({
+            bankrollSummary,
+            decimalOdds: market.marketOdds,
+            modelProbability: market.modelProbability,
+            settings: bettingSettings,
+          })
+
+          return [
+            side,
+            {
+              ...recommendation,
+              recommendationState: getAnalyzerRecommendationState({
+                expectedValue: market.expectedValue,
+                recommendation,
+              }),
+            },
+          ]
+        }),
+      ),
     [
+      awayMarket,
       bankrollSummary,
       bettingSettings,
-      selectedMarket.marketOdds,
-      selectedMarket.modelProbability,
+      homeMarket,
     ],
   )
+  const selectedStakeRecommendation =
+    stakeRecommendations[selectedSaveSide] ?? stakeRecommendations.home
 
   const loadTeamGoalies = useCallback(
     async (team, { force = false } = {}) => {
@@ -1070,9 +1138,7 @@ function GameAnalyzer({
             <div className="section-heading">
               <div>
                 <p className="eyebrow">Matchup</p>
-                <h2>
-                  {awayTeam.name} at {homeTeam.name}
-                </h2>
+                <h2>Game matchup</h2>
               </div>
               <span>{NHL_TEAMS.length} teams</span>
             </div>
@@ -1154,103 +1220,106 @@ function GameAnalyzer({
             specialTeamsContent={(
               <SpecialTeamsMatchupPanel
                 awayTeam={awayTeam}
-                enabled={specialTeamsAlertsEnabled}
+                context={specialTeamsContext}
                 homeTeam={homeTeam}
-                specialTeams={specialTeams}
-                status={specialTeamsStatus}
-                threshold={specialTeamsRankThreshold}
+                status={
+                  isUsingPrefilledGameTeams &&
+                  prefillMatchup?.specialTeamsContext
+                    ? 'success'
+                    : specialTeamsStatus
+                }
               />
             )}
+            specialTeamsContext={specialTeamsContext}
           />
         </div>
 
-        {currentMarketSourceLabel ? (
+        <div className="analysis-decision">
           <section
-            className="analyzer-current-market-source"
+            className="analyzer-current-market-source compact"
             aria-labelledby="current-market-source-heading"
           >
-            <h3 id="current-market-source-heading">Current Market Source</h3>
-            <dl>
-              <div>
-                <dt>Best available</dt>
-                <dd>{currentMarketSourceLabel}</dd>
-              </div>
-              <div>
-                <dt>Away</dt>
-                <dd>{formatAnalyzerMarketOdds(inputs.away.marketOdds)}</dd>
-              </div>
-              <div>
-                <dt>Home</dt>
-                <dd>{formatAnalyzerMarketOdds(inputs.home.marketOdds)}</dd>
-              </div>
-              <div>
-                <dt>Last updated</dt>
-                <dd>{formatAnalyzerUtcTime(latestBookmakerUpdate)}</dd>
-              </div>
-            </dl>
+            <div>
+              <h3 id="current-market-source-heading">Market source</h3>
+              <p>
+                {currentMarketSourceLabel ? (
+                  <>
+                    {currentMarketSourceLabel} · Away{' '}
+                    {formatAnalyzerMarketOdds(inputs.away.marketOdds)} · Home{' '}
+                    {formatAnalyzerMarketOdds(inputs.home.marketOdds)}
+                  </>
+                ) : (
+                  'Manual entry · Add odds below'
+                )}
+              </p>
+            </div>
+            {latestBookmakerUpdate ? (
+              <span>{formatAnalyzerUtcTime(latestBookmakerUpdate)}</span>
+            ) : null}
             <MarketOddsDetails
               bookmakers={prefillMatchup?.marketOdds?.allBookmakers ?? []}
               buttonLabel="View All Bookmakers"
             />
           </section>
-        ) : null}
 
-        {canUseLatestMarketOdds ? (
-          <div className="analyzer-market-odds-source" role="status">
-            <span>
-              Dashboard market odds from The Odds API are available. Manual
-              edits remain unchanged unless you apply them explicitly.
-            </span>
-            <button type="button" onClick={handleUseLatestMarketOdds}>
-              Use Latest Market Odds
-            </button>
-          </div>
-        ) : null}
+          {canUseLatestMarketOdds ? (
+            <div className="analyzer-market-odds-source" role="status">
+              <span>
+                Dashboard market odds from The Odds API are available. Manual
+                edits remain unchanged unless you apply them explicitly.
+              </span>
+              <button type="button" onClick={handleUseLatestMarketOdds}>
+                Use Latest Market Odds
+              </button>
+            </div>
+          ) : null}
 
-        <ResultCard
-          awayTeam={awayTeam}
-          homeTeam={homeTeam}
-          inputs={inputs}
-          isBetReviewOpen={isBetReviewOpen}
-          result={result}
-          reviewDisabled={!hasReviewableSide}
-          reviewDisabledReason={reviewDisabledReason}
-          selectedSide={selectedSaveSide}
-          stake={stake}
-          saveDisabled={saveStatus === 'saving' || !canSaveBet}
-          saveDisabledReason={saveDisabledReason}
-          saveStatus={saveStatus}
-          saveMessage={saveMessage}
-          validSaveSides={validSaveSides}
-          onCloseReview={closeBetReview}
-          onOpenBetTracker={handleOpenBetTracker}
-          onOpenBettingSettings={handleOpenBettingSettings}
-          onMarketOddsChange={handleMarketOddsChange}
-          notes={betNotes}
-          onOpenReview={openBetReview}
-          onSaveBet={handleSaveBet}
-          onNotesChange={(value) => {
-            setSaveStatus('idle')
-            setSaveMessage('')
-            setBetNotes(value)
-          }}
-          onSelectedSideChange={(side) => {
-            setSaveStatus('idle')
-            setSaveMessage('')
-            setSelectedSaveSide(side)
-          }}
-          onStakeChange={(value) => {
-            setSaveStatus('idle')
-            setSaveMessage('')
-            setStake(value)
-          }}
-          onUseRecommendedStake={handleUseRecommendedStake}
-          bankrollError={bankrollError}
-          bankrollStatus={bankrollStatus}
-          bettingSettingsError={bettingSettingsError}
-          bettingSettingsStatus={bettingSettingsStatus}
-          stakeRecommendation={selectedStakeRecommendation}
-        />
+          <ResultCard
+            awayTeam={awayTeam}
+            homeTeam={homeTeam}
+            inputs={inputs}
+            isBetReviewOpen={isBetReviewOpen}
+            result={result}
+            reviewDisabled={!hasReviewableSide}
+            reviewDisabledReason={reviewDisabledReason}
+            selectedSide={selectedSaveSide}
+            stake={stake}
+            saveDisabled={saveStatus === 'saving' || !canSaveBet}
+            saveDisabledReason={saveDisabledReason}
+            saveStatus={saveStatus}
+            saveMessage={saveMessage}
+            validSaveSides={validSaveSides}
+            onCloseReview={closeBetReview}
+            onOpenBetTracker={handleOpenBetTracker}
+            onOpenBettingSettings={handleOpenBettingSettings}
+            onMarketOddsChange={handleMarketOddsChange}
+            notes={betNotes}
+            onOpenReview={openBetReview}
+            onSaveBet={handleSaveBet}
+            onNotesChange={(value) => {
+              setSaveStatus('idle')
+              setSaveMessage('')
+              setBetNotes(value)
+            }}
+            onSelectedSideChange={(side) => {
+              setSaveStatus('idle')
+              setSaveMessage('')
+              setSelectedSaveSide(side)
+            }}
+            onStakeChange={(value) => {
+              setSaveStatus('idle')
+              setSaveMessage('')
+              setStake(value)
+            }}
+            onUseRecommendedStake={handleUseRecommendedStake}
+            bankrollError={bankrollError}
+            bankrollStatus={bankrollStatus}
+            bettingSettingsError={bettingSettingsError}
+            bettingSettingsStatus={bettingSettingsStatus}
+            stakeRecommendation={selectedStakeRecommendation}
+            stakeRecommendations={stakeRecommendations}
+          />
+        </div>
       </div>
     </section>
   )
@@ -1292,13 +1361,18 @@ function MatchupTeamCard({ baseRating, effectiveRating, label, team }) {
 
 function SpecialTeamsMatchupPanel({
   awayTeam,
-  enabled,
+  context,
   homeTeam,
-  specialTeams,
   status,
-  threshold,
 }) {
-  if (!enabled || status === 'idle' || status === 'disabled') {
+  const [detailsExpanded, setDetailsExpanded] = useState(false)
+
+  if (
+    !context ||
+    context.mode === SPECIAL_TEAMS_MODES.OFF ||
+    status === 'idle' ||
+    status === 'disabled'
+  ) {
     return null
   }
 
@@ -1310,7 +1384,7 @@ function SpecialTeamsMatchupPanel({
     )
   }
 
-  if (status !== 'success' || !specialTeams) {
+  if (status !== 'success') {
     return (
       <section className="analyzer-special-teams compact" role="status">
         Special teams data unavailable
@@ -1318,22 +1392,16 @@ function SpecialTeamsMatchupPanel({
     )
   }
 
-  const matchup = getSpecialTeamsMatchupForTeams({
-    awayTeam: awayTeam.abbreviation,
-    homeTeam: homeTeam.abbreviation,
-    specialTeams,
-    threshold,
-  })
   const rows = [
     {
       label: 'Away',
-      matchup: matchup.away,
+      matchup: context.away,
       opponent: homeTeam,
       team: awayTeam,
     },
     {
       label: 'Home',
-      matchup: matchup.home,
+      matchup: context.home,
       opponent: awayTeam,
       team: homeTeam,
     },
@@ -1353,6 +1421,12 @@ function SpecialTeamsMatchupPanel({
 
     return 'No strong special teams mismatch'
   }
+  const hasSignal = rows.some(({ matchup }) =>
+    [
+      SPECIAL_TEAMS_MATCHUP_STATUSES.POSITIVE,
+      SPECIAL_TEAMS_MATCHUP_STATUSES.NEGATIVE,
+    ].includes(matchup.status),
+  )
 
   return (
     <section
@@ -1360,10 +1434,47 @@ function SpecialTeamsMatchupPanel({
       aria-label="Special Teams matchup alerts"
     >
       <div className="analyzer-special-teams-heading">
-        <strong>Special Teams Matchup</strong>
-        <span>Previous 3 seasons</span>
+        <div>
+          <strong>Special Teams matchup</strong>
+          <span>
+            {hasSignal
+              ? rows
+                  .filter(({ matchup }) =>
+                    [
+                      SPECIAL_TEAMS_MATCHUP_STATUSES.POSITIVE,
+                      SPECIAL_TEAMS_MATCHUP_STATUSES.NEGATIVE,
+                    ].includes(matchup.status),
+                  )
+                  .map(
+                    ({ matchup, team }) =>
+                      `${team.abbreviation}: ${getStatusLabel(matchup)}`,
+                  )
+                  .join(' · ')
+              : 'No mismatch'}
+          </span>
+        </div>
+        <button
+          aria-controls="analyzer-special-teams-details"
+          aria-expanded={detailsExpanded}
+          type="button"
+          onClick={() => setDetailsExpanded((current) => !current)}
+        >
+          {detailsExpanded
+            ? 'Hide Special Teams details'
+            : 'View Special Teams details'}
+        </button>
       </div>
-      <div className="analyzer-special-teams-grid">
+      <div
+        className="analyzer-special-teams-grid"
+        hidden={!detailsExpanded}
+        id="analyzer-special-teams-details"
+      >
+        <p className="analyzer-special-teams-window">
+          Previous 3 seasons ·{' '}
+          {context.mode === SPECIAL_TEAMS_MODES.AUTOMATIC
+            ? `Automatic ±${context.magnitude.toFixed(2)}`
+            : 'Alert only'}
+        </p>
         {rows.map(({ label, matchup: teamMatchup, opponent, team }) => (
           <div
             className={`analyzer-special-teams-row ${teamMatchup.status}`}
@@ -1377,6 +1488,12 @@ function SpecialTeamsMatchupPanel({
               {teamMatchup.opponentPkRank ?? '--'}
             </strong>
             <small>{getStatusLabel(teamMatchup)}</small>
+            {context.mode === SPECIAL_TEAMS_MODES.AUTOMATIC ? (
+              <em>
+                Applied {teamMatchup.adjustment > 0 ? '+' : ''}
+                {teamMatchup.adjustment.toFixed(2)}
+              </em>
+            ) : null}
           </div>
         ))}
       </div>

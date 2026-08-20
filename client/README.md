@@ -222,14 +222,14 @@ units, automatic lineup feed, historical versions, game-specific lineups, or
 lineup automation. Existing goalie adjustments remain separate and continue to
 affect the model through their existing calculation path.
 
-## Special Teams Matchup Alerts
+## Special Teams Matchup production modes
 
-Dashboard game cards and Game Analyzer show compact, informational Special
-Teams matchup signals from the existing **Previous 3 seasons** Power Play and
-Penalty Kill league ranks. The feature is enabled by default with one shared
-Top/Bottom threshold of `6`. For a 32-team league, that means ranks `1–6` and
-`27–32`; the bottom boundary follows the league-team count returned with the
-cached dataset.
+Dashboard game cards and Game Analyzer use one normalized Special Teams
+matchup result from the existing **Previous 3 seasons** Power Play and Penalty
+Kill league ranks. Alert only is the default, with a Top/Bottom threshold of
+`6` and symmetric magnitude `0.50`. For a 32-team league, Top/Bottom 6 means
+ranks `1–6` and `27–32`; the bottom boundary follows the league-team count
+returned with the cached dataset.
 
 - `Strong PP vs Weak PK` is shown when a Top N power play faces a Bottom N
   penalty kill.
@@ -238,22 +238,27 @@ cached dataset.
 - Away PP versus Home PK and Home PP versus Away PK are evaluated
   independently, so both teams may have signals in one game.
 
-Settings > Game Context contains `Special Teams Matchup Alerts`, with an
-enabled toggle and a validated integer threshold from `3` through `12`. These
-values are authenticated, user-scoped fields in the existing rating-engine
-settings document. Missing PP/PK ranks produce an unavailable/quiet state and
-never create a false alert.
+Settings > Game Context contains one `Special Teams Matchup` configuration:
+Off, Alert only, or Automatic adjustment; a validated integer threshold from
+`3` through `12`; and `0.25`, `0.50`, `0.75`, or `1.00` magnitude choices.
+These authenticated, user-scoped fields remain in the existing rating-engine
+settings document. Existing users without a mode default to Alert only, while
+the legacy disabled state maps to Off. Settings reset and Factory Reset use the
+same canonical defaults.
 
 The client loads one shared league dataset through the existing team-data
 coordinator. In-flight and short-lived client requests are deduplicated, while
 the server reuses its existing eight-hour league Special Teams cache. Opening
 Dashboard does not issue one request per NHL team.
 
-Alerts are informational only. They do not change Power Ratings, model
-probability, fair odds, Dashboard preliminary analysis, Analyzer adjustment
-totals, Kelly sizing, or saved bets. A future Rating Lab phase may evaluate
-thresholds and adjustment magnitudes without changing the shared detector;
-there is no automatic Special Teams adjustment in this version.
+Off hides Dashboard and Analyzer context and applies zero. Alert only shows the
+existing signal with a read-only `0.00` contribution. Automatic adjustment
+keeps the alert and maps Strong PP vs Weak PK to `+X` and Weak PP vs Strong PK
+to `-X`, independently for each team. Dashboard preliminary analysis and
+Analyzer both apply the same normalized field exactly once to Effective Rating;
+Kelly receives no separate Special Teams logic. Missing data never fabricates
+ranks or a rating effect. Saved analyses and bets retain the original mode,
+signal, threshold, ranks, and applied value even if Settings later change.
 
 ## Starting Rating Scale
 
@@ -713,9 +718,9 @@ the full frozen ranking inputs for every target season. Occurrence counts are
 shown because narrow thresholds may produce small samples.
 
 The workflow is experimental and has no Apply action. It does not modify the
-production Special Teams alert toggle or threshold, Dashboard or Analyzer
-probabilities, fair odds, Power Ratings, or saved Settings. Production remains
-informational alert-only.
+production Special Teams mode, threshold, or magnitude, Dashboard or Analyzer
+probabilities, fair odds, Power Ratings, or saved Settings. Production uses its
+independently persisted configuration, with Alert only remaining the default.
 
 ## Settings tabs and reset lifecycle
 
@@ -728,7 +733,8 @@ also reflected in the `?tab=` query parameter without reloading the application:
   result multipliers, and Probability Scale.
 - `Game Context` owns Rest & Fatigue, Well Rested, 3 Games in 4 Days,
   Back-to-Back variants, the existing Quick Rematch setting (displayed as
-  Quick Rematch / Revenge), and informational Special Teams alerts.
+  Quick Rematch / Revenge), and the Special Teams production mode, threshold,
+  and symmetric magnitude.
 - `Betting` owns Kelly, stake caps, edge thresholds, rounding, and bankroll
   basis configuration. Bet history remains in Bet Tracker.
 - `Data & Reset` owns the three explicit reset workflows below.

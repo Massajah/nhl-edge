@@ -628,7 +628,12 @@ function AuthenticatedApp({ authUser, onLogout }) {
     }
   }, [applyPowerRatingDocuments]);
 
-  const handleAnalyzeGame = (game, marketOdds = {}, gameContext = null) => {
+  const handleAnalyzeGame = (
+    game,
+    marketOdds = {},
+    gameContext = null,
+    specialTeamsContext = null,
+  ) => {
     setAnalyzerPrefill({
       away: game.awayTeam.abbreviation,
       game,
@@ -638,6 +643,7 @@ function AuthenticatedApp({ authUser, onLogout }) {
       id: `${game.gameId}-${Date.now()}`,
       marketOdds,
       scheduledStart: game.startTimeUTC ?? null,
+      specialTeamsContext,
     });
     navigateToPage("analyzer");
   };
@@ -656,9 +662,8 @@ function AuthenticatedApp({ authUser, onLogout }) {
         <Dashboard
           baseHomeAdvantage={ratingEngineSettings.homeAdvantage}
           probabilityScale={ratingEngineSettings.probabilityScale}
-          specialTeamsAlertsEnabled={
-            ratingEngineSettings.specialTeamsAlertsEnabled
-          }
+          specialTeamsAdjustment={ratingEngineSettings.specialTeamsAdjustment}
+          specialTeamsMode={ratingEngineSettings.specialTeamsMode}
           specialTeamsRankThreshold={
             ratingEngineSettings.specialTeamsRankThreshold
           }
@@ -684,9 +689,8 @@ function AuthenticatedApp({ authUser, onLogout }) {
           baseHomeAdvantage={ratingEngineSettings.homeAdvantage}
           maximumGoaliePenalty={ratingEngineSettings.maximumGoaliePenalty}
           probabilityScale={ratingEngineSettings.probabilityScale}
-          specialTeamsAlertsEnabled={
-            ratingEngineSettings.specialTeamsAlertsEnabled
-          }
+          specialTeamsAdjustment={ratingEngineSettings.specialTeamsAdjustment}
+          specialTeamsMode={ratingEngineSettings.specialTeamsMode}
           specialTeamsRankThreshold={
             ratingEngineSettings.specialTeamsRankThreshold
           }

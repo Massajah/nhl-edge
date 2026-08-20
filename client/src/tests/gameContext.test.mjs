@@ -127,6 +127,23 @@ test('calculateGame includes quick rematch in effective ratings', () => {
   assert.equal(result.ratingDifference, 0.75)
 })
 
+test('calculateGame includes the Special Teams adjustment exactly once', () => {
+  const automatic = calculateGame(
+    { baseRating: 50, specialTeamsAdjustment: 0.5 },
+    { baseRating: 50, specialTeamsAdjustment: -0.5 },
+  )
+  const alertOnly = calculateGame(
+    { baseRating: 50, specialTeamsAdjustment: 0 },
+    { baseRating: 50, specialTeamsAdjustment: 0 },
+  )
+
+  assert.equal(automatic.homeFinalRating, 50.5)
+  assert.equal(automatic.awayFinalRating, 49.5)
+  assert.equal(automatic.ratingDifference, 1)
+  assert.equal(alertOnly.homeFinalRating, 50)
+  assert.equal(alertOnly.awayFinalRating, 50)
+})
+
 test('game context utility applies effective rest and quick rematch inputs', () => {
   const inputs = createInputsForTeams(powerRatings, teams, {}, {}, 4, gameContext)
 
@@ -202,6 +219,16 @@ test('saved bet payload includes a normalized game context snapshot', () => {
     createInputsForTeams(powerRatings, teams, { home: 1.9 }, {}, 4),
     gameContext,
   )
+  inputs.away.specialTeamsAdjustment = 0.5
+  inputs.away.specialTeamsContext = {
+    adjustment: 0.5,
+    mode: 'automatic',
+    opponentPkRank: 29,
+    ppRank: 3,
+    signal: 'strong_pp_vs_weak_pk',
+    status: 'positive',
+    threshold: 6,
+  }
   const result = calculateGame(inputs.home, inputs.away)
   const payload = createBetPayloadFromGameAnalysis({
     awayTeam: teamPayload.away,
@@ -216,11 +243,25 @@ test('saved bet payload includes a normalized game context snapshot', () => {
 
   assert.equal(payload.adjustments.awayQuickRematch, 0.25)
   assert.equal(payload.quickRematchAdjustment, 0.25)
+  assert.equal(payload.specialTeamsAdjustment, 0.5)
+  assert.equal(payload.specialTeamsSnapshot.mode, 'automatic')
+  assert.equal(payload.specialTeamsSnapshot.signal, 'strong_pp_vs_weak_pk')
+  assert.equal(payload.specialTeamsSnapshot.threshold, 6)
+  assert.equal(payload.adjustments.awaySpecialTeamsAdjustment, 0.5)
+  assert.deepEqual(
+    payload.adjustments.awaySpecialTeamsSnapshot,
+    payload.specialTeamsSnapshot,
+  )
   assert.equal(payload.gameContextSnapshot.gameId, 'context-game')
   assert.equal(
     payload.gameContextSnapshot.awayContext.totalGameContextAdjustment,
     -1,
   )
+
+  inputs.away.specialTeamsAdjustment = 0.75
+  inputs.away.specialTeamsContext.adjustment = 0.75
+  assert.equal(payload.specialTeamsAdjustment, 0.5)
+  assert.equal(payload.specialTeamsSnapshot.adjustment, 0.5)
 })
 
 test('quick rematch settings normalize drafts to supported bounds', () => {

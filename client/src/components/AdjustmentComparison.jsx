@@ -14,6 +14,10 @@ import {
   getGameContextForSide,
   getTeamGameContextPresentation,
 } from '../utils/gameContext.js'
+import {
+  SPECIAL_TEAMS_MATCHUP_STATUSES,
+  SPECIAL_TEAMS_MODES,
+} from '../utils/specialTeamsMatchups.js'
 
 const toNumber = (value) => {
   const parsedValue = Number(value)
@@ -66,6 +70,7 @@ function AdjustmentComparison({
   onRetryGoalies,
   onSaveGoalies,
   specialTeamsContent = null,
+  specialTeamsContext = null,
 }) {
   const storedAwayInjuryImpact = toNumber(inputs.away.storedInjuryImpact)
   const storedHomeInjuryImpact = toNumber(inputs.home.storedInjuryImpact)
@@ -94,7 +99,6 @@ function AdjustmentComparison({
           <p className="eyebrow">Team adjustments</p>
           <h2>Team Adjustments</h2>
         </div>
-        <span>Aligned game inputs</span>
       </div>
 
       <AdjustmentGroup
@@ -176,6 +180,28 @@ function AdjustmentComparison({
               sideLabel="Home"
               testId="analyzer-home-quickRematchAdjustment"
               value={formatAdjustment(inputs.home.quickRematchAdjustment)}
+            />
+          </AdjustmentRow>
+
+          <AdjustmentRow
+            helpText="Uses the same previous-three-season Special Teams matchup signal shown on Dashboard. Alert only is informational; Automatic applies the configured symmetric adjustment once."
+            label="Special Teams"
+          >
+            <ReadOnlyCell
+              secondary={getSpecialTeamsAdjustmentLabel(
+                specialTeamsContext?.away,
+              )}
+              sideLabel="Away"
+              testId="analyzer-away-specialTeamsAdjustment"
+              value={formatAdjustment(inputs.away.specialTeamsAdjustment)}
+            />
+            <ReadOnlyCell
+              secondary={getSpecialTeamsAdjustmentLabel(
+                specialTeamsContext?.home,
+              )}
+              sideLabel="Home"
+              testId="analyzer-home-specialTeamsAdjustment"
+              value={formatAdjustment(inputs.home.specialTeamsAdjustment)}
             />
           </AdjustmentRow>
         </ComparisonTable>
@@ -299,29 +325,61 @@ function AdjustmentComparison({
         </ComparisonTable>
       </AdjustmentGroup>
 
-      <details className="effective-rating-summary">
-        <summary>
+      <section className="effective-rating-summary">
+        <header>
           <span>Effective Rating Summary</span>
           <strong>
             {awayTeam.abbreviation} {formatRating(finalRatings.away)} ·{' '}
             {homeTeam.abbreviation} {formatRating(finalRatings.home)}
           </strong>
-        </summary>
-        <ComparisonTable awayTeam={awayTeam} homeTeam={homeTeam}>
-          <SummaryRow label="Power rating" values={[inputs.away.baseRating, inputs.home.baseRating]} rating />
-          <SummaryRow label="Home advantage" values={[null, inputs.home.homeAdvantage]} />
-          <SummaryRow label="Goalie" values={[inputs.away.goalieAdjustment, inputs.home.goalieAdjustment]} />
-          <SummaryRow label="Stored injury" values={[inputs.away.storedInjuryImpact, inputs.home.storedInjuryImpact]} />
-          <SummaryRow label="Game injury" values={[inputs.away.injuries, inputs.home.injuries]} />
-          <SummaryRow label="Rest & Fatigue" values={[inputs.away.restFatigue, inputs.home.restFatigue]} />
-          <SummaryRow label="Quick Rematch" values={[inputs.away.quickRematchAdjustment, inputs.home.quickRematchAdjustment]} />
-          <SummaryRow label="Motivation" values={[inputs.away.motivation, inputs.home.motivation]} />
-          <SummaryRow label="Manual / X-factor" values={[inputs.away.manualAdjustment, inputs.home.manualAdjustment]} />
-          <SummaryRow final label="Effective rating" values={[finalRatings.away, finalRatings.home]} rating />
-        </ComparisonTable>
-      </details>
+        </header>
+        <details className="effective-rating-breakdown">
+          <summary>View rating breakdown</summary>
+          <ComparisonTable awayTeam={awayTeam} homeTeam={homeTeam}>
+            <SummaryRow label="Power rating" values={[inputs.away.baseRating, inputs.home.baseRating]} rating />
+            <SummaryRow label="Home advantage" values={[null, inputs.home.homeAdvantage]} />
+            <SummaryRow label="Goalie" values={[inputs.away.goalieAdjustment, inputs.home.goalieAdjustment]} />
+            <SummaryRow label="Stored injury" values={[inputs.away.storedInjuryImpact, inputs.home.storedInjuryImpact]} />
+            <SummaryRow label="Game injury" values={[inputs.away.injuries, inputs.home.injuries]} />
+            <SummaryRow label="Rest & Fatigue" values={[inputs.away.restFatigue, inputs.home.restFatigue]} />
+            <SummaryRow label="Quick Rematch" values={[inputs.away.quickRematchAdjustment, inputs.home.quickRematchAdjustment]} />
+            {specialTeamsContext &&
+            specialTeamsContext.mode !== SPECIAL_TEAMS_MODES.OFF ? (
+              <SummaryRow label="Special Teams" values={[inputs.away.specialTeamsAdjustment, inputs.home.specialTeamsAdjustment]} />
+            ) : null}
+            <SummaryRow label="Motivation" values={[inputs.away.motivation, inputs.home.motivation]} />
+            <SummaryRow label="Manual / X-factor" values={[inputs.away.manualAdjustment, inputs.home.manualAdjustment]} />
+            <SummaryRow final label="Effective rating" values={[finalRatings.away, finalRatings.home]} rating />
+          </ComparisonTable>
+        </details>
+      </section>
     </section>
   )
+}
+
+function getSpecialTeamsAdjustmentLabel(context = {}) {
+  if (!context.mode || context.mode === SPECIAL_TEAMS_MODES.OFF) {
+    return 'Off · Not active'
+  }
+
+  const modeLabel =
+    context.mode === SPECIAL_TEAMS_MODES.AUTOMATIC
+      ? 'Automatic'
+      : 'Alert only'
+
+  if (context.status === SPECIAL_TEAMS_MATCHUP_STATUSES.POSITIVE) {
+    return `${modeLabel} · Strong PP vs Weak PK`
+  }
+
+  if (context.status === SPECIAL_TEAMS_MATCHUP_STATUSES.NEGATIVE) {
+    return `${modeLabel} · Weak PP vs Strong PK`
+  }
+
+  if (context.status === SPECIAL_TEAMS_MATCHUP_STATUSES.UNAVAILABLE) {
+    return `${modeLabel} · Data unavailable`
+  }
+
+  return `${modeLabel} · Not triggered`
 }
 
 function getAutomaticContextPresentation(gameContext, side, sideInputs) {
@@ -347,6 +405,9 @@ function getAutomaticContextPresentation(gameContext, side, sideInputs) {
 }
 
 function AdjustmentGroup({ children, description, title, tone = 'neutral' }) {
+  const badge =
+    tone === 'manual' ? 'Editable' : tone === 'automatic' ? 'Read-only' : ''
+
   return (
     <section className={`team-adjustment-group ${tone}`}>
       <header className="team-adjustment-group-heading">
@@ -354,7 +415,7 @@ function AdjustmentGroup({ children, description, title, tone = 'neutral' }) {
           <h3>{title}</h3>
           <p>{description}</p>
         </div>
-        <span>{tone === 'manual' ? 'Editable' : tone === 'automatic' ? 'Read-only' : 'Game setup'}</span>
+        {badge ? <span>{badge}</span> : null}
       </header>
       {children}
     </section>
@@ -401,11 +462,7 @@ export function InjuryContextPanel({
       aria-label="Active injury context"
     >
       <div className="analyzer-injury-context-heading">
-        <div>
-          <h3>Active injuries</h3>
-          <p>Compact stored-impact context for this matchup.</p>
-        </div>
-        <span>Game inputs</span>
+        <h3>Active injuries</h3>
       </div>
       <div className="analyzer-injury-context-grid">
         <InjuryContextCard summary={awaySummary} team={awayTeam} />
@@ -421,6 +478,7 @@ export function InjuryContextCard({
   team,
 }) {
   const [expanded, setExpanded] = useState(initialExpanded)
+  const injuryListId = `analyzer-${team.id}-injuries`
   const injuries = Array.isArray(summary.injuries) ? summary.injuries : []
   const skaterInjuries = injuries.filter((injury) => !injury.isGoalie)
   const goalieInjuries = injuries.filter((injury) => injury.isGoalie)
@@ -428,9 +486,10 @@ export function InjuryContextCard({
   return (
     <article className="analyzer-injury-card">
       <header>
-        <strong>{team.name}</strong>
+        <strong title={team.name}>{team.abbreviation ?? team.id}</strong>
         {injuries.length > 0 ? (
           <button
+            aria-controls={injuryListId}
             aria-expanded={expanded}
             type="button"
             onClick={() => setExpanded((current) => !current)}
@@ -447,7 +506,7 @@ export function InjuryContextCard({
       </p>
 
       {expanded ? (
-        <div className="analyzer-injury-list">
+        <div className="analyzer-injury-list" id={injuryListId}>
           {skaterInjuries.map((injury) => (
             <AnalyzerInjuryRow injury={injury} key={injury.id || injury.playerName} />
           ))}
@@ -489,7 +548,7 @@ function TeamColumnHeader({ label, team }) {
   return (
     <div className="adjustment-team-heading" role="columnheader">
       <span>{label}</span>
-      <strong>{team.name}</strong>
+      <strong title={team.name}>{team.abbreviation ?? team.id}</strong>
     </div>
   )
 }
@@ -588,6 +647,7 @@ export function GoalieSelectionPanel({
   goalieStatuses,
   hasUnsavedChanges,
   homeTeam,
+  initialDetailsExpandedBySide = {},
   inputs,
   maximumGoaliePenalty = DEFAULT_MAXIMUM_GOALIE_PENALTY,
   onChange,
@@ -621,6 +681,7 @@ export function GoalieSelectionPanel({
           goalies={goalies.away}
           goalieDataError={goalieErrors.away}
           goalieStatsByPlayerId={goalieStatsByPlayerId}
+          initialDetailsExpanded={initialDetailsExpandedBySide.away}
           label="Away"
           maximumGoaliePenalty={configuredMaximum}
           onChange={onChange}
@@ -635,6 +696,7 @@ export function GoalieSelectionPanel({
           goalies={goalies.home}
           goalieDataError={goalieErrors.home}
           goalieStatsByPlayerId={goalieStatsByPlayerId}
+          initialDetailsExpanded={initialDetailsExpandedBySide.home}
           label="Home"
           maximumGoaliePenalty={configuredMaximum}
           onChange={onChange}
@@ -676,11 +738,12 @@ export function GoalieSelectionPanel({
   )
 }
 
-function GoalieSelectionCard({
+export function GoalieSelectionCard({
   errorMessage,
   goalieDataError,
   goalies,
   goalieStatsByPlayerId,
+  initialDetailsExpanded = false,
   label,
   maximumGoaliePenalty,
   onChange,
@@ -710,9 +773,16 @@ function GoalieSelectionCard({
   const isUnknown = selectionType === GOALIE_SELECTION_TYPES.UNKNOWN
   const isCustom = selectionType === GOALIE_SELECTION_TYPES.CUSTOM
   const isProvider = selectionType === GOALIE_SELECTION_TYPES.PROVIDER
-  const [providerDetailsExpanded, setProviderDetailsExpanded] = useState(() =>
-    Boolean(values.goalieOverrideEnabled || errorMessage),
+  const [providerDetailsExpanded, setProviderDetailsExpanded] = useState(
+    initialDetailsExpanded,
   )
+  const statusLabel = isUnknown
+    ? 'Unconfirmed'
+    : isCustom
+      ? 'Unlisted game input'
+      : values.goalieOverrideEnabled
+        ? 'Provider goalie · game override'
+        : 'Provider goalie'
 
   return (
     <article className="analyzer-goalie-card">
@@ -749,27 +819,20 @@ function GoalieSelectionCard({
         </select>
       </label>
 
-      <dl className="goalie-selection-summary">
-        <div>
-          <dt>Goalie adjustment</dt>
-          <dd data-testid={`analyzer-${side}-goalie-adjustment-value`}>
+      <p className="goalie-selection-summary">
+        <span>
+          Adj.{' '}
+          <strong data-testid={`analyzer-${side}-goalie-adjustment-value`}>
             {formatAdjustment(isUnknown ? 0 : values.goalieAdjustment)}
-          </dd>
-        </div>
-        <div>
-          <dt>Status</dt>
-          <dd>
-            {isUnknown
-              ? 'Unconfirmed'
-              : isCustom
-                ? 'Unlisted game input'
-                : values.goalieOverrideEnabled
-                  ? 'Provider goalie · game override'
-                  : 'Provider goalie'}
-          </dd>
-          {isCustom ? <small>{sourceLabel}</small> : null}
-        </div>
-      </dl>
+          </strong>
+        </span>
+        <span aria-hidden="true">·</span>
+        <span>{statusLabel}</span>
+        {isCustom ? <small>{sourceLabel}</small> : null}
+        {errorMessage && !providerDetailsExpanded ? (
+          <small className="goalie-compact-error">Review adjustment</small>
+        ) : null}
+      </p>
 
       {isCustom ? (
         <div className="analyzer-goalie-expanded-inputs">

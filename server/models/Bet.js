@@ -1,9 +1,20 @@
 const mongoose = require('mongoose')
+const {
+  SPECIAL_TEAMS_MATCHUP_STATUSES,
+  SPECIAL_TEAMS_MODES,
+  SPECIAL_TEAMS_SIGNALS,
+} = require('../../shared/specialTeamsMatchups')
 
 const RESULT_VALUES = ['pending', 'win', 'loss', 'push', 'void']
 const BET_TYPE_VALUES = ['', 'moneyline']
 const BANKROLL_ACCOUNTING_VALUES = ['legacy', 'transactional']
 const SETTLEMENT_SOURCE_VALUES = ['automatic', 'manual']
+const RECOMMENDATION_STATE_VALUES = [
+  '',
+  'NO_VALUE',
+  'POSITIVE_VALUE_BELOW_THRESHOLD',
+  'BET_CANDIDATE',
+]
 
 const teamSchema = new mongoose.Schema(
   {
@@ -54,6 +65,45 @@ const selectedSideSchema = new mongoose.Schema(
   { _id: false },
 )
 
+const specialTeamsSnapshotSchema = new mongoose.Schema(
+  {
+    adjustment: {
+      type: Number,
+      min: -1,
+      max: 1,
+      default: 0,
+    },
+    mode: {
+      type: String,
+      enum: Object.values(SPECIAL_TEAMS_MODES),
+      default: SPECIAL_TEAMS_MODES.ALERT_ONLY,
+    },
+    opponentPkRank: {
+      type: Number,
+      default: null,
+    },
+    ppRank: {
+      type: Number,
+      default: null,
+    },
+    signal: {
+      type: String,
+      enum: Object.values(SPECIAL_TEAMS_SIGNALS),
+      default: null,
+    },
+    status: {
+      type: String,
+      enum: Object.values(SPECIAL_TEAMS_MATCHUP_STATUSES),
+      default: SPECIAL_TEAMS_MATCHUP_STATUSES.UNAVAILABLE,
+    },
+    threshold: {
+      type: Number,
+      default: null,
+    },
+  },
+  { _id: false },
+)
+
 const adjustmentsSchema = new mongoose.Schema(
   {
     homeAdvantage: { type: Number, default: 0 },
@@ -73,6 +123,16 @@ const adjustmentsSchema = new mongoose.Schema(
     awayRestFatigue: { type: Number, default: 0 },
     homeQuickRematch: { type: Number, default: 0 },
     awayQuickRematch: { type: Number, default: 0 },
+    homeSpecialTeamsAdjustment: { type: Number, default: 0 },
+    awaySpecialTeamsAdjustment: { type: Number, default: 0 },
+    homeSpecialTeamsSnapshot: {
+      type: specialTeamsSnapshotSchema,
+      default: null,
+    },
+    awaySpecialTeamsSnapshot: {
+      type: specialTeamsSnapshotSchema,
+      default: null,
+    },
     homeMotivation: { type: Number, default: 0 },
     awayMotivation: { type: Number, default: 0 },
     homeManualAdjustment: { type: Number, default: 0 },
@@ -263,6 +323,11 @@ const kellyRecommendationSchema = new mongoose.Schema(
       type: Number,
       default: null,
     },
+    recommendationState: {
+      type: String,
+      enum: RECOMMENDATION_STATE_VALUES,
+      default: '',
+    },
     reason: {
       type: String,
       trim: true,
@@ -335,6 +400,11 @@ const betSchema = new mongoose.Schema(
     modelStatus: {
       type: String,
       trim: true,
+      default: '',
+    },
+    recommendationState: {
+      type: String,
+      enum: RECOMMENDATION_STATE_VALUES,
       default: '',
     },
     modelProbability: {
@@ -451,6 +521,14 @@ const betSchema = new mongoose.Schema(
     },
     quickRematchAdjustment: {
       type: Number,
+      default: null,
+    },
+    specialTeamsAdjustment: {
+      type: Number,
+      default: null,
+    },
+    specialTeamsSnapshot: {
+      type: specialTeamsSnapshotSchema,
       default: null,
     },
     motivationAdjustment: {

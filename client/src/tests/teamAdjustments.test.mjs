@@ -181,6 +181,8 @@ test('Team Adjustments separates game inputs, automatic values and manual fields
   assert.ok(gameInputsIndex < automaticIndex)
   assert.ok(automaticIndex < manualIndex)
   assert.ok(manualIndex < effectiveIndex)
+  assert.equal((markup.match(/Game Inputs/g) ?? []).length, 1)
+  assert.doesNotMatch(markup, /Aligned game inputs|Game setup/)
   assert.match(markup, /Read-only values supplied to the model/)
   assert.match(markup, /Editable, deliberate inputs for this analysis/)
   assert.doesNotMatch(
@@ -224,7 +226,10 @@ test('provider goalies and injuries remain compact before progressive expansion'
   assert.match(markup, /Toronto Starter \(-0\.25\)/)
   assert.match(markup, /data-testid="analyzer-away-goalie-adjustment-value">-0\.50/)
   assert.match(markup, /data-testid="analyzer-home-goalie-adjustment-value">-0\.25/)
-  assert.match(markup, /<dd>Provider goalie<\/dd>/)
+  assert.match(
+    markup,
+    /class="goalie-selection-summary"[\s\S]*?Provider goalie/,
+  )
   assert.match(markup, /aria-expanded="false"[^>]*>View goalie details/)
   assert.doesNotMatch(markup, /id="analyzer-away-goalie-adjustment"/)
   assert.match(markup, /2 active/)

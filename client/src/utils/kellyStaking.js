@@ -10,7 +10,7 @@ import {
   getKellyModeLabel,
   normalizeBettingSettings,
 } from './bettingSettings.js'
-import { parseMarketOdds } from './calculateGame.js'
+import { MODEL_STATUSES, parseMarketOdds } from './calculateGame.js'
 
 const EPSILON = 1e-9
 const MONEY_EPSILON = 1e-6
@@ -24,6 +24,20 @@ export const KELLY_RECOMMENDATION_REASONS = Object.freeze({
   NO_POSITIVE_EDGE: 'NO_POSITIVE_EDGE',
   NON_POSITIVE_KELLY: 'NON_POSITIVE_KELLY',
   STAKE_BELOW_ROUNDING_INCREMENT: 'STAKE_BELOW_ROUNDING_INCREMENT',
+})
+
+export const ANALYZER_RECOMMENDATION_STATES = Object.freeze({
+  NO_VALUE: 'NO_VALUE',
+  POSITIVE_VALUE_BELOW_THRESHOLD: 'POSITIVE_VALUE_BELOW_THRESHOLD',
+  BET_CANDIDATE: 'BET_CANDIDATE',
+})
+
+const ANALYZER_RECOMMENDATION_LABELS = Object.freeze({
+  [ANALYZER_RECOMMENDATION_STATES.NO_VALUE]: MODEL_STATUSES.NO_VALUE,
+  [ANALYZER_RECOMMENDATION_STATES.POSITIVE_VALUE_BELOW_THRESHOLD]:
+    MODEL_STATUSES.POSITIVE_VALUE_BELOW_THRESHOLD,
+  [ANALYZER_RECOMMENDATION_STATES.BET_CANDIDATE]:
+    MODEL_STATUSES.BET_CANDIDATE,
 })
 
 const toNumber = (value, fallback = 0) => {
@@ -44,6 +58,89 @@ const toOptionalNumber = (value) => {
   const numberValue = Number(value)
 
   return Number.isFinite(numberValue) ? numberValue : null
+}
+
+export const normalizeAnalyzerRecommendationState = (value) => {
+  const normalizedValue = String(value ?? '')
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, '_')
+    .replace(/^_|_$/g, '')
+
+  return Object.values(ANALYZER_RECOMMENDATION_STATES).includes(
+    normalizedValue,
+  )
+    ? normalizedValue
+    : null
+}
+
+export const getAnalyzerRecommendationState = ({
+  expectedValue,
+  recommendation = {},
+} = {}) => {
+  const expectedValueNumber = toOptionalNumber(expectedValue)
+
+  if (expectedValueNumber !== null && expectedValueNumber <= 0) {
+    return ANALYZER_RECOMMENDATION_STATES.NO_VALUE
+  }
+
+  const storedState = normalizeAnalyzerRecommendationState(
+    recommendation.recommendationState,
+  )
+
+  if (storedState) {
+    return storedState
+  }
+
+  const edgeDecimal = toOptionalNumber(recommendation.edgeDecimal)
+  const hasPositiveExpectedValue =
+    expectedValueNumber !== null
+      ? expectedValueNumber > 0
+      : edgeDecimal !== null && edgeDecimal > 0
+
+  if (!hasPositiveExpectedValue) {
+    return expectedValueNumber !== null || edgeDecimal !== null
+      ? ANALYZER_RECOMMENDATION_STATES.NO_VALUE
+      : null
+  }
+
+  if (
+    recommendation.reason ===
+    KELLY_RECOMMENDATION_REASONS.BELOW_MINIMUM_EDGE
+  ) {
+    return ANALYZER_RECOMMENDATION_STATES.POSITIVE_VALUE_BELOW_THRESHOLD
+  }
+
+  if (
+    recommendation.eligible &&
+    Number(recommendation.recommendedStakeAmount) > 0
+  ) {
+    return ANALYZER_RECOMMENDATION_STATES.BET_CANDIDATE
+  }
+
+  return null
+}
+
+export const getAnalyzerRecommendationStatus = ({
+  expectedValue,
+  recommendation = {},
+} = {}) => {
+  const state = getAnalyzerRecommendationState({
+    expectedValue,
+    recommendation,
+  })
+
+  if (state) {
+    return ANALYZER_RECOMMENDATION_LABELS[state]
+  }
+
+  const expectedValueNumber = toOptionalNumber(expectedValue)
+
+  return expectedValueNumber !== null && expectedValueNumber > 0
+    ? MODEL_STATUSES.POSITIVE_VALUE
+    : expectedValueNumber !== null
+      ? MODEL_STATUSES.NO_VALUE
+      : null
 }
 
 const isValidProbability = (value) =>
@@ -377,15 +474,15 @@ const formatKellySignedPercentagePoints = (value) => {
 
   const sign = numberValue >= 0 ? '+' : ''
 
-  return `${sign}${numberValue.toFixed(2)} percentage points`
+  return `${sign}${numberValue.toFixed(2)} pp`
 }
 
 const formatKellyMinimumPercentagePoint = (value) => {
   const numberValue = toOptionalNumber(value)
 
   return numberValue === null
-    ? '-- percentage-point minimum'
-    : `${numberValue.toFixed(2)} percentage-point minimum`
+    ? '-- pp'
+    : `+${numberValue.toFixed(2)} pp`
 }
 
 export const formatKellyPercentagePoints = (value) => {
@@ -393,7 +490,7 @@ export const formatKellyPercentagePoints = (value) => {
 
   return numberValue === null
     ? '--'
-    : `${numberValue.toFixed(2)} percentage points`
+    : `${numberValue.toFixed(2)} pp`
 }
 
 export const formatKellyEdge = (edgeDecimal) => {
@@ -406,7 +503,7 @@ export const formatKellyEdge = (edgeDecimal) => {
   const percentagePoints = edge * 100
   const sign = percentagePoints >= 0 ? '+' : ''
 
-  return `${sign}${percentagePoints.toFixed(2)} %-points`
+  return `${sign}${percentagePoints.toFixed(2)} pp`
 }
 
 export const formatKellyCurrency = (
@@ -497,6 +594,7 @@ export const getKellyRecommendationReasonMessage = (
 }
 
 const NO_KELLY_RECOMMENDATION_TEXT = 'No Kelly recommendation'
+const NO_STAKE_RECOMMENDATION_TEXT = 'No stake recommended'
 
 export const getKellyRecommendationPresentation = (
   recommendation = {},
@@ -554,11 +652,11 @@ export const getKellyRecommendationPresentation = (
       canUseRecommendedStake,
       recommendedAmountText,
       recommendedPercentText,
-      statusLabel: 'Kelly stake recommended',
-      statusTone: 'positive',
+      statusLabel: MODEL_STATUSES.BET_CANDIDATE,
+      statusTone: 'bet-candidate',
       supportingMessage: recommendation.capApplied
-        ? 'Your Kelly recommendation was limited by Maximum Stake.'
-        : 'Kelly stake recommendation is available from your Betting Settings.',
+        ? 'Kelly stake recommended. The amount was limited by Maximum Stake.'
+        : 'Kelly stake recommended.',
       useRecommendedStakeUnavailableReason: '',
     }
   }
@@ -566,11 +664,11 @@ export const getKellyRecommendationPresentation = (
   if (reason === KELLY_RECOMMENDATION_REASONS.BELOW_MINIMUM_EDGE) {
     return {
       canUseRecommendedStake: false,
-      recommendedAmountText,
-      recommendedPercentText,
-      statusLabel: 'No Kelly stake recommended',
-      statusTone: 'warning',
-      supportingMessage: `Edge ${edgePoints} is below your ${minimumEdge}. You may still enter your own stake.`,
+      recommendedAmountText: NO_STAKE_RECOMMENDATION_TEXT,
+      recommendedPercentText: NO_KELLY_RECOMMENDATION_TEXT,
+      statusLabel: MODEL_STATUSES.POSITIVE_VALUE_BELOW_THRESHOLD,
+      statusTone: 'positive-value-below-threshold',
+      supportingMessage: `Edge ${edgePoints} is below your ${minimumEdge} minimum. No stake recommended.`,
       useRecommendedStakeUnavailableReason:
         'No eligible Kelly currency amount is available to copy.',
     }
@@ -579,10 +677,10 @@ export const getKellyRecommendationPresentation = (
   if (reason === KELLY_RECOMMENDATION_REASONS.NO_POSITIVE_EDGE) {
     return {
       canUseRecommendedStake: false,
-      recommendedAmountText,
-      recommendedPercentText,
-      statusLabel: 'No Kelly stake recommended',
-      statusTone: 'neutral',
+      recommendedAmountText: NO_STAKE_RECOMMENDATION_TEXT,
+      recommendedPercentText: NO_KELLY_RECOMMENDATION_TEXT,
+      statusLabel: MODEL_STATUSES.NO_VALUE,
+      statusTone: 'no-value',
       supportingMessage:
         'The model does not show a positive edge at these odds. You may still enter your own stake.',
       useRecommendedStakeUnavailableReason:
@@ -593,10 +691,10 @@ export const getKellyRecommendationPresentation = (
   if (reason === KELLY_RECOMMENDATION_REASONS.NON_POSITIVE_KELLY) {
     return {
       canUseRecommendedStake: false,
-      recommendedAmountText,
-      recommendedPercentText,
-      statusLabel: 'No Kelly stake recommended',
-      statusTone: 'neutral',
+      recommendedAmountText: NO_STAKE_RECOMMENDATION_TEXT,
+      recommendedPercentText: NO_KELLY_RECOMMENDATION_TEXT,
+      statusLabel: MODEL_STATUSES.NO_VALUE,
+      statusTone: 'no-value',
       supportingMessage:
         'The current probability and odds do not produce a positive Kelly stake. You may still enter your own stake.',
       useRecommendedStakeUnavailableReason:
@@ -705,6 +803,7 @@ export const createKellyRecommendationSnapshot = (recommendation = null) => {
     fullKellyPercent: recommendation.fullKellyPercent,
     maximumStakePercent: recommendation.maximumStakePercent,
     minimumEdgePercent: recommendation.minimumEdgePercent,
+    recommendationState: getAnalyzerRecommendationState({ recommendation }),
     reason: recommendation.reason,
     recommendedStakeAmount: hasAmount
       ? recommendation.recommendedStakeAmount

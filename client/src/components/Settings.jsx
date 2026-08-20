@@ -42,6 +42,8 @@ import {
   DEFAULT_RATING_ENGINE_SETTINGS,
   RATING_ENGINE_PARAMETER_KEYS,
   RATING_ENGINE_SETTING_FIELDS,
+  SPECIAL_TEAMS_ADJUSTMENT_OPTIONS,
+  SPECIAL_TEAMS_MODE_OPTIONS,
   createRatingEngineSettingsDraft,
   getRatingEngineDirtyOwnership,
   normalizeRatingEngineSettings,
@@ -143,7 +145,8 @@ const RATING_MODEL_ADJUSTMENT_KEYS = Object.freeze([
 ])
 
 const GAME_CONTEXT_ENGINE_SETTING_KEYS = Object.freeze([
-  'specialTeamsAlertsEnabled',
+  'specialTeamsAdjustment',
+  'specialTeamsMode',
   'specialTeamsRankThreshold',
 ])
 
@@ -191,6 +194,7 @@ const GLOBAL_AUTOMATIC_MODEL_ADJUSTMENTS = Object.freeze([
   'Back-to-Back',
   'Back-to-Back + Travel',
   'Quick Rematch',
+  'Special Teams Matchup',
 ])
 
 const formatSignedValue = (value) => {
@@ -694,7 +698,8 @@ function Settings({
         'homeAdvantage',
         'maximumGoaliePenalty',
         'maximumPlayerInjuryPenalty',
-        'specialTeamsAlertsEnabled',
+        'specialTeamsAdjustment',
+        'specialTeamsMode',
         'specialTeamsRankThreshold',
       ].includes(field)
     ) {
@@ -1267,9 +1272,11 @@ function Settings({
     maximumPlayerInjuryPenalty:
       fieldErrors.maximumPlayerInjuryPenalty ||
       parsedDraft.fieldErrors.maximumPlayerInjuryPenalty,
-    specialTeamsAlertsEnabled:
-      fieldErrors.specialTeamsAlertsEnabled ||
-      parsedDraft.fieldErrors.specialTeamsAlertsEnabled,
+    specialTeamsAdjustment:
+      fieldErrors.specialTeamsAdjustment ||
+      parsedDraft.fieldErrors.specialTeamsAdjustment,
+    specialTeamsMode:
+      fieldErrors.specialTeamsMode || parsedDraft.fieldErrors.specialTeamsMode,
     specialTeamsRankThreshold:
       fieldErrors.specialTeamsRankThreshold ||
       parsedDraft.fieldErrors.specialTeamsRankThreshold,
@@ -1285,6 +1292,9 @@ function Settings({
     specialTeamsThreshold <= SPECIAL_TEAMS_LEAGUE_TEAM_COUNT
       ? SPECIAL_TEAMS_LEAGUE_TEAM_COUNT - specialTeamsThreshold + 1
       : null
+  const specialTeamsMode = draftSettings.specialTeamsMode
+  const specialTeamsIsOff = specialTeamsMode === 'off'
+  const specialTeamsIsAutomatic = specialTeamsMode === 'automatic'
 
   const renderRatingEngineField = (
     field,
@@ -2424,33 +2434,58 @@ function Settings({
             >
               <div className="settings-rule-card-heading">
                 <div>
-                  <h3>Special Teams Matchup Alerts</h3>
+                  <h3>Special Teams Matchup</h3>
                   <p>
-                    Informational 3-season PP/PK matchup signals only.
+                    Compares historical PP and opponent PK rankings.
                   </p>
                 </div>
-                <span>Informational</span>
+                <span>
+                  {specialTeamsIsAutomatic
+                    ? 'Automatic'
+                    : specialTeamsIsOff
+                      ? 'Off'
+                      : 'Alert only'}
+                </span>
               </div>
 
-              <label className="toggle-field settings-master-toggle">
-                <input
-                  type="checkbox"
-                  checked={Boolean(draftSettings.specialTeamsAlertsEnabled)}
+              <label className="field" htmlFor="special-teams-mode">
+                <span>Special Teams Matchup Mode</span>
+                <select
+                  id="special-teams-mode"
+                  value={specialTeamsMode}
                   disabled={isPending || isQuickRematchPending}
                   onChange={(event) =>
                     handleSettingsChange(
-                      'specialTeamsAlertsEnabled',
-                      event.target.checked,
+                      'specialTeamsMode',
+                      event.target.value,
                     )
                   }
-                />
-                <span>Enable Special Teams Matchup Alerts</span>
+                  aria-invalid={Boolean(
+                    modelAdjustmentDisplayErrors.specialTeamsMode,
+                  )}
+                >
+                  {SPECIAL_TEAMS_MODE_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+                {modelAdjustmentDisplayErrors.specialTeamsMode ? (
+                  <small className="field-error">
+                    {modelAdjustmentDisplayErrors.specialTeamsMode}
+                  </small>
+                ) : null}
               </label>
 
               <p className="settings-card-note">
-                Highlights games where a team with a top-ranked 3-season power
-                play faces a bottom-ranked 3-season penalty kill, or the
-                inverse.
+                Special Teams Matchup compares a team’s power-play rank against
+                the opponent’s penalty-kill rank using the configured historical
+                ranking window.
+              </p>
+              <p className="settings-card-note">
+                Alert only shows the matchup without changing ratings.
+                Automatic adjustment adds or subtracts the configured rating
+                value.
               </p>
 
               <label
@@ -2473,7 +2508,7 @@ function Settings({
                   disabled={
                     isPending ||
                     isQuickRematchPending ||
-                    !draftSettings.specialTeamsAlertsEnabled
+                    specialTeamsIsOff
                   }
                   onChange={(event) =>
                     handleSettingsChange(
@@ -2492,14 +2527,54 @@ function Settings({
                 >
                   {modelAdjustmentDisplayErrors.specialTeamsRankThreshold ||
                     (specialTeamsBottomRankStart
-                      ? `Top/Bottom ${specialTeamsThreshold} means ranks 1–${specialTeamsThreshold} and ${specialTeamsBottomRankStart}–${SPECIAL_TEAMS_LEAGUE_TEAM_COUNT} in a ${SPECIAL_TEAMS_LEAGUE_TEAM_COUNT}-team league.`
+                      ? `Top/Bottom ${specialTeamsThreshold} means ranks 1–${specialTeamsThreshold} and ${specialTeamsBottomRankStart}–${SPECIAL_TEAMS_LEAGUE_TEAM_COUNT} in a ${SPECIAL_TEAMS_LEAGUE_TEAM_COUNT}-team league. Top ${specialTeamsThreshold} PP vs Bottom ${specialTeamsThreshold} PK is positive; Bottom ${specialTeamsThreshold} PP vs Top ${specialTeamsThreshold} PK is negative.`
                       : 'Choose an integer from 3 to 12.')}
                 </small>
               </label>
 
+              <label
+                className="field"
+                htmlFor="special-teams-adjustment"
+              >
+                <span>Special Teams Adjustment</span>
+                <select
+                  id="special-teams-adjustment"
+                  value={draftSettings.specialTeamsAdjustment}
+                  disabled={
+                    isPending || isQuickRematchPending || specialTeamsIsOff
+                  }
+                  aria-invalid={Boolean(
+                    modelAdjustmentDisplayErrors.specialTeamsAdjustment,
+                  )}
+                  onChange={(event) =>
+                    handleSettingsChange(
+                      'specialTeamsAdjustment',
+                      event.target.value,
+                    )
+                  }
+                >
+                  {SPECIAL_TEAMS_ADJUSTMENT_OPTIONS.map((value) => (
+                    <option key={value} value={value}>
+                      {value.toFixed(2)} rating points
+                    </option>
+                  ))}
+                </select>
+                {modelAdjustmentDisplayErrors.specialTeamsAdjustment ? (
+                  <small className="field-error">
+                    {modelAdjustmentDisplayErrors.specialTeamsAdjustment}
+                  </small>
+                ) : (
+                  <small>
+                    Positive signals add this value; negative signals subtract
+                    it symmetrically.
+                  </small>
+                )}
+              </label>
+
               <p className="settings-card-save-note">
-                Alerts do not change Power Ratings, model probability, fair
-                odds, or Analyzer adjustments.
+                Top / Bottom N defines what counts as strong or weak. Historical
+                calibration showed only a small improvement, so Alert only
+                remains the default.
               </p>
             </article>
 

@@ -1833,11 +1833,38 @@ test('GameAnalyzer exposes explicit latest-odds action for provider prefill', ()
   })
 
   assert.match(html, /Use Latest Market Odds/)
-  assert.match(html, /Current Market Source/)
-  assert.match(html, /Best available[\s\S]*Book A \/ Book B/)
+  assert.match(html, /Market source/)
+  assert.match(html, /Book A \/ Book B · Away 2\.05 · Home 1\.85/)
   assert.match(html, /View All Bookmakers/)
   assert.match(html, /Manual edits remain unchanged/)
   assertNoInvalidNumbers(html)
+})
+
+test('GameAnalyzer keeps the compact market source bar mounted before odds entry', () => {
+  const context = {
+    awayContext: { adjustmentBreakdown: [] },
+    homeContext: { adjustmentBreakdown: [] },
+  }
+  const withoutOdds = renderGameAnalyzer(context, {
+    prefillMatchup: {
+      away: 'LAK',
+      gameContext: context,
+      gameId: '2025021044',
+      home: 'NYI',
+      scheduledStart: '2026-03-13T23:30:00.000Z',
+    },
+  })
+  const withOdds = renderGameAnalyzer(context)
+
+  for (const html of [withoutOdds, withOdds]) {
+    assert.equal(
+      (html.match(/analyzer-current-market-source compact/g) ?? []).length,
+      1,
+    )
+  }
+
+  assert.match(withoutOdds, /Manual entry · Add odds below/)
+  assert.match(withOdds, /Manual · Away 2\.05 · Home 1\.85/)
 })
 
 test('Dashboard renders positive and negative Special Teams alerts independently', () => {
@@ -1852,6 +1879,7 @@ test('Dashboard renders positive and negative Special Teams alerts independently
   assert.match(html, /Toronto Maple Leafs special teams disadvantage/)
   assert.match(html, /PP #28 vs BOS PK #4/)
   assert.match(html, /Weak PP vs Strong PK/)
+  assert.doesNotMatch(html, /Automatic adjustment/)
 })
 
 test('Dashboard keeps neutral, disabled, and missing Special Teams states quiet', () => {
@@ -1902,6 +1930,34 @@ test('Dashboard threshold changes the signal without changing model probabilitie
   )
 })
 
+test('Dashboard Automatic mode shows each applied value and updates model output', () => {
+  const alertOnly = renderDashboard({
+    initialSpecialTeams: specialTeamsData(),
+    initialSpecialTeamsStatus: 'success',
+    specialTeamsMode: 'alert_only',
+  })
+  const automatic = renderDashboard({
+    initialSpecialTeams: specialTeamsData(),
+    initialSpecialTeamsStatus: 'success',
+    specialTeamsAdjustment: 0.5,
+    specialTeamsMode: 'automatic',
+  })
+  const getModelProbabilities = (html) => html.match(/Model \d+\.\d%/g) ?? []
+
+  assert.match(
+    automatic,
+    /Boston Bruins special teams edge[\s\S]*Automatic adjustment \+0\.50/,
+  )
+  assert.match(
+    automatic,
+    /Toronto Maple Leafs special teams disadvantage[\s\S]*Automatic adjustment -0\.50/,
+  )
+  assert.notDeepEqual(
+    getModelProbabilities(automatic),
+    getModelProbabilities(alertOnly),
+  )
+})
+
 test('Game Analyzer uses the shared positive, negative, and neutral matchup logic', () => {
   const signals = renderGameAnalyzer({}, {
     initialSpecialTeams: specialTeamsData(),
@@ -1926,7 +1982,8 @@ test('Game Analyzer uses the shared positive, negative, and neutral matchup logi
     initialSpecialTeamsStatus: 'success',
   })
 
-  assert.match(signals, /Special Teams Matchup/)
+  assert.match(signals, /aria-label="Special Teams matchup alerts"/)
+  assert.match(signals, /aria-expanded="false"[^>]*>View Special Teams details/)
   assert.match(signals, /PP #5 vs NYI PK #28/)
   assert.match(signals, /Strong PP vs Weak PK/)
   assert.match(signals, /PP #29 vs LAK PK #4/)
@@ -1951,6 +2008,54 @@ test('Game Analyzer handles disabled and missing Special Teams data without adju
   assert.doesNotMatch(disabled, /Special Teams Matchup/)
   assert.match(missing, /Special teams data unavailable/)
   assert.doesNotMatch(missing, /Special Teams Rating Adjustment/)
+})
+
+test('Game Analyzer shows read-only mode values and applies Automatic exactly once', () => {
+  const data = specialTeamsData()
+  const alertOnly = renderGameAnalyzer({}, {
+    initialSpecialTeams: data,
+    initialSpecialTeamsStatus: 'success',
+    specialTeamsMode: 'alert_only',
+  })
+  const automatic = renderGameAnalyzer({}, {
+    initialSpecialTeams: data,
+    initialSpecialTeamsStatus: 'success',
+    specialTeamsAdjustment: 0.5,
+    specialTeamsMode: 'automatic',
+  })
+  const effectiveRating = (html, side) =>
+    Number(
+      html.match(
+        new RegExp(
+          `data-testid="analyzer-${side}-effective-rating"[^>]*>(\\d+\\.\\d)`,
+        ),
+      )?.[1],
+    )
+
+  assert.match(
+    alertOnly,
+    /data-testid="analyzer-away-specialTeamsAdjustment"[\s\S]*?<strong>0\.00<\/strong>[\s\S]*?Alert only · Strong PP vs Weak PK/,
+  )
+  assert.match(
+    automatic,
+    /data-testid="analyzer-away-specialTeamsAdjustment"[\s\S]*?<strong>\+0\.50<\/strong>[\s\S]*?Automatic · Strong PP vs Weak PK/,
+  )
+  assert.match(
+    automatic,
+    /data-testid="analyzer-home-specialTeamsAdjustment"[\s\S]*?<strong>-0\.50<\/strong>[\s\S]*?Automatic · Weak PP vs Strong PK/,
+  )
+  assert.doesNotMatch(
+    automatic,
+    /<input[^>]*id="analyzer-(away|home)-specialTeamsAdjustment"/,
+  )
+  assert.equal(
+    effectiveRating(automatic, 'away'),
+    effectiveRating(alertOnly, 'away') + 0.5,
+  )
+  assert.equal(
+    effectiveRating(automatic, 'home'),
+    effectiveRating(alertOnly, 'home') - 0.5,
+  )
 })
 
 test('Dashboard and Game Analyzer show consistent signals for the same game', () => {

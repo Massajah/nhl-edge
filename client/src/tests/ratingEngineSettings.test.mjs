@@ -126,29 +126,45 @@ test('rating engine settings utility validates numeric ranges', () => {
     probabilityScale: 20,
     regulationMultiplier: 1,
     shootoutMultiplier: 0.1,
+    specialTeamsAdjustment: 0.5,
     specialTeamsAlertsEnabled: true,
+    specialTeamsMode: 'alert_only',
     specialTeamsRankThreshold: 6,
   })
 })
 
-test('Special Teams alert settings normalize defaults and validate thresholds', () => {
+test('Special Teams settings normalize defaults and validate modes, magnitudes, and thresholds', () => {
   const defaults = settingsUtils.createRatingEngineSettingsDraft({})
+  const legacyDisabled = settingsUtils.normalizeRatingEngineSettings({
+    specialTeamsAlertsEnabled: false,
+    specialTeamsRankThreshold: 8,
+  })
   const minimum = settingsUtils.parseRatingEngineSettingsDraft({
     ...defaults,
-    specialTeamsAlertsEnabled: false,
+    specialTeamsMode: 'off',
     specialTeamsRankThreshold: '3',
   })
   const maximum = settingsUtils.parseRatingEngineSettingsDraft({
     ...defaults,
+    specialTeamsAdjustment: '1',
+    specialTeamsMode: 'automatic',
     specialTeamsRankThreshold: '12',
   })
 
+  assert.equal(defaults.specialTeamsAdjustment, '0.5')
   assert.equal(defaults.specialTeamsAlertsEnabled, true)
+  assert.equal(defaults.specialTeamsMode, 'alert_only')
   assert.equal(defaults.specialTeamsRankThreshold, '6')
+  assert.equal(legacyDisabled.specialTeamsMode, 'off')
+  assert.equal(legacyDisabled.specialTeamsRankThreshold, 8)
+  assert.equal(legacyDisabled.specialTeamsAdjustment, 0.5)
   assert.equal(minimum.isValid, true)
   assert.equal(minimum.settings.specialTeamsAlertsEnabled, false)
+  assert.equal(minimum.settings.specialTeamsMode, 'off')
   assert.equal(minimum.settings.specialTeamsRankThreshold, 3)
   assert.equal(maximum.isValid, true)
+  assert.equal(maximum.settings.specialTeamsAdjustment, 1)
+  assert.equal(maximum.settings.specialTeamsMode, 'automatic')
   assert.equal(maximum.settings.specialTeamsRankThreshold, 12)
 
   for (const value of ['2', '13', '6.5', 'invalid']) {
@@ -161,13 +177,19 @@ test('Special Teams alert settings normalize defaults and validate thresholds', 
     assert.ok(result.fieldErrors.specialTeamsRankThreshold)
   }
 
-  const invalidEnabled = settingsUtils.parseRatingEngineSettingsDraft({
+  const invalidMode = settingsUtils.parseRatingEngineSettingsDraft({
     ...defaults,
-    specialTeamsAlertsEnabled: 'false',
+    specialTeamsMode: 'boost',
+  })
+  const invalidAdjustment = settingsUtils.parseRatingEngineSettingsDraft({
+    ...defaults,
+    specialTeamsAdjustment: '0.6',
   })
 
-  assert.equal(invalidEnabled.isValid, false)
-  assert.ok(invalidEnabled.fieldErrors.specialTeamsAlertsEnabled)
+  assert.equal(invalidMode.isValid, false)
+  assert.ok(invalidMode.fieldErrors.specialTeamsMode)
+  assert.equal(invalidAdjustment.isValid, false)
+  assert.ok(invalidAdjustment.fieldErrors.specialTeamsAdjustment)
 })
 
 test('dirty ownership assigns model guardrails to Model Adjustments', () => {
@@ -180,7 +202,8 @@ test('dirty ownership assigns model guardrails to Model Adjustments', () => {
     ...clean,
     maximumPlayerInjuryPenalty: '-1.50',
   }
-  const alertsDirty = { ...clean, specialTeamsAlertsEnabled: false }
+  const modeDirty = { ...clean, specialTeamsMode: 'automatic' }
+  const adjustmentDirty = { ...clean, specialTeamsAdjustment: '0.75' }
   const thresholdDirty = { ...clean, specialTeamsRankThreshold: '8' }
 
   assert.deepEqual(settingsUtils.getRatingEngineDirtyOwnership(clean, saved), {
@@ -204,7 +227,11 @@ test('dirty ownership assigns model guardrails to Model Adjustments', () => {
     { modelAdjustments: true, ratingEngine: false },
   )
   assert.deepEqual(
-    settingsUtils.getRatingEngineDirtyOwnership(alertsDirty, saved),
+    settingsUtils.getRatingEngineDirtyOwnership(modeDirty, saved),
+    { modelAdjustments: true, ratingEngine: false },
+  )
+  assert.deepEqual(
+    settingsUtils.getRatingEngineDirtyOwnership(adjustmentDirty, saved),
     { modelAdjustments: true, ratingEngine: false },
   )
   assert.deepEqual(

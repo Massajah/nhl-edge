@@ -31,6 +31,11 @@ const MAXIMUM_PLAYER_INJURY_PENALTY_LIMITS = Object.freeze({
   step: 0.5,
 })
 const DEFAULT_MAXIMUM_PLAYER_INJURY_PENALTY = -2.5
+const {
+  DEFAULT_SPECIAL_TEAMS_SETTINGS,
+  SPECIAL_TEAMS_ADJUSTMENT_LIMITS,
+  SPECIAL_TEAMS_MODES,
+} = require('../../shared/specialTeamsMatchups')
 
 const DEFAULT_PRODUCTION_RATING_ENGINE_SETTINGS = Object.freeze({
   homeAdvantage: BASE_MODEL_V1.baseHomeAdvantage,
@@ -41,8 +46,7 @@ const DEFAULT_PRODUCTION_RATING_ENGINE_SETTINGS = Object.freeze({
   probabilityScale: BASE_MODEL_V1.probabilityScale,
   regulationMultiplier: BASE_MODEL_V1.regulationMultiplier,
   shootoutMultiplier: BASE_MODEL_V1.shootoutMultiplier,
-  specialTeamsAlertsEnabled: true,
-  specialTeamsRankThreshold: 6,
+  ...DEFAULT_SPECIAL_TEAMS_SETTINGS,
 })
 
 module.exports = {
@@ -53,4 +57,6 @@ module.exports = {
   MAXIMUM_GOALIE_PENALTY_LIMITS,
   MAXIMUM_PLAYER_INJURY_PENALTY_LIMITS,
   PRODUCTION_PROBABILITY_SCALE_LIMITS,
+  SPECIAL_TEAMS_ADJUSTMENT_LIMITS,
+  SPECIAL_TEAMS_MODES,
 }

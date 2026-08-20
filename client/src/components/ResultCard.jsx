@@ -1,15 +1,18 @@
+import { useState } from 'react'
 import {
   ADD_MARKET_ODDS_STATUS,
-  MODEL_STATUSES,
   PROBABILITY_EDGE_HELP_TEXT,
   parseMarketOdds,
 } from '../utils/calculateGame.js'
 import { parseBankrollMoneyInput } from '../utils/bankroll.js'
 import {
+  ANALYZER_RECOMMENDATION_STATES,
   formatKellyCurrency,
   formatKellyEdge,
   formatKellyPercent,
   formatKellyProbability,
+  getAnalyzerRecommendationState,
+  getAnalyzerRecommendationStatus,
   getMaximumStakeComparison,
   getKellyRecommendationPresentation,
 } from '../utils/kellyStaking.js'
@@ -19,7 +22,7 @@ const formatPercent = (value) =>
 
 const formatProbabilityEdge = (value) =>
   Number.isFinite(value)
-    ? `${value >= 0 ? '+' : ''}${(value * 100).toFixed(1)} pp`
+    ? `${value >= 0 ? '+' : ''}${(value * 100).toFixed(2)} pp`
     : '--'
 
 const formatExpectedValue = (value) =>
@@ -30,6 +33,12 @@ const formatSignedNumber = (value) =>
 
 const formatOdds = (value) =>
   Number.isFinite(value) ? value.toFixed(2) : '--'
+
+const formatMinimumProbabilityEdge = (value) => {
+  const numberValue = Number(value)
+
+  return Number.isFinite(numberValue) ? `${numberValue.toFixed(2)} pp` : '--'
+}
 
 const formatRating = (value) =>
   Number.isFinite(value) ? value.toFixed(1) : '--'
@@ -58,12 +67,15 @@ const getMarketBySide = (result, side) => {
   }
 }
 
-const getStatusWarning = (modelStatus) => {
-  if (modelStatus === MODEL_STATUSES.BELOW_THRESHOLD) {
-    return 'Expected value is positive, but below the current model threshold. You can still save this bet.'
+const getStatusWarning = (recommendationState) => {
+  if (
+    recommendationState ===
+    ANALYZER_RECOMMENDATION_STATES.POSITIVE_VALUE_BELOW_THRESHOLD
+  ) {
+    return 'NHL Edge does not recommend a stake under the current betting rules. You can still save a deliberate manual bet.'
   }
 
-  if (modelStatus === MODEL_STATUSES.NO_VALUE) {
+  if (recommendationState === ANALYZER_RECOMMENDATION_STATES.NO_VALUE) {
     return 'The model estimates negative expected value for this bet. You can still save it if this is intentional.'
   }
 
@@ -164,7 +176,7 @@ function ResultCard({
   selectedSide,
   stake,
   stakeRecommendation,
-  validSaveSides = [],
+  stakeRecommendations = {},
 }) {
   const marketSides = [
     {
@@ -183,7 +195,34 @@ function ResultCard({
       team: homeTeam,
       values: inputs.home,
     },
-  ]
+  ].map((marketSide) => {
+    const sideStakeRecommendation =
+      stakeRecommendations[marketSide.side] ??
+      (marketSide.side === selectedSide ? stakeRecommendation : {}) ??
+      {}
+    const recommendationState = getAnalyzerRecommendationState({
+      expectedValue: marketSide.market.expectedValue,
+      recommendation: sideStakeRecommendation,
+    })
+    const displayStatus = getAnalyzerRecommendationStatus({
+      expectedValue: marketSide.market.expectedValue,
+      recommendation: {
+        ...sideStakeRecommendation,
+        recommendationState,
+      },
+    })
+
+    return {
+      ...marketSide,
+      market: {
+        ...marketSide.market,
+        displayStatus,
+        recommendationState,
+        stakeRecommendation: sideStakeRecommendation,
+        statusTone: modelStatusClass(displayStatus),
+      },
+    }
+  })
   const [awayMarketSide, homeMarketSide] = marketSides
   const modelLeanSide =
     homeMarketSide.market.modelProbability >=
@@ -218,7 +257,7 @@ function ResultCard({
           label="Highest EV"
           tone={
             highestExpectedValueSide
-              ? modelStatusClass(highestExpectedValueSide.market.modelStatus)
+              ? highestExpectedValueSide.market.statusTone
               : 'muted'
           }
           value={
@@ -298,10 +337,10 @@ function ResultCard({
           saveStatus={saveStatus}
           selectedMarketSide={selectedMarketSide}
           selectedSide={selectedSide}
-          stakeRecommendation={stakeRecommendation}
+          stakeRecommendation={selectedMarketSide.market.stakeRecommendation}
           notes={notes}
           stake={stake}
-          validSaveSides={validSaveSides}
+          validSaveSides={validMarketSides}
           onClose={onCloseReview}
           onNotesChange={onNotesChange}
           onSaveBet={onSaveBet}
@@ -330,18 +369,31 @@ function StakeRecommendationCard({
   stake,
   stakeRecommendation = {},
 }) {
-  const presentation = getKellyRecommendationPresentation(stakeRecommendation, {
+  const [detailsExpanded, setDetailsExpanded] = useState(false)
+  const recommendation =
+    selectedMarketSide?.market?.stakeRecommendation ?? stakeRecommendation
+  const presentation = getKellyRecommendationPresentation(recommendation, {
     bankrollStatus,
   })
+  const recommendationState = selectedMarketSide?.market?.recommendationState
+  const isBelowThreshold =
+    recommendationState ===
+    ANALYZER_RECOMMENDATION_STATES.POSITIVE_VALUE_BELOW_THRESHOLD
+  const statusLabel =
+    isBelowThreshold
+      ? 'Below Threshold'
+      : selectedMarketSide?.market?.displayStatus ?? presentation.statusLabel
+  const statusTone =
+    selectedMarketSide?.market?.statusTone || presentation.statusTone
   const basisLabel =
-    stakeRecommendation.bankrollBasisLabel ?? 'Available bankroll'
+    recommendation.bankrollBasisLabel ?? 'Available bankroll'
   const basisText = basisLabel.toLowerCase()
   const selectedTeamLabel = selectedMarketSide?.team?.name ?? 'Selected side'
-  const currency = stakeRecommendation.currency ?? 'EUR'
+  const currency = recommendation.currency ?? 'EUR'
   const stakeInputState = getStakeInputState(stake)
   const maximumStakeComparison = getMaximumStakeComparison({
     actualStakeAmount: stakeInputState.parsedStake,
-    recommendation: stakeRecommendation,
+    recommendation,
   })
   const stakeInputHelpId = 'stake-recommendation-your-stake-help'
   const stakeInputErrorId = 'stake-recommendation-your-stake-error'
@@ -364,63 +416,74 @@ function StakeRecommendationCard({
       : '',
   ].filter(Boolean)
   const showBankrollSetup =
-    stakeRecommendation.reason === 'BANKROLL_NOT_INITIALIZED'
+    recommendation.reason === 'BANKROLL_NOT_INITIALIZED'
   const canUseRecommendedStake =
     presentation.canUseRecommendedStake && saveStatus !== 'saving'
   const useRecommendedStakeTitle = canUseRecommendedStake
     ? undefined
     : presentation.useRecommendedStakeUnavailableReason
-  const primaryDetail =
-    presentation.recommendedPercentText === 'No Kelly recommendation'
-      ? 'Kelly stake is advisory only'
-      : `${presentation.recommendedPercentText} of ${basisText}`
+  const isBetCandidate =
+    recommendationState === ANALYZER_RECOMMENDATION_STATES.BET_CANDIDATE
+  const stakeInputHelp = isBelowThreshold
+    ? 'NHL Edge does not recommend a stake under the current betting rules.'
+    : isBetCandidate
+      ? 'Use the Kelly recommendation or enter your own amount.'
+      : 'You may enter your own amount if this is a deliberate manual bet.'
   const details = [
     {
-      label: 'Recommended Stake %',
-      tone: presentation.canUseRecommendedStake ? 'positive' : '',
-      value: presentation.recommendedPercentText,
-    },
-    {
-      label: 'Recommended Amount',
-      tone: presentation.canUseRecommendedStake ? 'positive' : '',
-      value: presentation.recommendedAmountText,
-    },
-    {
       label: 'Model Probability',
-      value: formatKellyProbability(stakeRecommendation.modelProbability),
+      value: formatKellyProbability(recommendation.modelProbability),
     },
     {
       label: 'Market Implied Probability',
-      value: formatKellyProbability(stakeRecommendation.impliedProbability),
+      value: formatKellyProbability(recommendation.impliedProbability),
     },
     {
       label: 'Edge',
       tone:
-        Number(stakeRecommendation.edgeDecimal) > 0 ? 'positive' : 'negative',
-      value: formatKellyEdge(stakeRecommendation.edgeDecimal),
+        Number(recommendation.edgeDecimal) > 0 ? 'positive' : 'negative',
+      value: formatKellyEdge(recommendation.edgeDecimal),
+    },
+    {
+      label: 'EV',
+      tone:
+        Number(selectedMarketSide?.market?.expectedValue) > 0
+          ? 'positive'
+          : 'negative',
+      value: formatExpectedValue(selectedMarketSide?.market?.expectedValue),
+    },
+    {
+      label: 'Minimum probability edge',
+      value: formatMinimumProbabilityEdge(recommendation.minimumEdgePercent),
     },
     {
       label: 'Full Kelly',
-      value: formatKellyPercent(stakeRecommendation.fullKellyPercent),
+      value: formatKellyPercent(recommendation.fullKellyPercent),
     },
     {
       label: 'Kelly Mode',
-      value: stakeRecommendation.kellyModeLabel ?? 'Quarter Kelly',
+      value: recommendation.kellyModeLabel ?? 'Quarter Kelly',
     },
     {
       label: 'Fractional Kelly',
-      value: formatKellyPercent(stakeRecommendation.fractionalKellyPercent),
+      value: formatKellyPercent(recommendation.fractionalKellyPercent),
+    },
+    {
+      label: 'Recommended Stake %',
+      value: isBetCandidate
+        ? formatKellyPercent(recommendation.cappedStakePercent)
+        : 'No stake recommended',
     },
     {
       label: 'Maximum Stake',
-      value: formatKellyPercent(stakeRecommendation.maximumStakePercent),
+      value: formatKellyPercent(recommendation.maximumStakePercent),
     },
     {
       label: 'Maximum Stake Applied',
       title:
         'Yes means the Kelly recommendation was limited by your configured Maximum Stake.',
-      tone: stakeRecommendation.capApplied ? 'warning' : '',
-      value: stakeRecommendation.capApplied ? 'Yes' : 'No',
+      tone: recommendation.capApplied ? 'warning' : '',
+      value: recommendation.capApplied ? 'Yes' : 'No',
     },
     {
       label: 'Bankroll Basis',
@@ -428,10 +491,10 @@ function StakeRecommendationCard({
     },
     {
       label: basisLabel,
-      value: stakeRecommendation.bankrollInitialized
+      value: recommendation.bankrollInitialized
         ? formatKellyCurrency(
-            stakeRecommendation.bankrollAmount,
-            stakeRecommendation.currency,
+            recommendation.bankrollAmount,
+            recommendation.currency,
           )
         : 'Not initialized',
     },
@@ -439,7 +502,7 @@ function StakeRecommendationCard({
 
   return (
     <section
-      className={`stake-recommendation-panel ${presentation.statusTone}`}
+      className={`stake-recommendation-panel ${statusTone}`}
       aria-label="Stake Recommendation"
     >
       <div className="stake-recommendation-header">
@@ -447,8 +510,8 @@ function StakeRecommendationCard({
           <p className="eyebrow">Stake Recommendation</p>
           <h3>{selectedTeamLabel}</h3>
         </div>
-        <span className={`recommendation-badge ${presentation.statusTone}`}>
-          {presentation.statusLabel}
+        <span className={`recommendation-badge ${statusTone}`}>
+          {statusLabel}
         </span>
       </div>
 
@@ -475,9 +538,11 @@ function StakeRecommendationCard({
 
       <div className="stake-summary-grid">
         <section className="recommended-amount-card">
-          <span>Recommended Amount</span>
+          <span>Recommended stake</span>
           <strong>{presentation.recommendedAmountText}</strong>
-          <small>{primaryDetail}</small>
+          {isBetCandidate ? (
+            <small>{presentation.recommendedPercentText} of {basisText}</small>
+          ) : null}
         </section>
 
         <section
@@ -512,7 +577,7 @@ function StakeRecommendationCard({
             </span>
           </div>
           <small id={stakeInputHelpId}>
-            You can follow the Kelly recommendation or enter your own amount.
+            {stakeInputHelp}
           </small>
           {stakeInputState.isInvalid ? (
             <small id={stakeInputErrorId} className="stake-input-error" role="alert">
@@ -529,7 +594,7 @@ function StakeRecommendationCard({
       </div>
 
       <p
-        className={`stake-recommendation-message ${presentation.statusTone}`}
+        className={`stake-recommendation-message ${statusTone}`}
         role="status"
       >
         {presentation.supportingMessage}
@@ -542,19 +607,6 @@ function StakeRecommendationCard({
           ))}
         </div>
       ) : null}
-
-      <div className="stake-recommendation-grid">
-        {details.map((detail) => (
-          <div
-            key={detail.label}
-            className={detail.tone ?? ''}
-            title={detail.title}
-          >
-            <span>{detail.label}</span>
-            <strong>{detail.value}</strong>
-          </div>
-        ))}
-      </div>
 
       <div className="stake-recommendation-actions">
         <button
@@ -575,13 +627,43 @@ function StakeRecommendationCard({
             Set Up Bankroll
           </button>
         ) : null}
+      </div>
+
+      <div className="betting-details">
         <button
-          className="secondary-save-button"
+          aria-controls="stake-recommendation-betting-details"
+          aria-expanded={detailsExpanded}
+          className="betting-details-toggle"
           type="button"
-          onClick={onOpenBettingSettings}
+          onClick={() => setDetailsExpanded((current) => !current)}
         >
-          Edit Betting Settings
+          {detailsExpanded ? 'Hide betting details' : 'View betting details'}
         </button>
+        <div
+          className="betting-details-panel"
+          hidden={!detailsExpanded}
+          id="stake-recommendation-betting-details"
+        >
+          <div className="stake-recommendation-grid">
+            {details.map((detail) => (
+              <div
+                key={detail.label}
+                className={detail.tone ?? ''}
+                title={detail.title}
+              >
+                <span>{detail.label}</span>
+                <strong>{detail.value}</strong>
+              </div>
+            ))}
+          </div>
+          <button
+            className="secondary-save-button"
+            type="button"
+            onClick={onOpenBettingSettings}
+          >
+            Edit Betting Settings
+          </button>
+        </div>
       </div>
     </section>
   )
@@ -610,11 +692,14 @@ function MarketComparisonSide({
   const hasValidMarketOdds = Boolean(parsedMarketOdds)
   const hasInvalidOdds = isInvalidMarketOdds(marketOddsValue)
   const modelStatus = hasValidMarketOdds
-    ? market.modelStatus ?? 'Model unavailable'
+    ? market.displayStatus ?? market.modelStatus ?? 'Model unavailable'
     : ADD_MARKET_ODDS_STATUS
   const statusTone = hasValidMarketOdds
-    ? modelStatusClass(modelStatus)
+    ? market.statusTone || modelStatusClass(modelStatus)
     : 'add-market-odds'
+  const isBelowThreshold =
+    market.recommendationState ===
+    ANALYZER_RECOMMENDATION_STATES.POSITIVE_VALUE_BELOW_THRESHOLD
 
   return (
     <section
@@ -659,58 +744,49 @@ function MarketComparisonSide({
         </label>
       </div>
 
-      {hasValidMarketOdds ? (
-        <>
-          <div className="market-value-grid">
-            <MarketMetric
-              emphasis
-              label="Expected value"
-              tone={
-                Number.isFinite(market.expectedValue) &&
-                market.expectedValue >= 0
-                  ? 'positive'
-                  : 'negative'
-              }
-              value={formatExpectedValue(market.expectedValue)}
-            />
-            <MarketMetric
-              emphasis
-              label="Model status"
-              tone={statusTone}
-              value={modelStatus}
-            />
-            <MarketMetric
-              label="Probability edge"
-              title={PROBABILITY_EDGE_HELP_TEXT}
-              tone={
-                Number.isFinite(market.probabilityEdge) &&
-                market.probabilityEdge >= 0
-                  ? 'positive'
-                  : 'negative'
-              }
-              value={formatProbabilityEdge(market.probabilityEdge)}
-            />
-          </div>
+      <div
+        className={`market-outcome-row ${statusTone}`}
+        data-testid={`${side}-market-outcome`}
+        role="status"
+      >
+        {hasValidMarketOdds ? (
+          <>
+            <span title={PROBABILITY_EDGE_HELP_TEXT}>
+              Edge{' '}
+              <strong>{formatProbabilityEdge(market.probabilityEdge)}</strong>
+            </span>
+            <span>
+              EV <strong>{formatExpectedValue(market.expectedValue)}</strong>
+            </span>
+          </>
+        ) : (
+          <span>Enter market odds to calculate value.</span>
+        )}
+      </div>
 
-          <details className="market-details">
-            <summary>Details</summary>
-            <div>
-              <span>
-                Implied probability{' '}
-                <strong>{formatPercent(market.impliedProbability)}</strong>
-              </span>
-              <span>
-                Odds difference{' '}
-                <strong>{formatSignedNumber(market.oddsDifference)}</strong>
-              </span>
-            </div>
-          </details>
-        </>
-      ) : (
-        <p className="market-empty-state">
-          Enter market odds to calculate value.
+      {isBelowThreshold ? (
+        <p className="market-threshold-note">
+          Below{' '}
+          {formatMinimumProbabilityEdge(
+            market.stakeRecommendation?.minimumEdgePercent,
+          )}{' '}
+          betting threshold
         </p>
-      )}
+      ) : null}
+
+      <details className="market-details">
+        <summary>Market details</summary>
+        <div>
+          <span>
+            Implied probability{' '}
+            <strong>{formatPercent(market.impliedProbability)}</strong>
+          </span>
+          <span>
+            Odds difference{' '}
+            <strong>{formatSignedNumber(market.oddsDifference)}</strong>
+          </span>
+        </div>
+      </details>
     </section>
   )
 }
@@ -775,20 +851,27 @@ function BetReviewPanel({
   stakeRecommendation = {},
   validSaveSides,
 }) {
+  const [snapshotExpanded, setSnapshotExpanded] = useState(false)
   const selectedMarketOdds = parseMarketOdds(selectedMarketSide.marketOddsValue)
   const selectedModelStatus =
+    selectedMarketSide.market.displayStatus ??
     selectedMarketSide.market.modelStatus ??
     selectedMarketSide.market.recommendation ??
     'Model unavailable'
-  const statusTone = modelStatusClass(selectedModelStatus)
-  const warning = getStatusWarning(selectedModelStatus)
+  const statusTone =
+    selectedMarketSide.market.statusTone || modelStatusClass(selectedModelStatus)
+  const warning = getStatusWarning(
+    selectedMarketSide.market.recommendationState,
+  )
   const showSidePicker = validSaveSides.length > 1
-  const presentation = getKellyRecommendationPresentation(stakeRecommendation)
-  const currency = stakeRecommendation.currency ?? 'EUR'
+  const recommendation =
+    selectedMarketSide.market.stakeRecommendation ?? stakeRecommendation
+  const presentation = getKellyRecommendationPresentation(recommendation)
+  const currency = recommendation.currency ?? 'EUR'
   const stakeInputState = getStakeInputState(stake)
   const maximumStakeComparison = getMaximumStakeComparison({
     actualStakeAmount: stakeInputState.parsedStake,
-    recommendation: stakeRecommendation,
+    recommendation,
   })
   const reviewStakeHelpId = 'save-bet-stake-help'
   const reviewStakeErrorId = 'save-bet-stake-error'
@@ -813,8 +896,11 @@ function BetReviewPanel({
     <section className="save-bet-panel" aria-label="Review and save bet">
       <div className="save-bet-header">
         <div>
-          <p className="eyebrow">Review & Save</p>
-          <h3>{selectedMarketSide.team.name}</h3>
+          <p className="eyebrow">Review bet</p>
+          <h3>
+            {selectedMarketSide.team.name} ML @{' '}
+            {formatOdds(selectedMarketOdds)}
+          </h3>
         </div>
         <span className={`recommendation-badge ${statusTone}`}>
           {selectedModelStatus}
@@ -833,7 +919,7 @@ function BetReviewPanel({
               checked={selectedSide === side}
               label={team.name}
               side={side}
-              status={market.modelStatus}
+              status={market.displayStatus ?? market.modelStatus}
               onChange={onSelectedSideChange}
             />
           ))}
@@ -841,40 +927,13 @@ function BetReviewPanel({
       ) : null}
 
       <div className="save-review-grid">
-        <ReviewMetric label="Selected team" value={selectedMarketSide.team.name} />
         <ReviewMetric
-          label="Selected side"
-          value={selectedSide === 'home' ? 'Home' : 'Away'}
-        />
-        <ReviewMetric label="Model status" value={selectedModelStatus} />
-        <ReviewMetric
-          label="Market odds"
-          value={formatOdds(selectedMarketOdds)}
-        />
-        <ReviewMetric
-          label="Fair odds"
-          value={formatOdds(selectedMarketSide.market.fairOdds)}
-        />
-        <ReviewMetric
-          label="Model probability"
-          value={formatPercent(selectedMarketSide.market.modelProbability)}
-        />
-        <ReviewMetric
-          label="Probability edge"
+          label="Edge"
           title={PROBABILITY_EDGE_HELP_TEXT}
           value={formatProbabilityEdge(selectedMarketSide.market.probabilityEdge)}
         />
         <ReviewMetric
-          label="Kelly recommendation"
-          value={kellyRecommendationText}
-        />
-        <ReviewMetric label="Your stake" value={actualStakeText} />
-        <ReviewMetric
-          label="Configured maximum"
-          value={configuredMaximumText}
-        />
-        <ReviewMetric
-          label="Expected value"
+          label="EV"
           value={formatExpectedValue(selectedMarketSide.market.expectedValue)}
         />
       </div>
@@ -887,7 +946,7 @@ function BetReviewPanel({
 
       <label className="field stake-field" htmlFor="save-bet-stake">
         <span>
-          Your Stake
+          Stake
         </span>
         <div className="stake-input-row">
           <input
@@ -931,17 +990,52 @@ function BetReviewPanel({
         />
       </label>
 
-      <AdjustmentReview values={selectedMarketSide.values} />
+      <div className="analysis-snapshot">
+        <button
+          aria-controls="review-analysis-snapshot"
+          aria-expanded={snapshotExpanded}
+          className="analysis-snapshot-toggle"
+          type="button"
+          onClick={() => setSnapshotExpanded((current) => !current)}
+        >
+          {snapshotExpanded
+            ? 'Hide analysis snapshot'
+            : 'View analysis snapshot'}
+        </button>
+        <div
+          className="analysis-snapshot-panel"
+          hidden={!snapshotExpanded}
+          id="review-analysis-snapshot"
+        >
+          <div className="save-review-grid secondary">
+            <ReviewMetric
+              label="Selected side"
+              value={selectedSide === 'home' ? 'Home' : 'Away'}
+            />
+            <ReviewMetric label="Model status" value={selectedModelStatus} />
+            <ReviewMetric
+              label="Fair odds"
+              value={formatOdds(selectedMarketSide.market.fairOdds)}
+            />
+            <ReviewMetric
+              label="Model probability"
+              value={formatPercent(selectedMarketSide.market.modelProbability)}
+            />
+            <ReviewMetric
+              label="Kelly recommendation"
+              value={kellyRecommendationText}
+            />
+            <ReviewMetric label="Your stake" value={actualStakeText} />
+            <ReviewMetric
+              label="Configured maximum"
+              value={configuredMaximumText}
+            />
+          </div>
+          <AdjustmentReview values={selectedMarketSide.values} />
+        </div>
+      </div>
 
       <div className="result-actions">
-        <button
-          className="save-analysis-button"
-          type="button"
-          disabled={saveDisabled}
-          onClick={onSaveBet}
-        >
-          {saveStatus === 'saving' ? 'Saving...' : 'Save Bet'}
-        </button>
         <button
           className="secondary-save-button"
           type="button"
@@ -949,6 +1043,14 @@ function BetReviewPanel({
           onClick={onClose}
         >
           Cancel
+        </button>
+        <button
+          className="save-analysis-button"
+          type="button"
+          disabled={saveDisabled}
+          onClick={onSaveBet}
+        >
+          {saveStatus === 'saving' ? 'Saving...' : 'Save Bet'}
         </button>
         {saveMessage ? (
           <span className={`save-analysis-status ${saveStatus}`} role="status">

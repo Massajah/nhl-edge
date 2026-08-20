@@ -8,10 +8,20 @@ import {
 } from './calculateGame.js'
 import { createGameContextSnapshot } from './gameContext.js'
 import {
+  getAnalyzerRecommendationState,
+  getAnalyzerRecommendationStatus,
+  normalizeAnalyzerRecommendationState,
+} from './kellyStaking.js'
+import {
   createGoalieSelectionPayload,
   getGoalieSelectionFromInputs,
   normalizeGoalieSelection,
 } from './goalies.js'
+import {
+  SPECIAL_TEAMS_MATCHUP_STATUSES,
+  SPECIAL_TEAMS_MODES,
+  SPECIAL_TEAMS_SIGNALS,
+} from './specialTeamsMatchups.js'
 
 export const SAVED_ANALYSES_STORAGE_KEY = 'nhl-edge-saved-analyses'
 
@@ -104,6 +114,34 @@ const normalizeResult = (result) =>
 
 const normalizeStake = (stake) => Math.max(toNumber(stake, DEFAULT_STAKE), 0)
 
+const normalizeSpecialTeamsSnapshot = (snapshot = null) => {
+  if (!isPlainObject(snapshot)) {
+    return null
+  }
+
+  const mode = Object.values(SPECIAL_TEAMS_MODES).includes(snapshot.mode)
+    ? snapshot.mode
+    : SPECIAL_TEAMS_MODES.ALERT_ONLY
+  const status = Object.values(SPECIAL_TEAMS_MATCHUP_STATUSES).includes(
+    snapshot.status,
+  )
+    ? snapshot.status
+    : SPECIAL_TEAMS_MATCHUP_STATUSES.UNAVAILABLE
+  const signal = Object.values(SPECIAL_TEAMS_SIGNALS).includes(snapshot.signal)
+    ? snapshot.signal
+    : null
+
+  return {
+    adjustment: toNumber(snapshot.adjustment),
+    mode,
+    opponentPkRank: toNullableNumber(snapshot.opponentPkRank),
+    ppRank: toNullableNumber(snapshot.ppRank),
+    signal,
+    status,
+    threshold: toNullableNumber(snapshot.threshold),
+  }
+}
+
 const normalizeAdjustments = (values = {}) => {
   const goalieSelection = getGoalieSelectionFromInputs(
     values,
@@ -132,6 +170,10 @@ const normalizeAdjustments = (values = {}) => {
     recentForm: toNumber(values.recentForm ?? values.restFatigue),
     restFatigue: toNumber(values.restFatigue ?? values.recentForm),
     quickRematchAdjustment: toNumber(values.quickRematchAdjustment),
+    specialTeamsAdjustment: toNumber(values.specialTeamsAdjustment),
+    specialTeamsContext: normalizeSpecialTeamsSnapshot(
+      values.specialTeamsContext,
+    ),
     motivation: toNumber(values.motivation),
     manualAdjustment: toNumber(values.manualAdjustment),
   }
@@ -172,6 +214,7 @@ export const getRecommendedBet = (analysis) => {
       edge: analysis.probabilityEdge,
       expectedValue: analysis.expectedValue,
       modelStatus: analysis.modelStatus,
+      recommendationState: analysis.recommendationState,
       oddsValuePercentage: analysis.oddsValuePercentage,
       recommendation: analysis.recommendation,
     }
@@ -287,6 +330,14 @@ const createAdjustmentsPayload = (inputs) => ({
   awayRestFatigue: toNumber(inputs.away.restFatigue ?? inputs.away.recentForm),
   homeQuickRematch: toNumber(inputs.home.quickRematchAdjustment),
   awayQuickRematch: toNumber(inputs.away.quickRematchAdjustment),
+  homeSpecialTeamsAdjustment: toNumber(inputs.home.specialTeamsAdjustment),
+  awaySpecialTeamsAdjustment: toNumber(inputs.away.specialTeamsAdjustment),
+  homeSpecialTeamsSnapshot: normalizeSpecialTeamsSnapshot(
+    inputs.home.specialTeamsContext,
+  ),
+  awaySpecialTeamsSnapshot: normalizeSpecialTeamsSnapshot(
+    inputs.away.specialTeamsContext,
+  ),
   homeMotivation: toNumber(inputs.home.motivation),
   awayMotivation: toNumber(inputs.away.motivation),
   homeManualAdjustment: toNumber(inputs.home.manualAdjustment),
@@ -304,6 +355,10 @@ const createSelectedAdjustmentSnapshot = (values = {}) => {
     totalInjuryAdjustment: storedInjuryImpact + gameInjuryAdjustment,
     restFatigueAdjustment: toNumber(values.restFatigue ?? values.recentForm),
     quickRematchAdjustment: toNumber(values.quickRematchAdjustment),
+    specialTeamsAdjustment: toNumber(values.specialTeamsAdjustment),
+    specialTeamsSnapshot: normalizeSpecialTeamsSnapshot(
+      values.specialTeamsContext ?? values.specialTeamsSnapshot,
+    ),
     motivationAdjustment: toNumber(values.motivation),
     manualAdjustment: toNumber(values.manualAdjustment),
   }
@@ -361,6 +416,9 @@ const normalizeKellyRecommendationSnapshot = (snapshot = null) => {
     fullKellyPercent: toNullableNumber(snapshot.fullKellyPercent),
     maximumStakePercent: toNullableNumber(snapshot.maximumStakePercent),
     minimumEdgePercent: toNullableNumber(snapshot.minimumEdgePercent),
+    recommendationState: normalizeAnalyzerRecommendationState(
+      snapshot.recommendationState,
+    ),
     reason: toText(snapshot.reason, ''),
     recommendedStakeAmount: toNullableNumber(snapshot.recommendedStakeAmount),
     recommendedStakePercent: toNullableNumber(snapshot.recommendedStakePercent),
@@ -399,7 +457,21 @@ export const createBetPayloadFromGameAnalysis = ({
     savedAnalysis[`${selectedMarket}WinProbability`],
     marketOdds,
   )
-  const modelStatus = getModelStatus(expectedValue)
+  const normalizedKellyRecommendation = normalizeKellyRecommendationSnapshot(
+    kellyRecommendation,
+  )
+  const recommendationState = getAnalyzerRecommendationState({
+    expectedValue,
+    recommendation: normalizedKellyRecommendation ?? {},
+  })
+  const modelStatus =
+    getAnalyzerRecommendationStatus({
+      expectedValue,
+      recommendation: {
+        ...(normalizedKellyRecommendation ?? {}),
+        recommendationState,
+      },
+    }) ?? getModelStatus(expectedValue)
   const selectedAdjustmentSnapshot =
     createSelectedAdjustmentSnapshot(selectedInputs)
   const selectedOddsMetadata = marketOddsMetadata?.[selectedMarket] ?? null
@@ -450,6 +522,7 @@ export const createBetPayloadFromGameAnalysis = ({
     probabilityEdge: savedAnalysis[`${selectedMarket}Edge`],
     expectedValue,
     modelStatus,
+    recommendationState,
     oddsValuePercentage: expectedValue === null ? 0 : expectedValue / 100,
     recommendation: modelStatus,
     awayBaseRating: toNumber(inputs.away.baseRating),
@@ -472,9 +545,7 @@ export const createBetPayloadFromGameAnalysis = ({
     profit: 0,
     notes: toText(notes, ''),
     adjustments: createAdjustmentsPayload(inputs),
-    kellyRecommendation: normalizeKellyRecommendationSnapshot(
-      kellyRecommendation,
-    ),
+    kellyRecommendation: normalizedKellyRecommendation,
   }
 }
 
@@ -652,6 +723,14 @@ export const createBetPayloadFromSavedAnalysis = (analysis) => {
       awayRestFatigue: normalized.adjustments.away.restFatigue,
       homeQuickRematch: normalized.adjustments.home.quickRematchAdjustment,
       awayQuickRematch: normalized.adjustments.away.quickRematchAdjustment,
+      homeSpecialTeamsAdjustment:
+        normalized.adjustments.home.specialTeamsAdjustment,
+      awaySpecialTeamsAdjustment:
+        normalized.adjustments.away.specialTeamsAdjustment,
+      homeSpecialTeamsSnapshot:
+        normalized.adjustments.home.specialTeamsContext,
+      awaySpecialTeamsSnapshot:
+        normalized.adjustments.away.specialTeamsContext,
       homeMotivation: normalized.adjustments.home.motivation,
       awayMotivation: normalized.adjustments.away.motivation,
       homeManualAdjustment: normalized.adjustments.home.manualAdjustment,
@@ -675,6 +754,7 @@ export const getBetSignature = (bet) =>
     probabilityEdge: roundForSignature(bet.probabilityEdge),
     expectedValue: roundForSignature(bet.expectedValue),
     modelStatus: bet.modelStatus ?? '',
+    recommendationState: bet.recommendationState ?? '',
     recommendation: bet.recommendation ?? '',
     adjustments: bet.adjustments ?? {},
   })
@@ -719,6 +799,9 @@ export const normalizeBet = (bet = {}) => {
     expectedValue,
     modelStatus: bet.modelStatus,
   })
+  const recommendationState = normalizeAnalyzerRecommendationState(
+    bet.recommendationState ?? bet.kellyRecommendation?.recommendationState,
+  )
   const selectedStoredInjuryImpact =
     toNullableNumber(bet.storedInjuryImpact) ??
     toNullableNumber(
@@ -795,6 +878,7 @@ export const normalizeBet = (bet = {}) => {
     probabilityEdge: toNullableNumber(bet.probabilityEdge),
     expectedValue,
     modelStatus,
+    recommendationState,
     oddsValuePercentage:
       toNullableNumber(bet.oddsValuePercentage) ??
       (expectedValue === null ? null : expectedValue / 100),
@@ -821,6 +905,20 @@ export const normalizeBet = (bet = {}) => {
       toNullableNumber(
         bet.adjustments?.[`${selectedAdjustmentPrefix}QuickRematch`],
       ),
+    specialTeamsAdjustment:
+      toNullableNumber(bet.specialTeamsAdjustment) ??
+      toNullableNumber(
+        bet.adjustments?.[
+          `${selectedAdjustmentPrefix}SpecialTeamsAdjustment`
+        ],
+      ) ??
+      0,
+    specialTeamsSnapshot: normalizeSpecialTeamsSnapshot(
+      bet.specialTeamsSnapshot ??
+        bet.adjustments?.[
+          `${selectedAdjustmentPrefix}SpecialTeamsSnapshot`
+        ],
+    ),
     motivationAdjustment:
       toNullableNumber(bet.motivationAdjustment) ??
       toNullableNumber(bet.adjustments?.[`${selectedAdjustmentPrefix}Motivation`]),
@@ -895,6 +993,18 @@ export const normalizeBet = (bet = {}) => {
       ),
       homeQuickRematch: toNumber(bet.adjustments?.homeQuickRematch),
       awayQuickRematch: toNumber(bet.adjustments?.awayQuickRematch),
+      homeSpecialTeamsAdjustment: toNumber(
+        bet.adjustments?.homeSpecialTeamsAdjustment,
+      ),
+      awaySpecialTeamsAdjustment: toNumber(
+        bet.adjustments?.awaySpecialTeamsAdjustment,
+      ),
+      homeSpecialTeamsSnapshot: normalizeSpecialTeamsSnapshot(
+        bet.adjustments?.homeSpecialTeamsSnapshot,
+      ),
+      awaySpecialTeamsSnapshot: normalizeSpecialTeamsSnapshot(
+        bet.adjustments?.awaySpecialTeamsSnapshot,
+      ),
       homeMotivation: toNumber(bet.adjustments?.homeMotivation),
       awayMotivation: toNumber(bet.adjustments?.awayMotivation),
       homeManualAdjustment: toNumber(bet.adjustments?.homeManualAdjustment),

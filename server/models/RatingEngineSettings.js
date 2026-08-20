@@ -4,6 +4,8 @@ const {
   MAXIMUM_GOALIE_PENALTY_LIMITS,
   MAXIMUM_PLAYER_INJURY_PENALTY_LIMITS,
   PRODUCTION_PROBABILITY_SCALE_LIMITS,
+  SPECIAL_TEAMS_ADJUSTMENT_LIMITS,
+  SPECIAL_TEAMS_MODES,
 } = require('../config/baseModel')
 
 const ratingEngineSettingsSchema = new mongoose.Schema(
@@ -91,6 +93,25 @@ const ratingEngineSettingsSchema = new mongoose.Schema(
       validate: {
         validator: Number.isInteger,
         message: 'specialTeamsRankThreshold must be an integer.',
+      },
+    },
+    specialTeamsMode: {
+      type: String,
+      enum: Object.values(SPECIAL_TEAMS_MODES),
+      required: true,
+      default: DEFAULT_PRODUCTION_RATING_ENGINE_SETTINGS.specialTeamsMode,
+    },
+    specialTeamsAdjustment: {
+      type: Number,
+      required: true,
+      default:
+        DEFAULT_PRODUCTION_RATING_ENGINE_SETTINGS.specialTeamsAdjustment,
+      min: SPECIAL_TEAMS_ADJUSTMENT_LIMITS.min,
+      max: SPECIAL_TEAMS_ADJUSTMENT_LIMITS.max,
+      validate: {
+        validator: (value) =>
+          Number.isInteger(value / SPECIAL_TEAMS_ADJUSTMENT_LIMITS.step),
+        message: 'specialTeamsAdjustment must use 0.25-point increments.',
       },
     },
   },

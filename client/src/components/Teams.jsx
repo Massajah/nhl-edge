@@ -18,6 +18,7 @@ import {
 } from '../utils/goalies.js'
 import { DEFAULT_MAXIMUM_GOALIE_PENALTY } from '../config/baseModel.js'
 import { getEffectiveBaseRating } from '../utils/powerRatings.js'
+import { filterTeams } from '../utils/teamDirectory.js'
 
 const rosterGroups = [
   { key: 'forwards', label: 'Forwards' },
@@ -293,30 +294,15 @@ function Teams({
     return getUniqueValues(conferenceTeams, 'division')
   }, [conferenceFilter, teams])
 
-  const visibleTeams = useMemo(() => {
-    const normalizedSearch = searchTerm.trim().toLowerCase()
-
-    return teams.filter((team) => {
-      if (
-        conferenceFilter !== 'all' &&
-        team.conference !== conferenceFilter
-      ) {
-        return false
-      }
-
-      if (divisionFilter !== 'all' && team.division !== divisionFilter) {
-        return false
-      }
-
-      if (!normalizedSearch) {
-        return true
-      }
-
-      return [team.name, team.abbreviation, team.conference, team.division].some(
-        (value = '') => value.toLowerCase().includes(normalizedSearch),
-      )
-    })
-  }, [conferenceFilter, divisionFilter, searchTerm, teams])
+  const visibleTeams = useMemo(
+    () =>
+      filterTeams(teams, {
+        conferenceFilter,
+        divisionFilter,
+        searchTerm,
+      }),
+    [conferenceFilter, divisionFilter, searchTerm, teams],
+  )
 
   const loadRoster = useCallback(async (team, { force = false } = {}) => {
     const teamKey = team?.abbreviation
@@ -646,7 +632,10 @@ function Teams({
           </div>
 
           <div className="teams-toolbar">
-            <label className="field" htmlFor="team-directory-search">
+            <label
+              className="field teams-search-field"
+              htmlFor="team-directory-search"
+            >
               <span>Search teams</span>
               <input
                 id="team-directory-search"
@@ -760,6 +749,11 @@ function TeamDetails({
   const injurySummary = getTeamInjurySummary(injurySummaries, team.abbreviation)
   const logo = getTeamLogo(team)
   const [expandedGoalieId, setExpandedGoalieId] = useState(null)
+  const [expandedRosterSections, setExpandedRosterSections] = useState({
+    defensemen: false,
+    forwards: false,
+    goalies: true,
+  })
   const [goalieAdjustments, setGoalieAdjustments] = useState([])
   const [goalieAdjustmentStatus, setGoalieAdjustmentStatus] =
     useState('loading')
@@ -900,6 +894,10 @@ function TeamDetails({
 
   const handleManageGoalies = useCallback(async () => {
     await onLoadRoster(team)
+    setExpandedRosterSections((currentSections) => ({
+      ...currentSections,
+      goalies: true,
+    }))
     window.setTimeout(() => {
       const goalieSection = document.getElementById('team-goalies-section')
 
@@ -908,7 +906,7 @@ function TeamDetails({
         ?.querySelector('.goalie-adjustment-edit-button')
         ?.focus()
     }, 0)
-  }, [onLoadRoster, team])
+  }, [onLoadRoster, setExpandedRosterSections, team])
 
   return (
     <div className="team-details-panel">
@@ -1001,6 +999,7 @@ function TeamDetails({
             {rosterGroups.map((group) => (
               <RosterSection
                 key={group.key}
+                isExpanded={expandedRosterSections[group.key]}
                 groupKey={group.key}
                 label={group.label}
                 players={
@@ -1023,6 +1022,12 @@ function TeamDetails({
                 onLoadGoalieStats={onLoadGoalieStats}
                 onDeleteGoalieAdjustment={handleDeleteGoalieAdjustment}
                 onSaveGoalieAdjustment={handleSaveGoalieAdjustment}
+                onToggleSection={() =>
+                  setExpandedRosterSections((currentSections) => ({
+                    ...currentSections,
+                    [group.key]: !currentSections[group.key],
+                  }))
+                }
                 onToggleGoalie={handleToggleGoalie}
               />
             ))}
@@ -1111,7 +1116,7 @@ function TeamCard({ onSelect, team }) {
   )
 }
 
-function RosterSection({
+export function RosterSection({
   expandedGoalieId,
   goalieAdjustmentError,
   goalieAdjustmentStatus,
@@ -1121,16 +1126,19 @@ function RosterSection({
   goalieSummaryError,
   goalieSummaryStatus,
   groupKey,
+  isExpanded,
   label,
   maximumGoaliePenalty,
   onDeleteGoalieAdjustment,
   onLoadGoalieStats,
   onSaveGoalieAdjustment,
+  onToggleSection,
   onToggleGoalie,
   players,
   sectionRef,
 }) {
   const isGoalieSection = groupKey === 'goalies'
+  const contentId = `team-${groupKey}-roster`
 
   return (
     <section
@@ -1139,44 +1147,64 @@ function RosterSection({
       id={isGoalieSection ? 'team-goalies-section' : undefined}
       ref={sectionRef}
     >
-      <div className="roster-section-header">
-        <h3>{label}</h3>
-        <span>{players.length}</span>
-      </div>
+      <header className="roster-section-header">
+        <h3>
+          <button
+            aria-controls={contentId}
+            aria-expanded={isExpanded}
+            className="roster-section-toggle"
+            type="button"
+            onClick={onToggleSection}
+          >
+            <span className="roster-section-label">{label}</span>
+            <span className="roster-section-count">{players.length}</span>
+            <ChevronDown
+              aria-hidden="true"
+              className="roster-section-chevron"
+            />
+          </button>
+        </h3>
+      </header>
 
-      {players.length > 0 ? (
-        <div className="player-list">
-          {players.map((player) =>
-            isGoalieSection ? (
-              <GoalieRow
-                key={player.id ?? player.fullName}
-                errorMessage={
-                  goalieStatsErrorByPlayerId?.[String(player.id)] ?? ''
-                }
-                isExpanded={expandedGoalieId === String(player.id)}
-                adjustmentErrorMessage={goalieAdjustmentError}
-                adjustmentStatus={goalieAdjustmentStatus}
-                maximumGoaliePenalty={maximumGoaliePenalty}
-                onDeleteAdjustment={onDeleteGoalieAdjustment}
-                onLoadGoalieStats={onLoadGoalieStats}
-                onSaveAdjustment={onSaveGoalieAdjustment}
-                onToggle={onToggleGoalie}
-                player={player}
-                stats={goalieStatsByPlayerId?.[String(player.id)]}
-                summaryErrorMessage={goalieSummaryError}
-                summaryStatus={goalieSummaryStatus}
-                status={
-                  goalieStatsStatusByPlayerId?.[String(player.id)] ?? 'idle'
-                }
-              />
-            ) : (
-              <PlayerRow key={player.id ?? player.fullName} player={player} />
-            ),
-          )}
-        </div>
-      ) : (
-        <p className="empty-state">No {label.toLowerCase()} listed.</p>
-      )}
+      <div
+        className="roster-section-content"
+        hidden={!isExpanded}
+        id={contentId}
+      >
+        {players.length > 0 ? (
+          <div className="player-list">
+            {players.map((player) =>
+              isGoalieSection ? (
+                <GoalieRow
+                  key={player.id ?? player.fullName}
+                  errorMessage={
+                    goalieStatsErrorByPlayerId?.[String(player.id)] ?? ''
+                  }
+                  isExpanded={expandedGoalieId === String(player.id)}
+                  adjustmentErrorMessage={goalieAdjustmentError}
+                  adjustmentStatus={goalieAdjustmentStatus}
+                  maximumGoaliePenalty={maximumGoaliePenalty}
+                  onDeleteAdjustment={onDeleteGoalieAdjustment}
+                  onLoadGoalieStats={onLoadGoalieStats}
+                  onSaveAdjustment={onSaveGoalieAdjustment}
+                  onToggle={onToggleGoalie}
+                  player={player}
+                  stats={goalieStatsByPlayerId?.[String(player.id)]}
+                  summaryErrorMessage={goalieSummaryError}
+                  summaryStatus={goalieSummaryStatus}
+                  status={
+                    goalieStatsStatusByPlayerId?.[String(player.id)] ?? 'idle'
+                  }
+                />
+              ) : (
+                <PlayerRow key={player.id ?? player.fullName} player={player} />
+              ),
+            )}
+          </div>
+        ) : (
+          <p className="empty-state">No {label.toLowerCase()} listed.</p>
+        )}
+      </div>
     </section>
   )
 }

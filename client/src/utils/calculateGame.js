@@ -8,7 +8,9 @@ export const toNumber = (value) => {
 export const MINIMUM_POSITIVE_EV = 3
 
 export const MODEL_STATUSES = {
+  BET_CANDIDATE: 'Bet Candidate',
   POSITIVE_VALUE: 'Positive Value',
+  POSITIVE_VALUE_BELOW_THRESHOLD: 'Positive Value · Below Threshold',
   BELOW_THRESHOLD: 'Below Threshold',
   NO_VALUE: 'No Value',
   LEGACY: 'Legacy bet',
@@ -113,6 +115,21 @@ export const normalizeModelStatus = (status) => {
     return MODEL_STATUSES.POSITIVE_VALUE
   }
 
+  if (
+    normalizedStatus === 'positive value · below threshold' ||
+    normalizedStatus === 'positive value below threshold' ||
+    normalizedStatus === 'positive_value_below_threshold'
+  ) {
+    return MODEL_STATUSES.POSITIVE_VALUE_BELOW_THRESHOLD
+  }
+
+  if (
+    normalizedStatus === 'bet candidate' ||
+    normalizedStatus === 'bet_candidate'
+  ) {
+    return MODEL_STATUSES.BET_CANDIDATE
+  }
+
   if (normalizedStatus === 'below threshold') {
     return MODEL_STATUSES.BELOW_THRESHOLD
   }
@@ -188,6 +205,7 @@ export function calculateGame(
     toNumber(home.goalieAdjustment) +
     toNumber(home.restFatigue ?? home.recentForm) +
     toNumber(home.quickRematchAdjustment) +
+    toNumber(home.specialTeamsAdjustment) +
     toNumber(home.motivation) +
     toNumber(home.manualAdjustment)
 
@@ -197,6 +215,7 @@ export function calculateGame(
     toNumber(away.goalieAdjustment) +
     toNumber(away.restFatigue ?? away.recentForm) +
     toNumber(away.quickRematchAdjustment) +
+    toNumber(away.specialTeamsAdjustment) +
     toNumber(away.motivation) +
     toNumber(away.manualAdjustment)
 

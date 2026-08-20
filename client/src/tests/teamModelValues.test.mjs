@@ -7,6 +7,8 @@ import { createServer } from 'vite'
 
 let calculateGame
 let components
+let teamDirectory
+let teamsComponents
 let teamsApi
 let utils
 let vite
@@ -69,6 +71,8 @@ before(async () => {
     server: { middlewareMode: true },
   })
   components = await vite.ssrLoadModule('/src/components/TeamModelValues.jsx')
+  teamDirectory = await vite.ssrLoadModule('/src/utils/teamDirectory.js')
+  teamsComponents = await vite.ssrLoadModule('/src/components/Teams.jsx')
   teamsApi = await vite.ssrLoadModule('/src/services/teamsApi.js')
   utils = await vite.ssrLoadModule('/src/utils/teamModelValues.js')
   calculateGame = (
@@ -80,7 +84,7 @@ after(async () => {
   await vite?.close()
 })
 
-test('Model Values card is placed after Special Teams and before provider rosters', async () => {
+test('Lineup & Notes card is placed after Special Teams and before provider rosters', async () => {
   const source = await readFile(
     new URL('../components/Teams.jsx', import.meta.url),
     'utf8',
@@ -112,8 +116,12 @@ test('read-only summary has one shared action and renders all saved values', () 
     }),
   )
 
-  assert.match(markup, /User-maintained Model Values/i)
-  assert.match(markup, /Optional personal lineup notes\. Does not affect model calculations\./)
+  assert.match(markup, /User-maintained Lineup &amp; Notes/i)
+  assert.match(markup, />Lineup &amp; Notes</)
+  assert.match(
+    markup,
+    /Personal lineup and team notes for analysis context\. These do not automatically change model calculations\./,
+  )
   assert.match(markup, /3 configured/)
   assert.match(markup, /Goalie One/)
   assert.match(markup, /-1\.25/)
@@ -129,7 +137,8 @@ test('read-only summary has one shared action and renders all saved values', () 
   assert.match(markup, /Team Notes/)
   assert.match(markup, /Top six likely to change/)
   assert.equal((markup.match(/<button/g) ?? []).length, 1)
-  assert.equal((markup.match(/Manage Model Values/g) ?? []).length, 1)
+  assert.equal((markup.match(/Manage Lineup/g) ?? []).length, 1)
+  assert.doesNotMatch(markup, />Model Values</)
   assert.doesNotMatch(markup, /Edit Lines|Edit Notes|>Manage<\/button>/)
   assert.match(markup, /model-values-lineup-grid/)
   assert.match(markup, /model-values-forward-column/)
@@ -160,7 +169,8 @@ test('empty summary reports optional lineup sections as not configured', () => {
   )
 
   assert.equal((markup.match(/Not configured/g) ?? []).length, 7)
-  assert.match(markup, /Team Notes<\/strong><p[^>]*>No notes/)
+  assert.match(markup, /Team Notes<\/strong><p[^>]*>No team notes\./)
+  assert.match(markup, /model-values-notes-panel/)
   assert.match(markup, /0 configured/)
 })
 
@@ -290,15 +300,19 @@ test('shared editor renders four forward lines, three defense pairs, provider se
   assert.doesNotMatch(markup, /Goalie Must Not Appear/)
   assert.match(markup, /aria-modal="true"/)
   assert.match(markup, /aria-labelledby="lineup-editor-title"/)
-  assert.match(markup, /Manage Model Values - Boston Bruins/)
+  assert.match(markup, /Manage Lineup &amp; Notes — Boston Bruins/)
   assert.match(markup, /maxLength="1500"/)
-  assert.match(markup, /Save Lines/)
+  assert.match(markup, /Save Lineup/)
   assert.match(markup, /Clear Lineup/)
   assert.match(markup, /forward-line-grid/)
   assert.match(markup, /defense-pair-grid/)
   assert.match(markup, /Goalie Adjustments/)
   assert.match(markup, /Configured Goalie/)
   assert.match(markup, /Manage Goalie Adjustments/)
+  assert.match(
+    markup,
+    /class="save-ratings-button" type="submit">Save Lineup<\/button>/,
+  )
   assert.ok(markup.indexOf('Forward Lines') < markup.indexOf('Defense Pairs'))
   assert.ok(markup.indexOf('Defense Pairs') < markup.indexOf('Team Notes'))
   assert.ok(markup.indexOf('Team Notes') < markup.indexOf('Goalie Adjustments'))
@@ -334,6 +348,144 @@ test('duplicates warn without blocking and missing saved players remain visible'
   assert.match(markup, /aria-invalid="true"/)
   assert.match(markup, /Unavailable player · ID 999999/)
   assert.doesNotMatch(markup, /disabled="" type="submit"/)
+})
+
+test('saving state disables Save Lineup without changing save eligibility rules', () => {
+  const markup = renderToStaticMarkup(
+    React.createElement(components.LineupEditorModal, {
+      actionStatus: 'saving',
+      initialValues: utils.normalizeTeamModelValues({}, 'BOS'),
+      onCancel() {},
+      onClear() {},
+      onSave() {},
+      roster,
+      teamName: 'Boston Bruins',
+    }),
+  )
+
+  assert.match(
+    markup,
+    /class="save-ratings-button" disabled="" type="submit">Saving\.\.\.<\/button>/,
+  )
+})
+
+test('Teams directory keeps all teams with desktop-hidden, mobile-visible search', async () => {
+  const markup = renderToStaticMarkup(
+    React.createElement(teamsComponents.default, {
+      injurySummaries: {},
+      injurySummaryStatus: 'success',
+      powerRatings: {},
+      powerRatingsStatus: 'success',
+    }),
+  )
+  const css = await readFile(new URL('../../src/App.css', import.meta.url), 'utf8')
+  const mobileRules = css.slice(css.indexOf('@media (max-width: 680px)'))
+
+  assert.equal((markup.match(/class="team-card"/g) ?? []).length, 32)
+  assert.match(markup, /Search teams/)
+  assert.match(markup, /Conference/)
+  assert.match(markup, /Division/)
+  assert.match(markup, />Refresh<\/button>/)
+  assert.match(
+    css,
+    /\.teams-toolbar\s*\{[^}]*grid-template-columns:\s*repeat\(2, minmax\(180px, 220px\)\) auto[^}]*justify-content:\s*start/s,
+  )
+  assert.match(css, /\.teams-search-field\s*\{[^}]*display:\s*none/s)
+  assert.match(
+    mobileRules,
+    /\.teams-toolbar\s*\{[^}]*grid-template-columns:\s*1fr/s,
+  )
+  assert.match(
+    mobileRules,
+    /\.teams-search-field\s*\{[^}]*display:\s*grid/s,
+  )
+})
+
+test('mobile search and directory filters share the existing matching pipeline', () => {
+  const teams = [
+    {
+      abbreviation: 'ANA',
+      conference: 'Western',
+      division: 'Pacific',
+      name: 'Anaheim Ducks',
+    },
+    {
+      abbreviation: 'BOS',
+      conference: 'Eastern',
+      division: 'Atlantic',
+      name: 'Boston Bruins',
+    },
+    {
+      abbreviation: 'NYR',
+      conference: 'Eastern',
+      division: 'Metropolitan',
+      name: 'New York Rangers',
+    },
+  ]
+
+  assert.deepEqual(
+    teamDirectory.filterTeams(teams, { searchTerm: 'bos' }).map(
+      (team) => team.abbreviation,
+    ),
+    ['BOS'],
+  )
+  assert.deepEqual(
+    teamDirectory.filterTeams(teams, { searchTerm: 'eastern' }).map(
+      (team) => team.abbreviation,
+    ),
+    ['BOS', 'NYR'],
+  )
+  assert.deepEqual(
+    teamDirectory.filterTeams(teams, {
+      conferenceFilter: 'Eastern',
+      divisionFilter: 'Metropolitan',
+    }).map((team) => team.abbreviation),
+    ['NYR'],
+  )
+})
+
+test('roster sections expose counts and preserve mounted content while collapsed', async () => {
+  const player = {
+    fullName: 'Forward One',
+    id: 101,
+    position: 'C',
+    sweaterNumber: '12',
+  }
+  const collapsedMarkup = renderToStaticMarkup(
+    React.createElement(teamsComponents.RosterSection, {
+      groupKey: 'forwards',
+      isExpanded: false,
+      label: 'Forwards',
+      onToggleSection() {},
+      players: [player],
+    }),
+  )
+  const expandedMarkup = renderToStaticMarkup(
+    React.createElement(teamsComponents.RosterSection, {
+      groupKey: 'forwards',
+      isExpanded: true,
+      label: 'Forwards',
+      onToggleSection() {},
+      players: [player],
+    }),
+  )
+  const source = await readFile(
+    new URL('../components/Teams.jsx', import.meta.url),
+    'utf8',
+  )
+
+  assert.match(collapsedMarkup, /aria-expanded="false"/)
+  assert.match(collapsedMarkup, /aria-controls="team-forwards-roster"/)
+  assert.match(collapsedMarkup, /roster-section-count">1</)
+  assert.match(collapsedMarkup, /hidden="" id="team-forwards-roster"/)
+  assert.match(collapsedMarkup, /Forward One/)
+  assert.match(expandedMarkup, /aria-expanded="true"/)
+  assert.doesNotMatch(expandedMarkup, /hidden=""/)
+  assert.match(
+    source,
+    /defensemen:\s*false,\s*forwards:\s*false,\s*goalies:\s*true/s,
+  )
+  assert.match(source, /setExpandedRosterSections[\s\S]*goalies:\s*true/)
 })
 
 test('lineup utilities preserve incomplete rows and identify duplicate IDs', () => {
@@ -431,4 +583,12 @@ test('lineup summary uses a responsive two-column grid without horizontal overfl
   assert.match(mobileRules, /\.defense-pair-grid/)
   assert.match(mobileRules, /grid-template-columns: 1fr/)
   assert.match(mobileRules, /\.lineup-modal-backdrop/)
+  assert.match(
+    css,
+    /\.lineup-modal-actions \.save-ratings-button:not\(:disabled\):hover\s*\{[^}]*background:\s*#38e3c6/s,
+  )
+  assert.match(
+    css,
+    /\.lineup-modal-actions \.save-ratings-button:disabled\s*\{[^}]*color:\s*var\(--text-muted\)/s,
+  )
 })

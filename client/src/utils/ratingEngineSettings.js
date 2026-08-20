@@ -7,8 +7,12 @@ import {
   PRODUCTION_PROBABILITY_SCALE_LIMITS,
 } from '../config/baseModel.js'
 import {
-  DEFAULT_SPECIAL_TEAMS_ALERT_SETTINGS,
+  DEFAULT_SPECIAL_TEAMS_SETTINGS,
+  SPECIAL_TEAMS_ADJUSTMENT_LIMITS,
+  SPECIAL_TEAMS_MODES,
   SPECIAL_TEAMS_RANK_THRESHOLD_LIMITS,
+  normalizeSpecialTeamsAdjustment,
+  normalizeSpecialTeamsMode,
 } from './specialTeamsMatchups.js'
 
 export const DEFAULT_RATING_ENGINE_SETTINGS = Object.freeze({
@@ -20,8 +24,27 @@ export const DEFAULT_RATING_ENGINE_SETTINGS = Object.freeze({
   regulationMultiplier: BASE_MODEL_V1.regulationMultiplier,
   overtimeMultiplier: BASE_MODEL_V1.overtimeMultiplier,
   shootoutMultiplier: BASE_MODEL_V1.shootoutMultiplier,
-  ...DEFAULT_SPECIAL_TEAMS_ALERT_SETTINGS,
+  ...DEFAULT_SPECIAL_TEAMS_SETTINGS,
 })
+
+export const SPECIAL_TEAMS_MODE_OPTIONS = Object.freeze([
+  Object.freeze({ label: 'Off', value: SPECIAL_TEAMS_MODES.OFF }),
+  Object.freeze({
+    label: 'Alert only',
+    value: SPECIAL_TEAMS_MODES.ALERT_ONLY,
+  }),
+  Object.freeze({
+    label: 'Automatic adjustment',
+    value: SPECIAL_TEAMS_MODES.AUTOMATIC,
+  }),
+])
+
+export const SPECIAL_TEAMS_ADJUSTMENT_OPTIONS = Object.freeze([
+  0.25,
+  0.5,
+  0.75,
+  1,
+])
 
 export const RATING_ENGINE_SETTING_FIELDS = Object.freeze([
   {
@@ -110,10 +133,15 @@ export const createRatingEngineSettingsDraft = (
     return nextDraft
   }, {})
 
+  draft.specialTeamsMode = normalizeSpecialTeamsMode(
+    settings.specialTeamsMode,
+    settings.specialTeamsAlertsEnabled,
+  )
   draft.specialTeamsAlertsEnabled =
-    typeof settings.specialTeamsAlertsEnabled === 'boolean'
-      ? settings.specialTeamsAlertsEnabled
-      : DEFAULT_RATING_ENGINE_SETTINGS.specialTeamsAlertsEnabled
+    draft.specialTeamsMode !== SPECIAL_TEAMS_MODES.OFF
+  draft.specialTeamsAdjustment = String(
+    normalizeSpecialTeamsAdjustment(settings.specialTeamsAdjustment),
+  )
   draft.specialTeamsRankThreshold = String(
     settings.specialTeamsRankThreshold ??
       DEFAULT_RATING_ENGINE_SETTINGS.specialTeamsRankThreshold,
@@ -144,10 +172,14 @@ export const normalizeRatingEngineSettings = (
   )
   const threshold = Number(settings.specialTeamsRankThreshold)
 
+  normalizedSettings.specialTeamsMode = normalizeSpecialTeamsMode(
+    settings.specialTeamsMode,
+    settings.specialTeamsAlertsEnabled,
+  )
   normalizedSettings.specialTeamsAlertsEnabled =
-    typeof settings.specialTeamsAlertsEnabled === 'boolean'
-      ? settings.specialTeamsAlertsEnabled
-      : DEFAULT_RATING_ENGINE_SETTINGS.specialTeamsAlertsEnabled
+    normalizedSettings.specialTeamsMode !== SPECIAL_TEAMS_MODES.OFF
+  normalizedSettings.specialTeamsAdjustment =
+    normalizeSpecialTeamsAdjustment(settings.specialTeamsAdjustment)
   normalizedSettings.specialTeamsRankThreshold =
     Number.isInteger(threshold) &&
     threshold >= SPECIAL_TEAMS_RANK_THRESHOLD_LIMITS.min &&
@@ -198,11 +230,37 @@ export const parseRatingEngineSettingsDraft = (draft = {}) => {
     settings[field.key] = value
   })
 
-  if (typeof draft.specialTeamsAlertsEnabled !== 'boolean') {
-    fieldErrors.specialTeamsAlertsEnabled =
-      'Enable Special Teams Matchup Alerts must be selected.'
+  const specialTeamsMode = String(draft.specialTeamsMode ?? '').trim()
+
+  if (!Object.values(SPECIAL_TEAMS_MODES).includes(specialTeamsMode)) {
+    fieldErrors.specialTeamsMode = 'Select a Special Teams Matchup mode.'
   } else {
-    settings.specialTeamsAlertsEnabled = draft.specialTeamsAlertsEnabled
+    settings.specialTeamsMode = specialTeamsMode
+    settings.specialTeamsAlertsEnabled =
+      specialTeamsMode !== SPECIAL_TEAMS_MODES.OFF
+  }
+
+  const specialTeamsAdjustmentRaw = draft.specialTeamsAdjustment
+  const specialTeamsAdjustment = Number(specialTeamsAdjustmentRaw)
+
+  if (
+    specialTeamsAdjustmentRaw === null ||
+    String(specialTeamsAdjustmentRaw ?? '').trim() === ''
+  ) {
+    fieldErrors.specialTeamsAdjustment =
+      'Special Teams Adjustment is required.'
+  } else if (
+    !Number.isFinite(specialTeamsAdjustment) ||
+    specialTeamsAdjustment < SPECIAL_TEAMS_ADJUSTMENT_LIMITS.min ||
+    specialTeamsAdjustment > SPECIAL_TEAMS_ADJUSTMENT_LIMITS.max ||
+    !Number.isInteger(
+      specialTeamsAdjustment / SPECIAL_TEAMS_ADJUSTMENT_LIMITS.step,
+    )
+  ) {
+    fieldErrors.specialTeamsAdjustment =
+      'Special Teams Adjustment must be 0.25, 0.50, 0.75, or 1.00.'
+  } else {
+    settings.specialTeamsAdjustment = specialTeamsAdjustment
   }
 
   const thresholdRawValue = draft.specialTeamsRankThreshold
@@ -244,15 +302,18 @@ export const getRatingEngineDirtyOwnership = (
       parsed.fieldErrors.homeAdvantage ||
         parsed.fieldErrors.maximumGoaliePenalty ||
         parsed.fieldErrors.maximumPlayerInjuryPenalty ||
-        parsed.fieldErrors.specialTeamsAlertsEnabled ||
+        parsed.fieldErrors.specialTeamsAdjustment ||
+        parsed.fieldErrors.specialTeamsMode ||
         parsed.fieldErrors.specialTeamsRankThreshold ||
         parsed.settings.homeAdvantage !== normalizedSaved.homeAdvantage ||
         parsed.settings.maximumGoaliePenalty !==
           normalizedSaved.maximumGoaliePenalty ||
         parsed.settings.maximumPlayerInjuryPenalty !==
           normalizedSaved.maximumPlayerInjuryPenalty ||
-        parsed.settings.specialTeamsAlertsEnabled !==
-          normalizedSaved.specialTeamsAlertsEnabled ||
+        parsed.settings.specialTeamsAdjustment !==
+          normalizedSaved.specialTeamsAdjustment ||
+        parsed.settings.specialTeamsMode !==
+          normalizedSaved.specialTeamsMode ||
         parsed.settings.specialTeamsRankThreshold !==
           normalizedSaved.specialTeamsRankThreshold,
     ),

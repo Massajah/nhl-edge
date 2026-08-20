@@ -66,7 +66,9 @@ import { AUTOMATIC_POWER_RATING_UPDATE_STATUSES } from '../utils/powerRatingUpda
 import { teamsDataCoordinator } from '../services/teamsDataCoordinator.js'
 import {
   SPECIAL_TEAMS_MATCHUP_STATUSES,
-  getSpecialTeamsMatchupForTeams,
+  SPECIAL_TEAMS_MODES,
+  getSpecialTeamsContextForTeams,
+  normalizeSpecialTeamsMode,
 } from '../utils/specialTeamsMatchups.js'
 import MarketOddsDetails from './MarketOddsDetails.jsx'
 
@@ -263,10 +265,16 @@ function Dashboard({
   powerRatingsStatus,
   ratingEngineSettingsError,
   ratingEngineSettingsStatus,
+  specialTeamsAdjustment = 0.5,
   specialTeamsAlertsEnabled = true,
+  specialTeamsMode,
   specialTeamsRankThreshold = 6,
   todayDateValue = toLocalDateValue(new Date()),
 }) {
+  const resolvedSpecialTeamsMode = normalizeSpecialTeamsMode(
+    specialTeamsMode,
+    specialTeamsAlertsEnabled,
+  )
   const [selectedDate, setSelectedDate] = useState(initialSchedule?.date ?? '')
   const [schedule, setSchedule] = useState({
     date: initialSchedule?.date ?? '',
@@ -688,7 +696,7 @@ function Dashboard({
   useEffect(() => {
     let isCurrent = true
 
-    if (!specialTeamsAlertsEnabled) {
+    if (resolvedSpecialTeamsMode === SPECIAL_TEAMS_MODES.OFF) {
       return () => {
         isCurrent = false
       }
@@ -727,7 +735,7 @@ function Dashboard({
     return () => {
       isCurrent = false
     }
-  }, [specialTeamsAlertsEnabled])
+  }, [resolvedSpecialTeamsMode])
 
   useEffect(() => {
     if (status !== 'success' || !schedule.date) {
@@ -791,6 +799,15 @@ function Dashboard({
           manualOddsByGame: marketOddsByGame,
           providerOddsByGame,
         })
+        const specialTeamsContext = getSpecialTeamsContextForTeams({
+          adjustment: specialTeamsAdjustment,
+          awayTeam: game.awayTeam.abbreviation,
+          homeTeam: game.homeTeam.abbreviation,
+          mode: resolvedSpecialTeamsMode,
+          specialTeams:
+            specialTeamsStatus === 'success' ? specialTeams : null,
+          threshold: specialTeamsRankThreshold,
+        })
         const preliminaryAnalysis =
           !isGameStarted(game) && canUseModel
             ? calculatePreliminaryAnalysis({
@@ -802,6 +819,7 @@ function Dashboard({
                 marketOdds: normalizedMarketOdds,
                 powerRatings,
                 probabilityScale,
+                specialTeamsContext,
               })
             : null
         const savedBets = betsByGameId[String(game.gameId)] ?? []
@@ -813,6 +831,7 @@ function Dashboard({
           game,
           homeTeam: game.homeTeam,
           savedBets,
+          specialTeamsContext,
         })
         const canAnalyzeGame =
           canUseModel &&
@@ -826,6 +845,7 @@ function Dashboard({
           marketOdds: normalizedMarketOdds,
           preliminaryAnalysis,
           savedBets,
+          specialTeamsContext,
         }
       }),
     [
@@ -841,6 +861,11 @@ function Dashboard({
       probabilityScale,
       providerOddsByGame,
       schedule.games,
+      specialTeams,
+      specialTeamsAdjustment,
+      resolvedSpecialTeamsMode,
+      specialTeamsRankThreshold,
+      specialTeamsStatus,
     ],
   )
   const todayActivitySummary = useMemo(
@@ -1094,10 +1119,6 @@ function Dashboard({
                     injurySummaries={injurySummaries}
                     injurySummaryStatus={injurySummaryStatus}
                     scheduleDate={displayDate}
-                    specialTeams={specialTeams}
-                    specialTeamsAlertsEnabled={specialTeamsAlertsEnabled}
-                    specialTeamsRankThreshold={specialTeamsRankThreshold}
-                    specialTeamsStatus={specialTeamsStatus}
                   />
                 ))}
               </div>
@@ -1543,10 +1564,6 @@ function GameCard({
   onMarketOddsChange,
   onViewBets,
   scheduleDate,
-  specialTeams,
-  specialTeamsAlertsEnabled,
-  specialTeamsRankThreshold,
-  specialTeamsStatus,
 }) {
   const {
     canAnalyze,
@@ -1556,6 +1573,7 @@ function GameCard({
     marketOdds,
     preliminaryAnalysis,
     savedBets,
+    specialTeamsContext,
   } = dashboardGame
   const statusPresentation = dashboardStatus?.statusPresentation ?? {
     label: '',
@@ -1646,11 +1664,8 @@ function GameCard({
       />
 
       <SpecialTeamsAlertSummary
-        enabled={specialTeamsAlertsEnabled}
         game={game}
-        specialTeams={specialTeams}
-        status={specialTeamsStatus}
-        threshold={specialTeamsRankThreshold}
+        specialTeamsContext={specialTeamsContext}
       />
 
       {!isCompletedGame ? <GameMarketOdds marketOdds={marketOdds} /> : null}
@@ -1676,7 +1691,14 @@ function GameCard({
           className={`analyze-game-button ${isCompletedGame ? 'historical' : ''}`}
           type="button"
           disabled={!canAnalyze}
-          onClick={() => onAnalyzeGame(game, marketOdds, gameContext)}
+          onClick={() =>
+            onAnalyzeGame(
+              game,
+              marketOdds,
+              gameContext,
+              specialTeamsContext,
+            )
+          }
         >
           {actionLabel}
         </button>
@@ -1695,30 +1717,24 @@ function GameCard({
 }
 
 function SpecialTeamsAlertSummary({
-  enabled,
   game,
-  specialTeams,
-  status,
-  threshold,
+  specialTeamsContext,
 }) {
-  if (!enabled || status !== 'success' || !specialTeams) {
+  if (
+    !specialTeamsContext ||
+    specialTeamsContext.mode === SPECIAL_TEAMS_MODES.OFF
+  ) {
     return null
   }
 
-  const matchup = getSpecialTeamsMatchupForTeams({
-    awayTeam: game.awayTeam.abbreviation,
-    homeTeam: game.homeTeam.abbreviation,
-    specialTeams,
-    threshold,
-  })
   const signals = [
     {
-      matchup: matchup.away,
+      matchup: specialTeamsContext.away,
       opponent: game.homeTeam,
       team: game.awayTeam,
     },
     {
-      matchup: matchup.home,
+      matchup: specialTeamsContext.home,
       opponent: game.awayTeam,
       team: game.homeTeam,
     },
@@ -1760,6 +1776,13 @@ function SpecialTeamsAlertSummary({
                 ? 'Strong PP vs Weak PK'
                 : 'Weak PP vs Strong PK'}
             </small>
+            {specialTeamsContext.mode === SPECIAL_TEAMS_MODES.AUTOMATIC ? (
+              <em>
+                Automatic adjustment{' '}
+                {teamMatchup.adjustment > 0 ? '+' : ''}
+                {teamMatchup.adjustment.toFixed(2)}
+              </em>
+            ) : null}
           </div>
         )
       })}

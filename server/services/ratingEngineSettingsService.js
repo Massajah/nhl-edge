@@ -9,6 +9,8 @@ const {
   MAXIMUM_GOALIE_PENALTY_LIMITS,
   MAXIMUM_PLAYER_INJURY_PENALTY_LIMITS,
   PRODUCTION_PROBABILITY_SCALE_LIMITS,
+  SPECIAL_TEAMS_ADJUSTMENT_LIMITS,
+  SPECIAL_TEAMS_MODES,
 } = require('../config/baseModel')
 
 const DEFAULT_PRODUCTION_HOME_ADVANTAGE = BASE_MODEL_V1.baseHomeAdvantage
@@ -22,14 +24,18 @@ const RATING_ENGINE_SETTING_FIELDS = Object.freeze([
   'regulationMultiplier',
   'overtimeMultiplier',
   'shootoutMultiplier',
+  'specialTeamsAdjustment',
   'specialTeamsAlertsEnabled',
+  'specialTeamsMode',
   'specialTeamsRankThreshold',
 ])
 const OPTIONAL_LEGACY_SETTING_FIELDS = Object.freeze([
   'probabilityScale',
   'maximumGoaliePenalty',
   'maximumPlayerInjuryPenalty',
+  'specialTeamsAdjustment',
   'specialTeamsAlertsEnabled',
+  'specialTeamsMode',
   'specialTeamsRankThreshold',
 ])
 const RATING_ENGINE_SETTINGS_LIMITS = Object.freeze({
@@ -44,6 +50,11 @@ const RATING_ENGINE_SETTINGS_LIMITS = Object.freeze({
   regulationMultiplier: { max: 2, min: 0 },
   overtimeMultiplier: { max: 2, min: 0 },
   shootoutMultiplier: { max: 2, min: 0 },
+  specialTeamsAdjustment: {
+    increment: SPECIAL_TEAMS_ADJUSTMENT_LIMITS.step,
+    max: SPECIAL_TEAMS_ADJUSTMENT_LIMITS.max,
+    min: SPECIAL_TEAMS_ADJUSTMENT_LIMITS.min,
+  },
   specialTeamsRankThreshold: { integer: true, max: 12, min: 3 },
 })
 const RATING_ENGINE_RESET_SCOPES = Object.freeze({
@@ -62,7 +73,9 @@ const MODEL_ADJUSTMENT_FIELDS = Object.freeze([
   'homeAdvantage',
   'maximumGoaliePenalty',
   'maximumPlayerInjuryPenalty',
+  'specialTeamsAdjustment',
   'specialTeamsAlertsEnabled',
+  'specialTeamsMode',
   'specialTeamsRankThreshold',
 ])
 const DEFAULT_RATING_ENGINE_MODEL_VERSION =
@@ -85,13 +98,38 @@ const buildDefaultSettings = () => ({
   ...DEFAULT_PRODUCTION_RATING_ENGINE_SETTINGS,
 })
 
-const getNormalizedPersistedValue = (settings, field) => {
+const getNormalizedSpecialTeamsMode = (settings = {}) => {
+  const modeWasSchemaDefaulted =
+    typeof settings?.$isDefault === 'function' &&
+    settings.$isDefault('specialTeamsMode')
+  const mode = String(
+    modeWasSchemaDefaulted ? '' : settings.specialTeamsMode ?? '',
+  )
+    .trim()
+    .toLowerCase()
+
+  if (Object.values(SPECIAL_TEAMS_MODES).includes(mode)) {
+    return mode
+  }
+
+  return settings.specialTeamsAlertsEnabled === false
+    ? SPECIAL_TEAMS_MODES.OFF
+    : SPECIAL_TEAMS_MODES.ALERT_ONLY
+}
+
+const getNormalizedPersistedValue = (
+  settings,
+  field,
+  specialTeamsMode = getNormalizedSpecialTeamsMode(settings),
+) => {
   const rawValue = settings?.[field]
 
   if (field === 'specialTeamsAlertsEnabled') {
-    return typeof rawValue === 'boolean'
-      ? rawValue
-      : DEFAULT_PRODUCTION_RATING_ENGINE_SETTINGS[field]
+    return specialTeamsMode !== SPECIAL_TEAMS_MODES.OFF
+  }
+
+  if (field === 'specialTeamsMode') {
+    return specialTeamsMode
   }
 
   const value = Number(rawValue)
@@ -105,20 +143,28 @@ const getNormalizedPersistedValue = (settings, field) => {
     Number.isFinite(value) &&
     (!limits.integer || Number.isInteger(value)) &&
     (!limits.halfPoint || Number.isInteger(value * 2)) &&
+    (!limits.increment || Number.isInteger(value / limits.increment)) &&
     !belowMinimum &&
     value <= limits.max
     ? value
     : DEFAULT_PRODUCTION_RATING_ENGINE_SETTINGS[field]
 }
 
-const serializeRatingEngineSettings = (settings) =>
-  RATING_ENGINE_SETTING_FIELDS.reduce(
+const serializeRatingEngineSettings = (settings) => {
+  const specialTeamsMode = getNormalizedSpecialTeamsMode(settings)
+
+  return RATING_ENGINE_SETTING_FIELDS.reduce(
     (serialized, field) => ({
       ...serialized,
-      [field]: getNormalizedPersistedValue(settings, field),
+      [field]: getNormalizedPersistedValue(
+        settings,
+        field,
+        specialTeamsMode,
+      ),
     }),
     {},
   )
+}
 
 const serializeProductionRatingEngineSettings = (settings) => ({
   modelVersion: DEFAULT_RATING_ENGINE_MODEL_VERSION,
@@ -204,6 +250,18 @@ const normalizeSettingsPayload = (
       return
     }
 
+    if (field === 'specialTeamsMode') {
+      const mode = String(rawValue ?? '').trim().toLowerCase()
+
+      if (!Object.values(SPECIAL_TEAMS_MODES).includes(mode)) {
+        fieldErrors[field] =
+          `${field} must be off, alert_only, or automatic.`
+      } else {
+        normalizedSettings[field] = mode
+      }
+      return
+    }
+
     const value = Number(rawValue)
     const limits = RATING_ENGINE_SETTINGS_LIMITS[field]
     const belowMinimum = limits.minExclusive
@@ -225,6 +283,12 @@ const normalizeSettingsPayload = (
       return
     }
 
+    if (limits.increment && !Number.isInteger(value / limits.increment)) {
+      fieldErrors[field] =
+        `${field} must use ${limits.increment.toFixed(2)}-point increments.`
+      return
+    }
+
     if (belowMinimum || value > limits.max) {
       const minimumLabel = limits.minExclusive
         ? `greater than ${limits.min}`
@@ -237,6 +301,22 @@ const normalizeSettingsPayload = (
 
     normalizedSettings[field] = value
   })
+
+  if (
+    !Object.hasOwn(payload, 'specialTeamsMode') &&
+    Object.hasOwn(payload, 'specialTeamsAlertsEnabled') &&
+    typeof normalizedSettings.specialTeamsAlertsEnabled === 'boolean'
+  ) {
+    normalizedSettings.specialTeamsMode =
+      normalizedSettings.specialTeamsAlertsEnabled
+        ? SPECIAL_TEAMS_MODES.ALERT_ONLY
+        : SPECIAL_TEAMS_MODES.OFF
+  }
+
+  if (normalizedSettings.specialTeamsMode) {
+    normalizedSettings.specialTeamsAlertsEnabled =
+      normalizedSettings.specialTeamsMode !== SPECIAL_TEAMS_MODES.OFF
+  }
 
   if (Object.keys(fieldErrors).length > 0) {
     throw new RatingEngineSettingsError(
@@ -313,6 +393,18 @@ const normalizeScopedSettingsPayload = (payload, fields, scopeLabel) => {
       return
     }
 
+    if (field === 'specialTeamsMode') {
+      const mode = String(rawValue ?? '').trim().toLowerCase()
+
+      if (!Object.values(SPECIAL_TEAMS_MODES).includes(mode)) {
+        fieldErrors[field] =
+          `${field} must be off, alert_only, or automatic.`
+      } else {
+        normalizedSettings[field] = mode
+      }
+      return
+    }
+
     const value = Number(rawValue)
     const limits = RATING_ENGINE_SETTINGS_LIMITS[field]
     const belowMinimum = limits.minExclusive
@@ -325,6 +417,12 @@ const normalizeScopedSettingsPayload = (payload, fields, scopeLabel) => {
       fieldErrors[field] = `${field} must be an integer.`
     } else if (limits.halfPoint && !Number.isInteger(value * 2)) {
       fieldErrors[field] = `${field} must use 0.50-point increments.`
+    } else if (
+      limits.increment &&
+      !Number.isInteger(value / limits.increment)
+    ) {
+      fieldErrors[field] =
+        `${field} must use ${limits.increment.toFixed(2)}-point increments.`
     } else if (belowMinimum || value > limits.max) {
       const minimumLabel = limits.minExclusive
         ? `greater than ${limits.min}`
@@ -335,6 +433,11 @@ const normalizeScopedSettingsPayload = (payload, fields, scopeLabel) => {
       normalizedSettings[field] = value
     }
   })
+
+  if (normalizedSettings.specialTeamsMode) {
+    normalizedSettings.specialTeamsAlertsEnabled =
+      normalizedSettings.specialTeamsMode !== SPECIAL_TEAMS_MODES.OFF
+  }
 
   if (Object.keys(fieldErrors).length > 0) {
     throw new RatingEngineSettingsError(
@@ -409,16 +512,49 @@ const updateRatingEngineModelAdjustments = async (
   const settingsModel = getSettingsModel(options)
   const existingDocument = await settingsModel.findOne({ userId })
   const fallbackSettings = normalizeSettingsDocument(existingDocument)
+
+  if (
+    Object.hasOwn(payload, 'specialTeamsAlertsEnabled') &&
+    typeof payload.specialTeamsAlertsEnabled !== 'boolean'
+  ) {
+    throw new RatingEngineSettingsError(
+      'Rating engine settings validation failed.',
+      400,
+      {
+        fieldErrors: {
+          specialTeamsAlertsEnabled:
+            'specialTeamsAlertsEnabled must be a boolean.',
+        },
+      },
+    )
+  }
+
   const normalizedPayload = {
     maximumGoaliePenalty: fallbackSettings.maximumGoaliePenalty,
     maximumPlayerInjuryPenalty:
       fallbackSettings.maximumPlayerInjuryPenalty,
+    specialTeamsAdjustment:
+      fallbackSettings.specialTeamsAdjustment,
     specialTeamsAlertsEnabled:
       fallbackSettings.specialTeamsAlertsEnabled,
+    specialTeamsMode:
+      fallbackSettings.specialTeamsMode,
     specialTeamsRankThreshold:
       fallbackSettings.specialTeamsRankThreshold,
     ...payload,
   }
+
+  if (
+    !Object.hasOwn(payload, 'specialTeamsMode') &&
+    Object.hasOwn(payload, 'specialTeamsAlertsEnabled')
+  ) {
+    normalizedPayload.specialTeamsMode = payload.specialTeamsAlertsEnabled
+      ? SPECIAL_TEAMS_MODES.ALERT_ONLY
+      : SPECIAL_TEAMS_MODES.OFF
+  }
+
+  normalizedPayload.specialTeamsAlertsEnabled =
+    normalizedPayload.specialTeamsMode !== SPECIAL_TEAMS_MODES.OFF
 
   return updateScopedRatingEngineSettings(
     userId,

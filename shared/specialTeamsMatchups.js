@@ -5,6 +5,30 @@ const SPECIAL_TEAMS_MATCHUP_STATUSES = Object.freeze({
   UNAVAILABLE: 'unavailable',
 })
 
+const SPECIAL_TEAMS_MODES = Object.freeze({
+  ALERT_ONLY: 'alert_only',
+  AUTOMATIC: 'automatic',
+  OFF: 'off',
+})
+
+const SPECIAL_TEAMS_SIGNALS = Object.freeze({
+  NEGATIVE: 'weak_pp_vs_strong_pk',
+  POSITIVE: 'strong_pp_vs_weak_pk',
+})
+
+const DEFAULT_SPECIAL_TEAMS_SETTINGS = Object.freeze({
+  specialTeamsAdjustment: 0.5,
+  specialTeamsAlertsEnabled: true,
+  specialTeamsMode: SPECIAL_TEAMS_MODES.ALERT_ONLY,
+  specialTeamsRankThreshold: 6,
+})
+
+const SPECIAL_TEAMS_ADJUSTMENT_LIMITS = Object.freeze({
+  max: 1,
+  min: 0.25,
+  step: 0.25,
+})
+
 const normalizeTeamKey = (value) =>
   String(value ?? '')
     .trim()
@@ -164,11 +188,141 @@ const getSpecialTeamsMatchupForTeams = ({
   })
 }
 
+const normalizeSpecialTeamsMode = (mode, legacyAlertsEnabled) => {
+  const normalizedMode = String(mode ?? '').trim().toLowerCase()
+
+  if (Object.values(SPECIAL_TEAMS_MODES).includes(normalizedMode)) {
+    return normalizedMode
+  }
+
+  return legacyAlertsEnabled === false
+    ? SPECIAL_TEAMS_MODES.OFF
+    : SPECIAL_TEAMS_MODES.ALERT_ONLY
+}
+
+const normalizeSpecialTeamsAdjustment = (value) => {
+  const adjustment = Number(value)
+  const { max, min, step } = SPECIAL_TEAMS_ADJUSTMENT_LIMITS
+
+  return Number.isFinite(adjustment) &&
+    adjustment >= min &&
+    adjustment <= max &&
+    Number.isInteger(adjustment / step)
+    ? adjustment
+    : DEFAULT_SPECIAL_TEAMS_SETTINGS.specialTeamsAdjustment
+}
+
+const getSignalFromStatus = (status) => {
+  if (status === SPECIAL_TEAMS_MATCHUP_STATUSES.POSITIVE) {
+    return SPECIAL_TEAMS_SIGNALS.POSITIVE
+  }
+
+  if (status === SPECIAL_TEAMS_MATCHUP_STATUSES.NEGATIVE) {
+    return SPECIAL_TEAMS_SIGNALS.NEGATIVE
+  }
+
+  return null
+}
+
+const createTeamSpecialTeamsContext = ({
+  magnitude,
+  mode,
+  teamMatchup,
+  threshold,
+}) => {
+  const isOff = mode === SPECIAL_TEAMS_MODES.OFF
+  const signal = isOff ? null : getSignalFromStatus(teamMatchup.status)
+  let adjustment = 0
+
+  if (mode === SPECIAL_TEAMS_MODES.AUTOMATIC) {
+    if (signal === SPECIAL_TEAMS_SIGNALS.POSITIVE) {
+      adjustment = magnitude
+    } else if (signal === SPECIAL_TEAMS_SIGNALS.NEGATIVE) {
+      adjustment = -magnitude
+    }
+  }
+
+  return {
+    adjustment,
+    mode,
+    opponentPkRank: teamMatchup.opponentPkRank,
+    ppRank: teamMatchup.ppRank,
+    signal,
+    status: isOff
+      ? SPECIAL_TEAMS_MATCHUP_STATUSES.NEUTRAL
+      : teamMatchup.status,
+    threshold,
+  }
+}
+
+const getSpecialTeamsContextForTeams = ({
+  adjustment,
+  awayTeam,
+  homeTeam,
+  legacyAlertsEnabled,
+  mode,
+  specialTeams,
+  threshold,
+} = {}) => {
+  const normalizedMode = normalizeSpecialTeamsMode(
+    mode,
+    legacyAlertsEnabled,
+  )
+  const magnitude = normalizeSpecialTeamsAdjustment(adjustment)
+  const matchup = getSpecialTeamsMatchupForTeams({
+    awayTeam,
+    homeTeam,
+    specialTeams,
+    threshold,
+  })
+
+  return {
+    away: createTeamSpecialTeamsContext({
+      magnitude,
+      mode: normalizedMode,
+      teamMatchup: matchup.away,
+      threshold: matchup.threshold,
+    }),
+    home: createTeamSpecialTeamsContext({
+      magnitude,
+      mode: normalizedMode,
+      teamMatchup: matchup.home,
+      threshold: matchup.threshold,
+    }),
+    leagueTeamCount: matchup.leagueTeamCount,
+    magnitude,
+    mode: normalizedMode,
+    threshold: matchup.threshold,
+  }
+}
+
+const applySpecialTeamsContextToInputs = (inputs = {}, context = null) => ({
+  ...inputs,
+  away: {
+    ...inputs.away,
+    specialTeamsAdjustment: Number(context?.away?.adjustment) || 0,
+    specialTeamsContext: context?.away ? { ...context.away } : null,
+  },
+  home: {
+    ...inputs.home,
+    specialTeamsAdjustment: Number(context?.home?.adjustment) || 0,
+    specialTeamsContext: context?.home ? { ...context.home } : null,
+  },
+})
+
 const specialTeamsMatchupApi = {
+  DEFAULT_SPECIAL_TEAMS_SETTINGS,
+  SPECIAL_TEAMS_ADJUSTMENT_LIMITS,
   SPECIAL_TEAMS_MATCHUP_STATUSES,
+  SPECIAL_TEAMS_MODES,
+  SPECIAL_TEAMS_SIGNALS,
+  applySpecialTeamsContextToInputs,
   calculateSpecialTeamsMatchup,
+  getSpecialTeamsContextForTeams,
   getSpecialTeamsMatchupForTeams,
   indexLeagueSpecialTeams,
+  normalizeSpecialTeamsAdjustment,
+  normalizeSpecialTeamsMode,
 }
 
 if (typeof module !== 'undefined' && module.exports) {

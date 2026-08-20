@@ -446,6 +446,50 @@ test('Analyzer lists every provider goalie plus custom and unknown with simplifi
   assert.doesNotMatch(markup, /Effective goalie adjustment/)
 })
 
+test('Analyzer goalie details are collapsed by default and expose provider detail on expansion', () => {
+  const awayValues = {
+    ...modelAnalysis.defaultGameInputs.away,
+    goalieTeamId: 'TOR',
+  }
+  const homeValues = goalieUtils.updateGoalieInputs(
+    {
+      ...modelAnalysis.defaultGameInputs.home,
+      goalieTeamId: 'BOS',
+    },
+    'selection',
+    `provider:${providerGoalie.nhlPlayerId}`,
+    [providerGoalie],
+  )
+  const markup = renderToStaticMarkup(
+    React.createElement(AdjustmentComparisonModule.GoalieSelectionPanel, {
+      awayTeam: { abbreviation: 'TOR', name: 'Toronto Maple Leafs' },
+      canPersist: true,
+      errorMessages: { away: '', home: '' },
+      goalieErrors: { away: '', home: '' },
+      goalieSaveMessage: '',
+      goalieSaveStatus: 'idle',
+      goalieStatsByPlayerId: {},
+      goalieStatuses: { away: 'success', home: 'success' },
+      goalies: { away: [], home: [providerGoalie] },
+      hasUnsavedChanges: false,
+      homeTeam: { abbreviation: 'BOS', name: 'Boston Bruins' },
+      initialDetailsExpandedBySide: { home: true },
+      inputs: { away: awayValues, home: homeValues },
+      maximumGoaliePenalty: -3.5,
+      onChange: () => {},
+      onRetry: { away: () => {}, home: () => {} },
+      onSave: () => {},
+    }),
+  )
+
+  assert.match(markup, /Unknown starter[\s\S]*?Adj\. <strong[^>]*>0\.00/)
+  assert.match(markup, /Unconfirmed/)
+  assert.match(markup, /aria-expanded="true"[^>]*>Hide goalie details/)
+  assert.match(markup, /Team default:[\s\S]*?-1\.25/)
+  assert.match(markup, /id="analyzer-home-goalie-adjustment"/)
+  assert.match(markup, /Current-season stats unavailable/)
+})
+
 test('Analyzer unlisted goalie keeps its required game-only field within the configured maximum', () => {
   const awayValues = goalieUtils.updateGoalieInputs(
     {

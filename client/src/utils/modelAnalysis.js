@@ -16,6 +16,7 @@ import {
   getEffectiveHomeAdvantage,
   getTeamPowerRating,
 } from './powerRatings.js'
+import { applySpecialTeamsContextToInputs } from './specialTeamsMatchups.js'
 
 export const PRELIMINARY_ANALYSIS_INPUT_STATUS = Object.freeze({
   COMPLETE: 'COMPLETE',
@@ -134,6 +135,8 @@ export const defaultGameInputs = {
     goalieAdjustment: 0,
     restFatigue: 0,
     quickRematchAdjustment: 0,
+    specialTeamsAdjustment: 0,
+    specialTeamsContext: null,
     motivation: 0,
     manualAdjustment: 0,
   },
@@ -157,6 +160,8 @@ export const defaultGameInputs = {
     goalieAdjustment: 0,
     restFatigue: 0,
     quickRematchAdjustment: 0,
+    specialTeamsAdjustment: 0,
+    specialTeamsContext: null,
     motivation: 0,
     manualAdjustment: 0,
   },
@@ -266,6 +271,7 @@ export const calculatePreliminaryAnalysis = ({
   probabilityScale,
   injurySummaries = {},
   gameContext = null,
+  specialTeamsContext = null,
 }) => {
   const missingCoreData = getMissingCoreData({
     awayTeamId,
@@ -291,13 +297,16 @@ export const calculatePreliminaryAnalysis = ({
     away: awayTeamId,
     home: homeTeamId,
   }
-  const inputs = createInputsForTeams(
-    powerRatings,
-    teams,
-    marketOdds,
-    injurySummaries,
-    baseHomeAdvantage,
-    gameContext,
+  const inputs = applySpecialTeamsContextToInputs(
+    createInputsForTeams(
+      powerRatings,
+      teams,
+      marketOdds,
+      injurySummaries,
+      baseHomeAdvantage,
+      gameContext,
+    ),
+    specialTeamsContext,
   )
   const result = calculateGame(inputs.home, inputs.away, probabilityScale)
   const homeMarket = createMarketSide({

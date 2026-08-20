@@ -2,6 +2,11 @@ const mongoose = require('mongoose')
 const Bet = require('../models/Bet')
 const bankrollService = require('./bankrollService')
 const betSettlementService = require('./betSettlementService')
+const {
+  SPECIAL_TEAMS_MATCHUP_STATUSES,
+  SPECIAL_TEAMS_MODES,
+  SPECIAL_TEAMS_SIGNALS,
+} = require('../../shared/specialTeamsMatchups')
 
 const RESULT_VALUES = Bet.RESULT_VALUES
 const EDITABLE_FIELDS = [
@@ -14,9 +19,22 @@ const EDITABLE_FIELDS = [
 ]
 const MINIMUM_POSITIVE_EV = 3
 const MODEL_STATUSES = {
+  BET_CANDIDATE: 'Bet Candidate',
   POSITIVE_VALUE: 'Positive Value',
+  POSITIVE_VALUE_BELOW_THRESHOLD: 'Positive Value · Below Threshold',
   BELOW_THRESHOLD: 'Below Threshold',
   NO_VALUE: 'No Value',
+}
+const RECOMMENDATION_STATES = new Set([
+  'NO_VALUE',
+  'POSITIVE_VALUE_BELOW_THRESHOLD',
+  'BET_CANDIDATE',
+])
+const RECOMMENDATION_STATE_LABELS = {
+  NO_VALUE: MODEL_STATUSES.NO_VALUE,
+  POSITIVE_VALUE_BELOW_THRESHOLD:
+    MODEL_STATUSES.POSITIVE_VALUE_BELOW_THRESHOLD,
+  BET_CANDIDATE: MODEL_STATUSES.BET_CANDIDATE,
 }
 
 class BetsError extends Error {
@@ -186,6 +204,21 @@ const normalizeModelStatus = (modelStatus) => {
     return MODEL_STATUSES.POSITIVE_VALUE
   }
 
+  if (
+    normalizedStatus === 'positive value · below threshold' ||
+    normalizedStatus === 'positive value below threshold' ||
+    normalizedStatus === 'positive_value_below_threshold'
+  ) {
+    return MODEL_STATUSES.POSITIVE_VALUE_BELOW_THRESHOLD
+  }
+
+  if (
+    normalizedStatus === 'bet candidate' ||
+    normalizedStatus === 'bet_candidate'
+  ) {
+    return MODEL_STATUSES.BET_CANDIDATE
+  }
+
   if (normalizedStatus === 'below threshold') {
     return MODEL_STATUSES.BELOW_THRESHOLD
   }
@@ -195,6 +228,76 @@ const normalizeModelStatus = (modelStatus) => {
   }
 
   return ''
+}
+
+const normalizeRecommendationState = (value, field) => {
+  if (value === null || value === '' || value === undefined) {
+    return ''
+  }
+
+  const normalizedValue = toText(value)
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, '_')
+    .replace(/^_|_$/g, '')
+
+  if (!RECOMMENDATION_STATES.has(normalizedValue)) {
+    throw new BetsError(`${field} is invalid.`, 400, { field })
+  }
+
+  return normalizedValue
+}
+
+const normalizeSpecialTeamsSnapshot = (snapshot = null, field) => {
+  if (snapshot === null || snapshot === '' || snapshot === undefined) {
+    return null
+  }
+
+  if (Array.isArray(snapshot) || typeof snapshot !== 'object') {
+    throw new BetsError(`${field} must be an object.`, 400, { field })
+  }
+
+  const mode = toText(snapshot.mode, SPECIAL_TEAMS_MODES.ALERT_ONLY)
+  const status = toText(
+    snapshot.status,
+    SPECIAL_TEAMS_MATCHUP_STATUSES.UNAVAILABLE,
+  )
+  const signal = snapshot.signal === null || snapshot.signal === undefined
+    ? null
+    : toText(snapshot.signal)
+
+  if (!Object.values(SPECIAL_TEAMS_MODES).includes(mode)) {
+    throw new BetsError(`${field}.mode is invalid.`, 400, {
+      field: `${field}.mode`,
+    })
+  }
+
+  if (!Object.values(SPECIAL_TEAMS_MATCHUP_STATUSES).includes(status)) {
+    throw new BetsError(`${field}.status is invalid.`, 400, {
+      field: `${field}.status`,
+    })
+  }
+
+  if (signal !== null && !Object.values(SPECIAL_TEAMS_SIGNALS).includes(signal)) {
+    throw new BetsError(`${field}.signal is invalid.`, 400, {
+      field: `${field}.signal`,
+    })
+  }
+
+  return {
+    adjustment: toOptionalNumber(
+      snapshot.adjustment,
+      `${field}.adjustment`,
+    ) ?? 0,
+    mode,
+    opponentPkRank: toOptionalNumber(
+      snapshot.opponentPkRank,
+      `${field}.opponentPkRank`,
+    ),
+    ppRank: toOptionalNumber(snapshot.ppRank, `${field}.ppRank`),
+    signal,
+    status,
+    threshold: toOptionalNumber(snapshot.threshold, `${field}.threshold`),
+  }
 }
 
 const normalizeAdjustments = (adjustments = {}) => ({
@@ -223,6 +326,20 @@ const normalizeAdjustments = (adjustments = {}) => ({
   ),
   homeQuickRematch: toNumber(adjustments.homeQuickRematch),
   awayQuickRematch: toNumber(adjustments.awayQuickRematch),
+  homeSpecialTeamsAdjustment: toNumber(
+    adjustments.homeSpecialTeamsAdjustment,
+  ),
+  awaySpecialTeamsAdjustment: toNumber(
+    adjustments.awaySpecialTeamsAdjustment,
+  ),
+  homeSpecialTeamsSnapshot: normalizeSpecialTeamsSnapshot(
+    adjustments.homeSpecialTeamsSnapshot,
+    'adjustments.homeSpecialTeamsSnapshot',
+  ),
+  awaySpecialTeamsSnapshot: normalizeSpecialTeamsSnapshot(
+    adjustments.awaySpecialTeamsSnapshot,
+    'adjustments.awaySpecialTeamsSnapshot',
+  ),
   homeMotivation: toNumber(adjustments.homeMotivation),
   awayMotivation: toNumber(adjustments.awayMotivation),
   homeManualAdjustment: toNumber(adjustments.homeManualAdjustment),
@@ -321,6 +438,10 @@ const normalizeKellyRecommendationSnapshot = (snapshot = null) => {
     minimumEdgePercent: toOptionalNonNegativeNumber(
       snapshot.minimumEdgePercent,
       'kellyRecommendation.minimumEdgePercent',
+    ),
+    recommendationState: normalizeRecommendationState(
+      snapshot.recommendationState,
+      'kellyRecommendation.recommendationState',
     ),
     reason: toText(snapshot.reason),
     recommendedStakeAmount: toOptionalNonNegativeNumber(
@@ -572,8 +693,17 @@ const normalizeCreatePayload = (payload = {}) => {
   const expectedValue =
     toOptionalNumber(payload.expectedValue, 'expectedValue') ??
     (modelProbability * marketOdds - 1) * 100
+  const kellyRecommendation = normalizeKellyRecommendationSnapshot(
+    payload.kellyRecommendation,
+  )
+  const recommendationState = normalizeRecommendationState(
+    payload.recommendationState ?? kellyRecommendation?.recommendationState,
+    'recommendationState',
+  )
   const modelStatus =
-    normalizeModelStatus(payload.modelStatus) || getModelStatus(expectedValue)
+    normalizeModelStatus(payload.modelStatus) ||
+    RECOMMENDATION_STATE_LABELS[recommendationState] ||
+    getModelStatus(expectedValue)
   const marketOddsSource = ['manual', 'manual_override', 'provider'].includes(
     payload.marketOddsSource,
   )
@@ -582,6 +712,10 @@ const normalizeCreatePayload = (payload = {}) => {
   const isProviderOdds = marketOddsSource === 'provider'
   const goalieSelectionSnapshot = normalizeGoalieSelectionSnapshot(
     payload.goalieSelectionSnapshot,
+  )
+  const specialTeamsSnapshot = normalizeSpecialTeamsSnapshot(
+    payload.specialTeamsSnapshot,
+    'specialTeamsSnapshot',
   )
   const betType = toText(payload.betType).toLowerCase()
   const placementId = toText(payload.placementId)
@@ -621,6 +755,7 @@ const normalizeCreatePayload = (payload = {}) => {
     ),
     selectedSide: normalizeSelectedSide(payload.selectedSide),
     modelStatus,
+    recommendationState,
     modelProbability,
     fairOdds,
     marketOdds,
@@ -691,6 +826,11 @@ const normalizeCreatePayload = (payload = {}) => {
       payload.quickRematchAdjustment,
       'quickRematchAdjustment',
     ),
+    specialTeamsAdjustment: toOptionalNumber(
+      payload.specialTeamsAdjustment,
+      'specialTeamsAdjustment',
+    ),
+    specialTeamsSnapshot,
     motivationAdjustment: toOptionalNumber(
       payload.motivationAdjustment,
       'motivationAdjustment',
@@ -730,9 +870,7 @@ const normalizeCreatePayload = (payload = {}) => {
     gameContextSnapshot: normalizeGameContextSnapshot(
       payload.gameContextSnapshot,
     ),
-    kellyRecommendation: normalizeKellyRecommendationSnapshot(
-      payload.kellyRecommendation,
-    ),
+    kellyRecommendation,
   }
 }
 

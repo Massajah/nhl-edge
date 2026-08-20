@@ -105,7 +105,9 @@ const makeSettingsPayload = (overrides = {}) => ({
   maximumPlayerInjuryPenalty: -2.5,
   probabilityScale: 18,
   regulationMultiplier: 1,
+  specialTeamsAdjustment: 0.5,
   specialTeamsAlertsEnabled: true,
+  specialTeamsMode: 'alert_only',
   specialTeamsRankThreshold: 6,
   overtimeMultiplier: 0.7,
   shootoutMultiplier: 0.5,
@@ -135,7 +137,9 @@ test('rating engine settings return defaults without a persisted document', asyn
     probabilityScale: 20,
     regulationMultiplier: 1,
     shootoutMultiplier: 0.1,
+    specialTeamsAdjustment: 0.5,
     specialTeamsAlertsEnabled: true,
+    specialTeamsMode: 'alert_only',
     specialTeamsRankThreshold: 6,
   })
 })
@@ -153,7 +157,9 @@ test('new Mongoose settings documents receive calibrated field defaults', () => 
   assert.equal(document.regulationMultiplier, 1)
   assert.equal(document.overtimeMultiplier, 0.4)
   assert.equal(document.shootoutMultiplier, 0.1)
+  assert.equal(document.specialTeamsAdjustment, 0.5)
   assert.equal(document.specialTeamsAlertsEnabled, true)
+  assert.equal(document.specialTeamsMode, 'alert_only')
   assert.equal(document.specialTeamsRankThreshold, 6)
 })
 
@@ -178,8 +184,51 @@ test('older partial settings documents receive only missing calibrated defaults'
   assert.equal(result.settings.probabilityScale, 20)
   assert.equal(result.settings.overtimeMultiplier, 0.4)
   assert.equal(result.settings.shootoutMultiplier, 0.1)
+  assert.equal(result.settings.specialTeamsAdjustment, 0.5)
   assert.equal(result.settings.specialTeamsAlertsEnabled, true)
+  assert.equal(result.settings.specialTeamsMode, 'alert_only')
   assert.equal(result.settings.specialTeamsRankThreshold, 6)
+})
+
+test('legacy Special Teams enabled state maps to a canonical mode', async () => {
+  const store = makeSettingsStore()
+
+  store.settingsByUser.set('disabled-user', {
+    specialTeamsAlertsEnabled: false,
+    specialTeamsRankThreshold: 8,
+    userId: 'disabled-user',
+  })
+
+  const disabled = await getRatingEngineSettings('disabled-user', {
+    settingsModel: store.model,
+  })
+  const missing = await getRatingEngineSettings('missing-user', {
+    settingsModel: store.model,
+  })
+
+  assert.equal(disabled.settings.specialTeamsMode, 'off')
+  assert.equal(disabled.settings.specialTeamsAlertsEnabled, false)
+  assert.equal(disabled.settings.specialTeamsRankThreshold, 8)
+  assert.equal(disabled.settings.specialTeamsAdjustment, 0.5)
+  assert.equal(missing.settings.specialTeamsMode, 'alert_only')
+})
+
+test('Mongoose schema defaults do not mask a legacy disabled state', async () => {
+  const legacyDocument = new RatingEngineSettings({
+    specialTeamsAlertsEnabled: false,
+    userId: new mongoose.Types.ObjectId(),
+  })
+  const result = await getRatingEngineSettings(legacyDocument.userId, {
+    settingsModel: {
+      findOne() {
+        return queryOf(legacyDocument)
+      },
+    },
+  })
+
+  assert.equal(legacyDocument.$isDefault('specialTeamsMode'), true)
+  assert.equal(result.settings.specialTeamsMode, 'off')
+  assert.equal(result.settings.specialTeamsAlertsEnabled, false)
 })
 
 test('rating engine settings are saved per user', async () => {
@@ -454,7 +503,9 @@ test('scoped resets keep unrelated Settings values unchanged', async () => {
     kFactor: 2.1,
     maximumPlayerInjuryPenalty: -1.5,
     probabilityScale: 14,
+    specialTeamsAdjustment: 0.75,
     specialTeamsAlertsEnabled: false,
+    specialTeamsMode: 'off',
     specialTeamsRankThreshold: 10,
   })
 
@@ -472,7 +523,9 @@ test('scoped resets keep unrelated Settings values unchanged', async () => {
   assert.equal(engineReset.settings.maximumGoaliePenalty, -3.5)
   assert.equal(engineReset.settings.maximumPlayerInjuryPenalty, -1.5)
   assert.equal(engineReset.settings.probabilityScale, 20)
+  assert.equal(engineReset.settings.specialTeamsAdjustment, 0.75)
   assert.equal(engineReset.settings.specialTeamsAlertsEnabled, false)
+  assert.equal(engineReset.settings.specialTeamsMode, 'off')
   assert.equal(engineReset.settings.specialTeamsRankThreshold, 10)
   assert.equal(engineReset.settings.regulationMultiplier, 1)
   assert.equal(engineReset.settings.overtimeMultiplier, 0.4)
@@ -487,7 +540,9 @@ test('scoped resets keep unrelated Settings values unchanged', async () => {
   assert.equal(modelReset.settings.maximumGoaliePenalty, -4)
   assert.equal(modelReset.settings.maximumPlayerInjuryPenalty, -2.5)
   assert.equal(modelReset.settings.probabilityScale, 20)
+  assert.equal(modelReset.settings.specialTeamsAdjustment, 0.5)
   assert.equal(modelReset.settings.specialTeamsAlertsEnabled, true)
+  assert.equal(modelReset.settings.specialTeamsMode, 'alert_only')
   assert.equal(modelReset.settings.specialTeamsRankThreshold, 6)
 })
 
@@ -520,14 +575,15 @@ test('Model Adjustment guardrails save without changing engine parameters', asyn
   assert.equal(store.settingsByUser.size, 1)
 })
 
-test('Special Teams alert settings persist explicit enabled and threshold values', async () => {
+test('Special Teams settings persist mode, threshold, and magnitude', async () => {
   const store = makeSettingsStore()
 
   const result = await updateRatingEngineModelAdjustments(
     'user-a',
     {
       homeAdvantage: 3.5,
-      specialTeamsAlertsEnabled: false,
+      specialTeamsAdjustment: 0.75,
+      specialTeamsMode: 'automatic',
       specialTeamsRankThreshold: 10,
     },
     { settingsModel: store.model },
@@ -536,9 +592,13 @@ test('Special Teams alert settings persist explicit enabled and threshold values
     settingsModel: store.model,
   })
 
-  assert.equal(result.settings.specialTeamsAlertsEnabled, false)
+  assert.equal(result.settings.specialTeamsAdjustment, 0.75)
+  assert.equal(result.settings.specialTeamsAlertsEnabled, true)
+  assert.equal(result.settings.specialTeamsMode, 'automatic')
   assert.equal(result.settings.specialTeamsRankThreshold, 10)
-  assert.equal(loaded.settings.specialTeamsAlertsEnabled, false)
+  assert.equal(loaded.settings.specialTeamsAdjustment, 0.75)
+  assert.equal(loaded.settings.specialTeamsAlertsEnabled, true)
+  assert.equal(loaded.settings.specialTeamsMode, 'automatic')
   assert.equal(loaded.settings.specialTeamsRankThreshold, 10)
 })
 
@@ -596,13 +656,17 @@ test('Special Teams alert threshold accepts 3 through 12 and rejects invalid val
 
 test('legacy Model Adjustments saves preserve explicit Special Teams values', async () => {
   const store = makeSettingsStore()
+  const legacySettings = makeSettingsPayload({
+    specialTeamsAlertsEnabled: false,
+    specialTeamsRankThreshold: 8,
+  })
+
+  delete legacySettings.specialTeamsAdjustment
+  delete legacySettings.specialTeamsMode
 
   await updateRatingEngineSettings(
     'user-a',
-    makeSettingsPayload({
-      specialTeamsAlertsEnabled: false,
-      specialTeamsRankThreshold: 8,
-    }),
+    legacySettings,
     { settingsModel: store.model },
   )
   const result = await updateRatingEngineModelAdjustments(
@@ -614,7 +678,9 @@ test('legacy Model Adjustments saves preserve explicit Special Teams values', as
   assert.equal(result.settings.homeAdvantage, 4.25)
   assert.equal(result.settings.maximumGoaliePenalty, -3.5)
   assert.equal(result.settings.maximumPlayerInjuryPenalty, -2.5)
+  assert.equal(result.settings.specialTeamsAdjustment, 0.5)
   assert.equal(result.settings.specialTeamsAlertsEnabled, false)
+  assert.equal(result.settings.specialTeamsMode, 'off')
   assert.equal(result.settings.specialTeamsRankThreshold, 8)
 })
 
