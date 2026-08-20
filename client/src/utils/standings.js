@@ -155,6 +155,35 @@ export const getClinchIndicatorBadges = (
 export const formatStandingsNumber = (value) =>
   Number.isFinite(value) ? String(value) : '—'
 
+export const formatStandingsRank = (value) =>
+  Number.isInteger(value) && value > 0 ? `#${value}` : ''
+
+export const formatStandingsRecord = (standing = {}) => {
+  const normalizedStanding = standing ?? {}
+  const recordParts = [
+    normalizedStanding.wins,
+    normalizedStanding.losses,
+    normalizedStanding.overtimeLosses,
+  ]
+
+  if (
+    normalizedStanding.gamesPlayed === 0 ||
+    recordParts.some((value) => !Number.isInteger(value) || value < 0)
+  ) {
+    return '—'
+  }
+
+  return recordParts.join('–')
+}
+
+export const formatStandingsRecordText = (value) => {
+  const match = String(value ?? '')
+    .trim()
+    .match(/^(\d+)\s*[-–]\s*(\d+)\s*[-–]\s*(\d+)$/)
+
+  return match ? match.slice(1).join('–') : '—'
+}
+
 export const formatPointPercentage = (value) =>
   Number.isFinite(value)
     ? value.toFixed(3).replace(/^0/, '')

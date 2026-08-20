@@ -240,6 +240,8 @@ const initializeDefaultPowerRatings = async (userId, options = {}) => {
           homeAdvantage: DEFAULT_HOME_ADJUSTMENT,
           lastRatingChange: 0,
           manualAdjustment: 0,
+          seasonStartingRating: null,
+          seasonStartingRatingSeasonId: null,
           teamId: team.teamId,
           teamName: team.teamName,
           userId,
@@ -384,6 +386,50 @@ const getStartingRatingScaleLifecycle = async (userId, options = {}) => {
   }
 }
 
+const captureSeasonStartingRatings = async (userId, options = {}) => {
+  const lifecycle = await getStartingRatingScaleLifecycle(userId, options)
+
+  if (lifecycle.locked || !lifecycle.seasonId) {
+    return {
+      captured: false,
+      capturedCount: 0,
+      ...lifecycle,
+    }
+  }
+
+  const powerRatingModel = getPowerRatingModel(options)
+  const ratings = await getRatingsForUser(userId, options)
+  const operations = ratings
+    .filter((rating) => Number.isFinite(Number(rating.baseRating)))
+    .map((rating) => ({
+      updateOne: {
+        filter: {
+          teamId: normalizeIdentifier(rating.teamId),
+          userId,
+        },
+        update: {
+          $set: {
+            seasonStartingRating: Number(rating.baseRating),
+            seasonStartingRatingSeasonId: lifecycle.seasonId,
+          },
+        },
+      },
+    }))
+
+  if (operations.length > 0) {
+    await powerRatingModel.bulkWrite(operations, {
+      ordered: false,
+      ...(options.session ? { session: options.session } : {}),
+    })
+  }
+
+  return {
+    captured: operations.length > 0,
+    capturedCount: operations.length,
+    ...lifecycle,
+  }
+}
+
 const getStartingRatingScaleConfiguration = async (userId, options = {}) => {
   const [scaleResult, lifecycle] = await Promise.all([
     getStartingRatingScale(userId, options),
@@ -440,6 +486,12 @@ const resetPowerRatings = async (userId, options = {}) => {
   const powerRatingModel = getPowerRatingModel(options)
   const seedTeams = await getSeedTeams()
   const startingRatingScale = await resolveStartingRatingScale(userId, options)
+  const seasonStartingRatingReset = options.clearSeasonStartingRating
+    ? {
+        seasonStartingRating: null,
+        seasonStartingRatingSeasonId: null,
+      }
+    : {}
   const operations = seedTeams.map((team) => ({
     updateOne: {
       filter: {
@@ -453,6 +505,7 @@ const resetPowerRatings = async (userId, options = {}) => {
           homeAdvantage: DEFAULT_HOME_ADJUSTMENT,
           lastRatingChange: 0,
           manualAdjustment: 0,
+          ...seasonStartingRatingReset,
           teamId: team.teamId,
           teamName: team.teamName,
           userId,
@@ -480,6 +533,7 @@ module.exports = {
   DEFAULT_BASE_RATING,
   DEFAULT_HOME_ADJUSTMENT,
   PowerRatingsError,
+  captureSeasonStartingRatings,
   getPowerRatings,
   getSeedTeams,
   getStartingRatingScaleConfiguration,

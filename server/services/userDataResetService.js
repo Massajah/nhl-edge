@@ -204,6 +204,7 @@ const resetForNewSeason = async (userId, options = {}) => {
       startingScaleDocument,
     )
     const ratingsResult = await resetPowerRatings(userId, {
+      clearSeasonStartingRating: true,
       powerRatingModel: models.PowerRating,
       session,
       startingRatingScale,

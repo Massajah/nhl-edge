@@ -10,6 +10,7 @@ import {
   saveGoalieAdjustment,
 } from '../services/teamsApi.js'
 import { teamsDataCoordinator } from '../services/teamsDataCoordinator.js'
+import { standingsDataCoordinator } from '../services/standingsDataCoordinator.js'
 import { getTeamInjurySummary } from '../utils/injuries.js'
 import {
   mergeProviderGoaliesWithAdjustments,
@@ -17,8 +18,19 @@ import {
   validateGoalieAdjustmentValue,
 } from '../utils/goalies.js'
 import { DEFAULT_MAXIMUM_GOALIE_PENALTY } from '../config/baseModel.js'
-import { getEffectiveBaseRating } from '../utils/powerRatings.js'
-import { filterTeams } from '../utils/teamDirectory.js'
+import {
+  formatPowerRatingDisplayValue,
+  formatSignedPowerRatingDisplayValue,
+  getPowerRatingBreakdown,
+  getPowerRatingLeagueRank,
+} from '../utils/powerRatings.js'
+import { filterTeams, getTeamStanding } from '../utils/teamDirectory.js'
+import {
+  formatStandingsNumber,
+  formatStandingsRank,
+  formatStandingsRecord,
+  formatStandingsRecordText,
+} from '../utils/standings.js'
 
 const rosterGroups = [
   { key: 'forwards', label: 'Forwards' },
@@ -57,9 +69,6 @@ const normalizeFilterValue = (value) => value || 'all'
 
 const getTeamLogo = (team = {}) =>
   team.logo || getTeamMetadata(team.abbreviation).logo || ''
-
-const formatRating = (rating) =>
-  Number.isFinite(rating) ? rating.toFixed(1) : '--'
 
 const formatSpecialTeamsValue = (percentage, rank) => {
   if (!Number.isFinite(percentage) || !Number.isFinite(rank)) {
@@ -234,7 +243,7 @@ function Teams({
   const [goalieSummaryStateByTeam, setGoalieSummaryStateByTeam] = useState({})
 
   const loadTeams = useCallback(async () => {
-    setStatus('refreshing')
+    setStatus('loading')
     setErrorMessage('')
 
     try {
@@ -248,7 +257,7 @@ function Teams({
       setStatus('success')
     } catch (error) {
       setErrorMessage(error.message)
-      setStatus('success')
+      setStatus('error')
     }
   }, [])
 
@@ -273,7 +282,7 @@ function Teams({
         }
 
         setErrorMessage(error.message)
-        setStatus('success')
+        setStatus('error')
       }
     }
 
@@ -683,21 +692,15 @@ function Teams({
               </select>
             </label>
 
-            <button type="button" onClick={loadTeams}>
-              Refresh
-            </button>
           </div>
 
           {status === 'loading' ? <TeamsLoadingState /> : null}
 
           {status === 'error' ? (
-            <div className="ratings-state error" role="alert">
-              <strong>Teams unavailable</strong>
-              <p>{errorMessage}</p>
-              <button type="button" onClick={loadTeams}>
-                Try again
-              </button>
-            </div>
+            <TeamsDirectoryError
+              errorMessage={errorMessage}
+              onRetry={loadTeams}
+            />
           ) : null}
 
           {status === 'success' && visibleTeams.length > 0 ? (
@@ -758,6 +761,7 @@ function TeamDetails({
   const [goalieAdjustmentStatus, setGoalieAdjustmentStatus] =
     useState('loading')
   const [goalieAdjustmentError, setGoalieAdjustmentError] = useState('')
+  const [standingsResult, setStandingsResult] = useState(null)
   const rosterReady = Boolean(roster) &&
     ['success', 'refreshing'].includes(rosterStatus)
   const rosterBoundaryRef = useLoadNearViewport(
@@ -769,10 +773,20 @@ function TeamDetails({
     `${team.abbreviation}:goalie-summaries`,
     rosterReady,
   )
-  const effectiveRating =
+  const ratingBreakdown =
     powerRatingsStatus === 'success' && rating
-      ? getEffectiveBaseRating(rating)
+      ? getPowerRatingBreakdown(rating, {
+          seasonId: standingsResult?.currentSeasonId ?? '__pending__',
+        })
       : null
+  const powerRatingRank =
+    powerRatingsStatus === 'success' && rating
+      ? getPowerRatingLeagueRank(powerRatings, team.abbreviation)
+      : null
+  const standing = useMemo(
+    () => getTeamStanding(standingsResult?.standings, team),
+    [standingsResult?.standings, team],
+  )
   const sortedGoalies = useMemo(() => {
     const goalies = mergeProviderGoaliesWithAdjustments(
       roster?.goalies ?? [],
@@ -805,6 +819,27 @@ function TeamDetails({
       })
       .map(({ goalie }) => goalie)
   }, [goalieAdjustments, goalieStatsByPlayerId, roster])
+
+  useEffect(() => {
+    let isCurrent = true
+
+    standingsDataCoordinator
+      .loadSeason()
+      .then((result) => {
+        if (isCurrent) {
+          setStandingsResult(result)
+        }
+      })
+      .catch(() => {
+        if (isCurrent) {
+          setStandingsResult(null)
+        }
+      })
+
+    return () => {
+      isCurrent = false
+    }
+  }, [])
 
   useEffect(() => {
     let isCurrent = true
@@ -914,43 +949,15 @@ function TeamDetails({
         Back to teams
       </button>
 
-      <header className="team-details-header">
-        <TeamLogo logo={logo} name={team.name} abbreviation={team.abbreviation} />
-        <div className="team-details-copy">
-          <p className="eyebrow">Team Details</p>
-          <h2>{team.name}</h2>
-          <div className="team-meta-row">
-            <span>{team.abbreviation}</span>
-            <span>{team.conference || 'Conference TBD'}</span>
-            <span>{team.division || 'Division TBD'}</span>
-          </div>
-        </div>
-
-        <div className="team-detail-metrics" aria-label="Team model summary">
-          <SummaryMetric
-            label="Power rating"
-            value={formatRating(effectiveRating)}
-            detail={
-              powerRatingsStatus === 'success'
-                ? 'MongoDB current'
-                : 'Loading MongoDB'
-            }
-          />
-          <SummaryMetric
-            label="Active injury impact"
-            value={
-              injurySummaryStatus === 'success'
-                ? injurySummary.totalImpact.toFixed(1)
-                : '--'
-            }
-            detail={
-              injurySummaryStatus === 'success'
-                ? `${injurySummary.activeInjuries} active`
-                : 'Loading MongoDB'
-            }
-          />
-        </div>
-      </header>
+      <TeamDetailsHeader
+        injurySummary={injurySummary}
+        injurySummaryStatus={injurySummaryStatus}
+        logo={logo}
+        powerRatingBreakdown={ratingBreakdown}
+        powerRatingRank={powerRatingRank}
+        standing={standing}
+        team={team}
+      />
 
       <SpecialTeamsSection
         onRetry={onRetryStats}
@@ -1605,12 +1612,121 @@ function TeamLogo({ abbreviation, logo, name }) {
   )
 }
 
+function TeamsDirectoryError({ errorMessage, onRetry }) {
+  return (
+    <div className="ratings-state error" role="alert">
+      <strong>Teams unavailable</strong>
+      <p>{errorMessage}</p>
+      <button type="button" onClick={onRetry}>
+        Retry
+      </button>
+    </div>
+  )
+}
+
+function TeamDetailsHeader({
+  injurySummary,
+  injurySummaryStatus,
+  logo,
+  powerRatingBreakdown,
+  powerRatingRank,
+  standing,
+  team,
+}) {
+  const conference = standing?.conference || team.conference || 'Conference TBD'
+  const division = standing?.division || team.division || 'Division TBD'
+  const conferenceRank = formatStandingsRank(standing?.conferenceRank)
+  const divisionRank = formatStandingsRank(standing?.divisionRank)
+
+  return (
+    <header className="team-details-header">
+      <TeamLogo logo={logo} name={team.name} abbreviation={team.abbreviation} />
+      <div className="team-details-copy">
+        <p className="eyebrow">Team Details</p>
+        <h2>{team.name}</h2>
+        <div className="team-context-row">
+          <div className="team-meta-row">
+            <span>{team.abbreviation}</span>
+            <span>{conferenceRank ? `${conference} ${conferenceRank}` : conference}</span>
+            <span>{divisionRank ? `${division} ${divisionRank}` : division}</span>
+          </div>
+          <dl className="team-standings-context" aria-label="Current-season standings">
+            <div>
+              <dt>PTS</dt>
+              <dd>{formatStandingsNumber(standing?.points)}</dd>
+            </div>
+            <div>
+              <dt>Record</dt>
+              <dd>{formatStandingsRecord(standing)}</dd>
+            </div>
+            <div>
+              <dt>L10</dt>
+              <dd>{formatStandingsRecordText(standing?.last10Record)}</dd>
+            </div>
+          </dl>
+        </div>
+      </div>
+
+      <div className="team-detail-metrics" aria-label="Team model summary">
+        <PowerRatingBreakdownCard
+          breakdown={powerRatingBreakdown}
+          leagueRank={powerRatingRank}
+        />
+        <SummaryMetric
+          label="Active injury impact"
+          value={
+            injurySummaryStatus === 'success'
+              ? injurySummary.totalImpact.toFixed(1)
+              : '--'
+          }
+          detail={
+            injurySummaryStatus === 'success'
+              ? `${injurySummary.activeInjuries} active`
+              : 'Loading MongoDB'
+          }
+        />
+      </div>
+    </header>
+  )
+}
+
+function PowerRatingBreakdownCard({ breakdown, leagueRank }) {
+  const formatValue = (value) =>
+    formatPowerRatingDisplayValue(value, { fallback: '—' })
+  const formatMovement = (value) =>
+    value === null || value === undefined
+      ? '—'
+      : formatSignedPowerRatingDisplayValue(value)
+
+  return (
+    <div className="summary-metric power-rating-breakdown-card">
+      <span>Power Rating</span>
+      <div className="power-rating-value-row">
+        <strong>{formatValue(breakdown?.currentRating)}</strong>
+        <small>{leagueRank ? `#${leagueRank}` : '#TBD'}</small>
+      </div>
+      <div className="power-rating-breakdown-details">
+        <small className="power-rating-change-line">
+          Start <b>{formatValue(breakdown?.startingRating)}</b>
+          <i aria-hidden="true">·</i>
+          <span title="Automatic change since season start">
+            Change <b>{formatMovement(breakdown?.modelMovement)}</b>
+          </span>
+        </small>
+        <small>
+          Manual <b>{formatMovement(breakdown?.manualAdjustment)}</b>
+        </small>
+      </div>
+    </div>
+  )
+}
+
 function SummaryMetric({ detail, label, value }) {
   return (
     <div className="summary-metric">
       <span>{label}</span>
       <strong>{value}</strong>
-      <small>{detail}</small>
+      {detail ? <small>{detail}</small> : null}
     </div>
   )
 }
@@ -1651,6 +1767,12 @@ function RosterLoadingState() {
       ))}
     </div>
   )
+}
+
+export {
+  PowerRatingBreakdownCard,
+  TeamDetailsHeader,
+  TeamsDirectoryError,
 }
 
 export default Teams

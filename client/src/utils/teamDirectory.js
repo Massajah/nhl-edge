@@ -29,3 +29,23 @@ export const filterTeams = (
     )
   })
 }
+
+const normalizeTeamIdentity = (value) =>
+  String(value ?? '').trim().toUpperCase()
+
+export const getTeamStanding = (standings = [], team = {}) => {
+  const standingsRows = Array.isArray(standings) ? standings : []
+  const teamIdentities = new Set(
+    [team.id, team.teamId, team.abbreviation]
+      .map(normalizeTeamIdentity)
+      .filter(Boolean),
+  )
+
+  return (
+    standingsRows.find((standing) =>
+      [standing.teamId, standing.teamAbbreviation]
+        .map(normalizeTeamIdentity)
+        .some((identity) => identity && teamIdentities.has(identity)),
+    ) ?? null
+  )
+}

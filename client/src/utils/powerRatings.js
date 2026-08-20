@@ -24,6 +24,16 @@ const toNumber = (value, fallback) => {
   return Number.isFinite(parsedValue) ? parsedValue : fallback
 }
 
+const toNullableNumber = (value) => {
+  if (value === null || value === undefined || value === '') {
+    return null
+  }
+
+  const parsedValue = Number(value)
+
+  return Number.isFinite(parsedValue) ? parsedValue : null
+}
+
 export const parsePowerRatingDraftValue = (value) => {
   if (String(value ?? '').trim() === '') {
     return null
@@ -128,6 +138,12 @@ export const normalizePowerRatings = (storedRatings = {}) => {
         storedTeam.manualAdjustment,
         defaultTeam.manualAdjustment,
       ),
+      seasonStartingRating: toNullableNumber(
+        storedTeam.seasonStartingRating,
+      ),
+      seasonStartingRatingSeasonId: String(
+        storedTeam.seasonStartingRatingSeasonId ?? '',
+      ).trim(),
       lastRatingChange: toNumber(
         storedTeam.lastRatingChange,
         defaultTeam.lastRatingChange,
@@ -190,6 +206,75 @@ export const getEffectiveBaseRating = (rating) =>
     rating?.manualAdjustment,
     DEFAULT_POWER_RATING_VALUES.manualAdjustment,
   )
+
+export const getPowerRatingBreakdown = (rating = {}, { seasonId = '' } = {}) => {
+  const modelRating = toNumber(
+    rating?.baseRating,
+    DEFAULT_POWER_RATING_VALUES.baseRating,
+  )
+  const manualAdjustment = toNumber(
+    rating?.manualAdjustment,
+    DEFAULT_POWER_RATING_VALUES.manualAdjustment,
+  )
+  const storedStartingRating = toNullableNumber(rating?.seasonStartingRating)
+  const storedSeasonId = String(
+    rating?.seasonStartingRatingSeasonId ?? '',
+  ).trim()
+  const normalizedSeasonId = String(seasonId ?? '').trim()
+  const startingRating =
+    storedStartingRating !== null &&
+    (!normalizedSeasonId || !storedSeasonId || storedSeasonId === normalizedSeasonId)
+      ? storedStartingRating
+      : null
+
+  return {
+    currentRating: modelRating + manualAdjustment,
+    manualAdjustment,
+    modelMovement:
+      startingRating === null ? null : modelRating - startingRating,
+    modelRating,
+    startingRating,
+  }
+}
+
+export const getPowerRatingLeagueRanks = (ratings = {}) => {
+  const indexedRatings = indexRatingsByTeamId(ratings)
+  const rankedRatings = Object.entries(indexedRatings)
+    .map(([key, rating]) => ({
+      currentRating: getEffectiveBaseRating(rating),
+      teamId: String(
+        rating?.teamId ?? rating?.id ?? rating?.abbreviation ?? key,
+      )
+        .trim()
+        .toUpperCase(),
+    }))
+    .filter((rating) => rating.teamId)
+    .sort(
+      (left, right) =>
+        right.currentRating - left.currentRating ||
+        left.teamId.localeCompare(right.teamId),
+    )
+  const ranks = {}
+  let previousRating = null
+  let previousRank = 0
+
+  rankedRatings.forEach((rating, index) => {
+    const rank =
+      previousRating !== null && rating.currentRating === previousRating
+        ? previousRank
+        : index + 1
+
+    ranks[rating.teamId] = rank
+    previousRating = rating.currentRating
+    previousRank = rank
+  })
+
+  return ranks
+}
+
+export const getPowerRatingLeagueRank = (ratings, teamId) =>
+  getPowerRatingLeagueRanks(ratings)[String(teamId ?? '').trim().toUpperCase()] ??
+  null
 
 export const getTeamPowerRating = (ratings, teamId) => {
   const normalizedRatings = normalizePowerRatings(ratings)

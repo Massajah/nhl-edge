@@ -369,7 +369,7 @@ test('saving state disables Save Lineup without changing save eligibility rules'
   )
 })
 
-test('Teams directory keeps all teams with desktop-hidden, mobile-visible search', async () => {
+test('Teams directory keeps Search, Conference, and Division aligned responsively', async () => {
   const markup = renderToStaticMarkup(
     React.createElement(teamsComponents.default, {
       injurySummaries: {},
@@ -385,20 +385,228 @@ test('Teams directory keeps all teams with desktop-hidden, mobile-visible search
   assert.match(markup, /Search teams/)
   assert.match(markup, /Conference/)
   assert.match(markup, /Division/)
-  assert.match(markup, />Refresh<\/button>/)
+  assert.doesNotMatch(markup, />Refresh<\/button>/)
+  assert.doesNotMatch(markup, />Retry<\/button>/)
   assert.match(
     css,
-    /\.teams-toolbar\s*\{[^}]*grid-template-columns:\s*repeat\(2, minmax\(180px, 220px\)\) auto[^}]*justify-content:\s*start/s,
+    /\.teams-toolbar\s*\{[^}]*grid-template-columns:[^}]*minmax\(220px, 300px\)[^}]*repeat\(2, minmax\(160px, 220px\)\)[^}]*justify-content:\s*start/s,
   )
-  assert.match(css, /\.teams-search-field\s*\{[^}]*display:\s*none/s)
+  assert.doesNotMatch(css, /\.teams-search-field\s*\{[^}]*display:\s*none/s)
   assert.match(
     mobileRules,
     /\.teams-toolbar\s*\{[^}]*grid-template-columns:\s*1fr/s,
   )
-  assert.match(
-    mobileRules,
-    /\.teams-search-field\s*\{[^}]*display:\s*grid/s,
+})
+
+test('Teams directory exposes Retry only in its contextual error state', async () => {
+  const successMarkup = renderToStaticMarkup(
+    React.createElement(teamsComponents.default, {
+      injurySummaries: {},
+      injurySummaryStatus: 'success',
+      powerRatings: {},
+      powerRatingsStatus: 'success',
+    }),
   )
+  const errorMarkup = renderToStaticMarkup(
+    React.createElement(teamsComponents.TeamsDirectoryError, {
+      errorMessage: 'Provider unavailable.',
+      onRetry() {},
+    }),
+  )
+  const source = await readFile(
+    new URL('../components/Teams.jsx', import.meta.url),
+    'utf8',
+  )
+
+  assert.doesNotMatch(successMarkup, />Retry<\/button>/)
+  assert.match(errorMarkup, /role="alert"/)
+  assert.match(errorMarkup, /Teams unavailable/)
+  assert.match(errorMarkup, /Provider unavailable\./)
+  assert.match(errorMarkup, />Retry<\/button>/)
+  assert.match(source, /catch \(error\)[\s\S]*setStatus\('error'\)/)
+})
+
+test('Team Details header renders canonical current-season standings context', () => {
+  const standing = {
+    conference: 'Western',
+    conferenceRank: 10,
+    division: 'Pacific',
+    divisionRank: 3,
+    gamesPlayed: 82,
+    last10Record: '6-3-1',
+    losses: 33,
+    overtimeLosses: 6,
+    points: 92,
+    teamAbbreviation: 'ANA',
+    teamId: 'ANA',
+    wins: 43,
+  }
+  const markup = renderToStaticMarkup(
+    React.createElement(teamsComponents.TeamDetailsHeader, {
+      injurySummary: { activeInjuries: 0, totalImpact: 0 },
+      injurySummaryStatus: 'success',
+      logo: '',
+      powerRatingBreakdown: {
+        currentRating: 46.5,
+        manualAdjustment: 0.5,
+        modelMovement: 1.5,
+        modelRating: 46,
+        startingRating: 44.5,
+      },
+      powerRatingRank: 12,
+      standing,
+      team: {
+        abbreviation: 'ANA',
+        conference: 'Western',
+        division: 'Pacific',
+        id: 'ANA',
+        name: 'Anaheim Ducks',
+      },
+    }),
+  )
+
+  assert.match(markup, />ANA<\/span>/)
+  assert.match(markup, />Western #10<\/span>/)
+  assert.match(markup, />Pacific #3<\/span>/)
+  assert.match(markup, /<dt>PTS<\/dt><dd>92<\/dd>/)
+  assert.match(markup, /<dt>Record<\/dt><dd>43–33–6<\/dd>/)
+  assert.match(markup, /<dt>L10<\/dt><dd>6–3–1<\/dd>/)
+  assert.match(markup, /Power Rating<\/span><div class="power-rating-value-row"><strong>46\.50<\/strong><small>#12<\/small><\/div>/)
+  assert.match(markup, /Start <b>44\.50<\/b>/)
+  assert.match(markup, /Change <b>\+1\.50<\/b>/)
+  assert.match(markup, /Manual <b>\+0\.50<\/b>/)
+  assert.doesNotMatch(markup, /Model <b>|League <b>/)
+  assert.match(markup, /Active injury impact<\/span><strong>0\.0<\/strong><small>0 active<\/small>/)
+  assert.doesNotMatch(markup, /MongoDB current/)
+})
+
+test('Team Details standings context degrades field-by-field without misleading zero ranks', async () => {
+  const team = {
+    abbreviation: 'ANA',
+    conference: 'Western',
+    division: 'Pacific',
+    id: 'ANA',
+    name: 'Anaheim Ducks',
+  }
+  const renderHeader = (standing) =>
+    renderToStaticMarkup(
+      React.createElement(teamsComponents.TeamDetailsHeader, {
+        injurySummary: { activeInjuries: 0, totalImpact: 0 },
+        injurySummaryStatus: 'success',
+        logo: '',
+        standing,
+        team,
+      }),
+    )
+  const missingMarkup = renderHeader(null)
+  const partialMarkup = renderHeader({
+    conference: 'Western',
+    conferenceRank: 0,
+    division: 'Pacific',
+    divisionRank: 0,
+    gamesPlayed: 82,
+    last10Record: '',
+    losses: 33,
+    overtimeLosses: 6,
+    points: 92,
+    wins: 43,
+  })
+  const css = await readFile(new URL('../../src/App.css', import.meta.url), 'utf8')
+
+  assert.match(missingMarkup, />Western<\/span>/)
+  assert.match(missingMarkup, />Pacific<\/span>/)
+  assert.equal((missingMarkup.match(/<dd>—<\/dd>/g) ?? []).length, 3)
+  assert.doesNotMatch(missingMarkup, /#0|NaN|undefined|0–0–0/)
+  assert.match(partialMarkup, /<dt>PTS<\/dt><dd>92<\/dd>/)
+  assert.match(partialMarkup, /<dt>Record<\/dt><dd>43–33–6<\/dd>/)
+  assert.match(partialMarkup, /<dt>L10<\/dt><dd>—<\/dd>/)
+  assert.doesNotMatch(partialMarkup, /#0/)
+  assert.match(css, /\.team-standings-context\s*\{[^}]*flex-wrap:\s*wrap/s)
+  assert.match(css, /\.team-standings-context dd\s*\{[^}]*white-space:\s*nowrap/s)
+  assert.match(css, /\.team-context-row\s*\{[^}]*flex-wrap:\s*wrap/s)
+})
+
+test('Team Details Power Rating breakdown displays compact zero values and inline rank clearly', async () => {
+  const markup = renderToStaticMarkup(
+    React.createElement(teamsComponents.PowerRatingBreakdownCard, {
+      breakdown: {
+        currentRating: 46,
+        manualAdjustment: 0,
+        modelMovement: 0,
+        modelRating: 46,
+        startingRating: 46,
+      },
+      leagueRank: null,
+    }),
+  )
+
+  const css = await readFile(new URL('../../src/App.css', import.meta.url), 'utf8')
+
+  assert.match(markup, /Power Rating<\/span><div class="power-rating-value-row"><strong>46\.00<\/strong><small>#TBD<\/small><\/div>/)
+  assert.match(markup, /Start <b>46\.00<\/b>/)
+  assert.match(markup, /Change <b>0\.00<\/b>/)
+  assert.match(markup, /Manual <b>0\.00<\/b>/)
+  assert.doesNotMatch(markup, /Model <b>|League <b>/)
+  assert.match(css, /\.team-detail-metrics\s*\{[^}]*align-items:\s*start/s)
+  assert.match(css, /\.power-rating-breakdown-card\s*\{[^}]*align-content:\s*start/s)
+})
+
+test('Team Details Power Rating breakdown keeps negative Change separate from Manual Adjustment', () => {
+  const markup = renderToStaticMarkup(
+    React.createElement(teamsComponents.PowerRatingBreakdownCard, {
+      breakdown: {
+        currentRating: 46.25,
+        manualAdjustment: -0.25,
+        modelMovement: -1.5,
+        modelRating: 46.5,
+        startingRating: 48,
+      },
+      leagueRank: 12,
+    }),
+  )
+
+  assert.match(markup, /<strong>46\.25<\/strong><small>#12<\/small>/)
+  assert.match(markup, /Start <b>48\.00<\/b>/)
+  assert.match(markup, /Change <b>-1\.50<\/b>/)
+  assert.match(markup, /Manual <b>-0\.25<\/b>/)
+})
+
+test('Team Details Power Rating breakdown uses placeholders for a missing baseline', () => {
+  const markup = renderToStaticMarkup(
+    React.createElement(teamsComponents.PowerRatingBreakdownCard, {
+      breakdown: {
+        currentRating: 46.5,
+        manualAdjustment: 0.5,
+        modelMovement: null,
+        modelRating: 46,
+        startingRating: null,
+      },
+      leagueRank: 1,
+    }),
+  )
+
+  assert.match(markup, /<strong>46\.50<\/strong><small>#1<\/small>/)
+  assert.match(markup, /Start <b>—<\/b>/)
+  assert.match(markup, /Change <b>—<\/b>/)
+  assert.match(markup, /Manual <b>\+0\.50<\/b>/)
+  assert.doesNotMatch(markup, /NaN|undefined/)
+})
+
+test('Team Details standings lookup uses canonical IDs instead of display names', () => {
+  const matchingStanding = {
+    teamAbbreviation: 'ANA',
+    teamId: 'ANA',
+    teamName: 'Provider Display Name',
+  }
+  const result = teamDirectory.getTeamStanding(
+    [
+      { teamAbbreviation: 'BOS', teamId: 'BOS', teamName: 'Anaheim Ducks' },
+      matchingStanding,
+    ],
+    { abbreviation: 'ANA', id: 'ANA', name: 'Different Display Name' },
+  )
+
+  assert.equal(result, matchingStanding)
 })
 
 test('mobile search and directory filters share the existing matching pipeline', () => {

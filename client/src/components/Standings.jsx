@@ -2,8 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { getTeamMetadata } from '../data/teamMetadata.js'
 import {
   fetchPlayoffs,
-  fetchStandings,
 } from '../services/standingsApi.js'
+import { standingsDataCoordinator } from '../services/standingsDataCoordinator.js'
 import { normalizePlayoffResponse } from '../utils/playoffs.js'
 import {
   STANDINGS_VIEWS,
@@ -86,9 +86,9 @@ function Standings({
     setErrorMessage('')
 
     try {
-      const nextResult = normalizeStandingsResponse(
-        await fetchStandings(seasonId),
-      )
+      const nextResult = await standingsDataCoordinator.loadSeason(seasonId, {
+        force,
+      })
 
       seasonCacheRef.current.set(nextResult.selectedSeasonId, nextResult)
       setResult(nextResult)

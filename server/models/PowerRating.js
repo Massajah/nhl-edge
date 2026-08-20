@@ -34,6 +34,15 @@ const powerRatingSchema = new mongoose.Schema(
       required: true,
       default: BASE_MODEL_V1.startingRatings.center,
     },
+    seasonStartingRating: {
+      type: Number,
+      default: null,
+    },
+    seasonStartingRatingSeasonId: {
+      type: String,
+      default: null,
+      trim: true,
+    },
     homeAdvantage: {
       type: Number,
       required: true,

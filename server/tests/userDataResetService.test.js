@@ -157,6 +157,7 @@ test('new season reset preserves settings and betting data while clearing season
   assert.equal(result.startingRatingScale.max, 52)
   assert.equal(ratingReset.userId, USER_ID)
   assert.equal(ratingReset.options.startingRatingScale.center, 47)
+  assert.equal(ratingReset.options.clearSeasonStartingRating, true)
   assert.equal(ratingReset.options.session, 'test-session')
   assert.deepEqual(
     calls.map(({ name, method }) => `${name}.${method}`),

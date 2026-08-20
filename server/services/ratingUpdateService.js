@@ -15,7 +15,10 @@ const {
 const {
   calculateEffectiveHomeAdvantage,
 } = require('./homeAdvantageService')
-const { getSeedTeams } = require('./powerRatingsService')
+const {
+  captureSeasonStartingRatings,
+  getSeedTeams,
+} = require('./powerRatingsService')
 const {
   deduplicateGamesById,
   fetchNhlScheduleGames,
@@ -451,6 +454,59 @@ const getCurrentSeasonBoundary = async ({
     id: currentSeason.id ?? seasonMetadata.currentSeasonId ?? null,
     startDate: parsedStart.date,
   }
+}
+
+const isGameWithinSeasonBoundary = (game, season) => {
+  const gameTimestamp = getGameStartTimestamp(game)
+  const seasonStartTimestamp = new Date(
+    `${season.startDate}T00:00:00.000Z`,
+  ).getTime()
+  const seasonEndTimestamp = new Date(
+    `${season.endDate}T23:59:59.999Z`,
+  ).getTime()
+
+  return (
+    Number.isFinite(gameTimestamp) &&
+    gameTimestamp >= seasonStartTimestamp &&
+    gameTimestamp <= seasonEndTimestamp
+  )
+}
+
+const captureCurrentSeasonStartingRatings = async ({
+  currentSeason,
+  eligibleGames,
+  options,
+  powerRatingModel,
+  processedRatingGameModel,
+  userId,
+}) => {
+  if (
+    !currentSeason?.id ||
+    !eligibleGames.some(({ game }) =>
+      isGameWithinSeasonBoundary(game, currentSeason),
+    )
+  ) {
+    return
+  }
+
+  const startingRatingsCapture =
+    options.captureSeasonStartingRatings ?? captureSeasonStartingRatings
+
+  await startingRatingsCapture(userId, {
+    powerRatingModel,
+    processedRatingGameModel,
+    seasonMetadataProvider: async () => ({
+      currentSeasonId: currentSeason.id,
+      seasons: [
+        {
+          endDate: currentSeason.endDate,
+          id: currentSeason.id,
+          isCurrent: true,
+          startDate: currentSeason.startDate,
+        },
+      ],
+    }),
+  })
 }
 
 const loadPowerRatingsForGame = async ({
@@ -1113,6 +1169,24 @@ const applyCompletedGamesToPowerRatings = async (
     games: fetchedGames,
     teamsById,
   })
+  const seasonMetadataProvider =
+    options.seasonMetadataProvider ??
+    (() => nhlSeasonService.getAvailablePowerRatingHistorySeasons())
+  const currentSeason =
+    options.currentSeasonBoundary ??
+    (await getCurrentSeasonBoundary({
+      seasonMetadataProvider,
+      throughDate: dates.to,
+    }))
+
+  await captureCurrentSeasonStartingRatings({
+    currentSeason,
+    eligibleGames,
+    options,
+    powerRatingModel,
+    processedRatingGameModel,
+    userId,
+  })
   const gameIds = eligibleGames
     .map((game) => game.gameId)
     .filter(Number.isFinite)
@@ -1284,6 +1358,7 @@ const runAutomaticPowerRatingUpdate = async (
       dateRange,
       {
         ...options,
+        currentSeasonBoundary: currentSeason,
         processedRatingGameModel,
         settingsProvider: async () => ratingSettingsUsed,
         stopOnGameError: true,

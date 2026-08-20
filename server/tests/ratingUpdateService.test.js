@@ -82,6 +82,9 @@ const sameUser = (left, right) => String(left) === String(right)
 const makeRatingDocument = ({
   baseRating = 50,
   homeAdjustment = 0,
+  manualAdjustment = 0,
+  seasonStartingRating = null,
+  seasonStartingRatingSeasonId = null,
   teamId,
   userId = USER_ID,
 }) => ({
@@ -89,7 +92,9 @@ const makeRatingDocument = ({
   baseRating,
   homeAdvantage: homeAdjustment,
   lastRatingChange: 0,
-  manualAdjustment: 0,
+  manualAdjustment,
+  seasonStartingRating,
+  seasonStartingRatingSeasonId,
   teamId,
   teamName: fixtureTeams[teamId] ?? teamId,
   userId,
@@ -143,9 +148,28 @@ const makeModels = ({ processedGames = [], ratings = [] }) => {
           ratings.filter(
             (rating) =>
               sameUser(rating.userId, filter.userId) &&
-              requestedTeamIds.includes(rating.teamId),
+              (requestedTeamIds.length === 0 ||
+                requestedTeamIds.includes(rating.teamId)),
           ),
         )
+      },
+      async bulkWrite(operations) {
+        operations.forEach(({ updateOne }) => {
+          const rating = ratings.find(
+            (candidate) =>
+              sameUser(candidate.userId, updateOne.filter.userId) &&
+              candidate.teamId === updateOne.filter.teamId,
+          )
+
+          if (rating) {
+            Object.assign(rating, updateOne.update.$set)
+          }
+        })
+
+        return {
+          matchedCount: operations.length,
+          modifiedCount: operations.length,
+        }
       },
       async updateOne(filter, update) {
         updateCalls.push({ filter, update })
@@ -285,6 +309,10 @@ const runUpdate = (games, models, payload = {}) =>
     gamesProvider: async () => games,
     powerRatingModel: models.powerRatingModel,
     processedRatingGameModel: models.processedRatingGameModel,
+    seasonMetadataProvider: async () => ({
+      currentSeasonId: DEFAULT_TEST_SEASON.id,
+      seasons: [DEFAULT_TEST_SEASON],
+    }),
     settingsProvider: async () => DEFAULT_TEST_ENGINE_SETTINGS,
     todayProvider: () => '2025-03-05',
     useTransactions: false,
@@ -295,6 +323,12 @@ const runUpdateWithOptions = (games, models, payload = {}, options = {}) =>
     gamesProvider: async () => games,
     powerRatingModel: models.powerRatingModel,
     processedRatingGameModel: models.processedRatingGameModel,
+    seasonMetadataProvider:
+      options.seasonMetadataProvider ??
+      (async () => ({
+        currentSeasonId: DEFAULT_TEST_SEASON.id,
+        seasons: [DEFAULT_TEST_SEASON],
+      })),
     settingsProvider: async (userId) =>
       options.settingsByUser?.[String(userId)] ?? DEFAULT_TEST_ENGINE_SETTINGS,
     todayProvider: () => '2025-03-05',
@@ -409,6 +443,58 @@ test('live update combines base home advantage with home team adjustment', async
   assert.equal(pregameProbability.homeProbability > 0.5, true)
   assert.equal(auditRecord.homeRatingChange < 0.6, true)
   assertAlmostEqual(auditRecord.homeRatingChange, expectedUpdate.homeDelta)
+})
+
+test('automatic updates preserve baseline and keep manual overlay out of model movement', async () => {
+  const ratings = [
+    makeRatingDocument({
+      baseRating: 44.5,
+      manualAdjustment: 0.5,
+      teamId: 'BOS',
+    }),
+    makeRatingDocument({ baseRating: 46, teamId: 'TOR' }),
+  ]
+  const models = makeModels({ ratings })
+  const result = await runUpdate([eligibilityFixtures.regularSeason], models, {
+    from: '2025-03-01',
+    to: '2025-03-01',
+  })
+  const boston = ratings.find((rating) => rating.teamId === 'BOS')
+  const auditRecord = models.processedGames[0]
+  const historySnapshot = {
+    homeRatingAfter: auditRecord.homeRatingAfter,
+    homeRatingBefore: auditRecord.homeRatingBefore,
+    homeRatingChange: auditRecord.homeRatingChange,
+  }
+
+  assert.equal(result.gamesProcessed, 1)
+  assert.equal(boston.seasonStartingRating, 44.5)
+  assert.equal(boston.seasonStartingRatingSeasonId, '20242025')
+  assert.equal(auditRecord.homeRatingBefore, 44.5)
+  assertAlmostEqual(
+    boston.baseRating - boston.seasonStartingRating,
+    auditRecord.homeRatingChange,
+  )
+  assertAlmostEqual(
+    boston.baseRating + boston.manualAdjustment,
+    auditRecord.homeRatingAfter + 0.5,
+  )
+
+  boston.manualAdjustment = 0
+
+  assert.equal(boston.seasonStartingRating, 44.5)
+  assertAlmostEqual(
+    boston.baseRating - boston.seasonStartingRating,
+    auditRecord.homeRatingChange,
+  )
+  assert.deepEqual(
+    {
+      homeRatingAfter: auditRecord.homeRatingAfter,
+      homeRatingBefore: auditRecord.homeRatingBefore,
+      homeRatingChange: auditRecord.homeRatingChange,
+    },
+    historySnapshot,
+  )
 })
 
 test('different home teams can use different home adjustments', async () => {

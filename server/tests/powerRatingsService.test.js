@@ -168,6 +168,19 @@ test('invalid Home Adjustment values are rejected', async () => {
   )
 })
 
+test('season starting rating is read-only through ordinary rating updates', async () => {
+  await assert.rejects(
+    () =>
+      powerRatingsService.updatePowerRating('user-1', 'BOS', {
+        seasonStartingRating: 44.5,
+      }),
+    (error) =>
+      error.statusCode === 400 &&
+      error.message ===
+        'Request body contains unsupported power rating fields.',
+  )
+})
+
 test('explicit starting assignments use the selected scale while live edits remain free', async () => {
   const userId = new mongoose.Types.ObjectId().toString()
   const document = {
@@ -319,6 +332,159 @@ test('Starting Rating Scale locks only after a current-season game is processed'
   )
 })
 
+test('season starting ratings capture at the existing lock and remain immutable', async () => {
+  const userId = new mongoose.Types.ObjectId().toString()
+  const ratings = [
+    {
+      _id: new mongoose.Types.ObjectId(),
+      abbreviation: 'BOS',
+      baseRating: 44.5,
+      homeAdvantage: 0,
+      lastRatingChange: 0,
+      manualAdjustment: 0,
+      save: async () => {},
+      seasonStartingRating: null,
+      seasonStartingRatingSeasonId: null,
+      teamId: 'BOS',
+      teamName: 'Boston Bruins',
+      userId,
+    },
+    {
+      abbreviation: 'TOR',
+      baseRating: 47,
+      seasonStartingRating: null,
+      seasonStartingRatingSeasonId: null,
+      teamId: 'TOR',
+      teamName: 'Toronto Maple Leafs',
+      userId,
+    },
+  ]
+  ratings[0].toJSON = function toJSON() {
+    return { ...this, id: this._id.toString(), userId }
+  }
+  let processedGame = null
+  let baselineWrites = 0
+  const lifecycleQuery = (value) => ({
+    lean() {
+      return this
+    },
+    select() {
+      return this
+    },
+    then(resolve, reject) {
+      return Promise.resolve(value).then(resolve, reject)
+    },
+  })
+  const powerRatingModel = {
+    async bulkWrite(operations) {
+      baselineWrites += operations.length
+      operations.forEach(({ updateOne }) => {
+        const rating = ratings.find(
+          (candidate) => candidate.teamId === updateOne.filter.teamId,
+        )
+
+        Object.assign(rating, updateOne.update.$set)
+      })
+    },
+    find: () => queryOf(ratings),
+  }
+  const options = {
+    powerRatingModel,
+    processedRatingGameModel: {
+      findOne: () => lifecycleQuery(processedGame),
+    },
+    seasonMetadataProvider: async () => ({
+      currentSeasonId: '20262027',
+      seasons: [
+        {
+          endDate: '2027-04-30',
+          id: '20262027',
+          isCurrent: true,
+          startDate: '2026-10-01',
+        },
+      ],
+    }),
+  }
+
+  const captured = await powerRatingsService.captureSeasonStartingRatings(
+    userId,
+    options,
+  )
+
+  assert.equal(captured.captured, true)
+  assert.equal(captured.capturedCount, 2)
+  assert.equal(ratings[0].seasonStartingRating, 44.5)
+  assert.equal(ratings[1].seasonStartingRating, 47)
+  assert.equal(ratings[0].seasonStartingRatingSeasonId, '20262027')
+
+  ratings[0].baseRating = 46
+  processedGame = { _id: 'first-current-season-game' }
+  const lockedCapture = await powerRatingsService.captureSeasonStartingRatings(
+    userId,
+    options,
+  )
+
+  assert.equal(lockedCapture.captured, false)
+  assert.equal(baselineWrites, 2)
+  assert.equal(ratings[0].seasonStartingRating, 44.5)
+
+  await withPatches(
+    [[PowerRating, 'findOne', async () => ratings[0]]],
+    async () => {
+      await powerRatingsService.updatePowerRating(userId, 'BOS', {
+        manualAdjustment: 0.5,
+      })
+    },
+  )
+
+  assert.equal(ratings[0].manualAdjustment, 0.5)
+  assert.equal(ratings[0].seasonStartingRating, 44.5)
+})
+
+test('locked development data without a baseline is not silently backfilled', async () => {
+  let writeAttempted = false
+  const lifecycleQuery = (value) => ({
+    lean() {
+      return this
+    },
+    select() {
+      return this
+    },
+    then(resolve, reject) {
+      return Promise.resolve(value).then(resolve, reject)
+    },
+  })
+  const result = await powerRatingsService.captureSeasonStartingRatings(
+    'user-1',
+    {
+      powerRatingModel: {
+        async bulkWrite() {
+          writeAttempted = true
+        },
+        find: () => queryOf([{ baseRating: 51, teamId: 'BOS' }]),
+      },
+      processedRatingGameModel: {
+        findOne: () => lifecycleQuery({ _id: 'existing-live-game' }),
+      },
+      seasonMetadataProvider: async () => ({
+        currentSeasonId: '20262027',
+        seasons: [
+          {
+            endDate: '2027-04-30',
+            id: '20262027',
+            isCurrent: true,
+            startDate: '2026-10-01',
+          },
+        ],
+      }),
+    },
+  )
+
+  assert.equal(result.locked, true)
+  assert.equal(result.captured, false)
+  assert.equal(writeAttempted, false)
+})
+
 test('preseason scale is editable and locked scale cannot be changed', async () => {
   const seasonMetadataProvider = async () => ({
     currentSeasonId: '20262027',
@@ -454,6 +620,77 @@ test('explicit reset applies the selected center without distributing teams', as
         ),
         true,
       )
+      assert.equal(
+        result.ratings.every(
+          (rating) => !Object.hasOwn(rating, 'seasonStartingRating'),
+        ),
+        true,
+      )
     },
+  )
+})
+
+test('new-season rating reset clears the prior baseline explicitly', async () => {
+  let operations = []
+  const powerRatingModel = {
+    async bulkWrite(nextOperations) {
+      operations = nextOperations
+    },
+    find: () => queryOf([]),
+  }
+
+  await powerRatingsService.resetPowerRatings('user-1', {
+    clearSeasonStartingRating: true,
+    powerRatingModel,
+    startingRatingScale: {
+      center: 46,
+      max: 50,
+      min: 42,
+      mode: 'standard',
+      spread: 8,
+    },
+  })
+
+  assert.equal(operations.length, 32)
+  assert.equal(
+    operations.every(
+      ({ updateOne }) =>
+        updateOne.update.$set.seasonStartingRating === null &&
+        updateOne.update.$set.seasonStartingRatingSeasonId === null,
+    ),
+    true,
+  )
+})
+
+test('ordinary reset to starting center does not rewrite a locked baseline', async () => {
+  let operations = []
+  const powerRatingModel = {
+    async bulkWrite(nextOperations) {
+      operations = nextOperations
+    },
+    find: () => queryOf([]),
+  }
+
+  await powerRatingsService.resetPowerRatings('user-1', {
+    powerRatingModel,
+    startingRatingScale: {
+      center: 46,
+      max: 50,
+      min: 42,
+      mode: 'standard',
+      spread: 8,
+    },
+  })
+
+  assert.equal(
+    operations.every(
+      ({ updateOne }) =>
+        !Object.hasOwn(updateOne.update.$set, 'seasonStartingRating') &&
+        !Object.hasOwn(
+          updateOne.update.$set,
+          'seasonStartingRatingSeasonId',
+        ),
+    ),
+    true,
   )
 })

@@ -39,7 +39,10 @@ import {
 } from '../utils/powerRatingHistory.js'
 import {
   formatPowerRatingDisplayValue,
+  formatSignedPowerRatingDisplayValue,
   getEffectiveBaseRating,
+  getPowerRatingBreakdown,
+  getPowerRatingLeagueRanks,
   parsePowerRatingDraftValue,
 } from '../utils/powerRatings.js'
 import {
@@ -83,7 +86,7 @@ const sortOptions = [
 const ratingFields = [
   {
     key: 'baseRating',
-    label: 'Rating',
+    label: 'Starting Rating',
     min: 0,
     max: 100,
     step: 0.5,
@@ -97,7 +100,7 @@ const ratingFields = [
   },
   {
     key: 'manualAdjustment',
-    label: 'Manual Adj.',
+    label: 'Manual Adjustment',
     min: -25,
     max: 25,
     step: 0.5,
@@ -270,6 +273,9 @@ function PowerRatings({
   const [startingScaleMessage, setStartingScaleMessage] = useState('')
   const [startingScaleMessageTone, setStartingScaleMessageTone] = useState('')
   const [startingScaleLocked, setStartingScaleLocked] = useState(false)
+  const [startingRatingSeasonId, setStartingRatingSeasonId] = useState('')
+  const canEditStartingRatings =
+    startingScaleStatus === 'success' && !startingScaleLocked
 
   const loadStartingScale = () => {
     setStartingScaleStatus('loading')
@@ -283,6 +289,7 @@ function PowerRatings({
         setStartingScale(normalizedScale)
         setStartingScaleDraft(createStartingRatingScaleDraft(normalizedScale))
         setStartingScaleLocked(Boolean(result.locked))
+        setStartingRatingSeasonId(String(result.seasonId ?? ''))
         setStartingScaleStatus('success')
 
         return normalizedScale
@@ -309,6 +316,7 @@ function PowerRatings({
         setStartingScale(normalizedScale)
         setStartingScaleDraft(createStartingRatingScaleDraft(normalizedScale))
         setStartingScaleLocked(Boolean(result.locked))
+        setStartingRatingSeasonId(String(result.seasonId ?? ''))
         setStartingScaleStatus('success')
       })
       .catch((error) => {
@@ -375,20 +383,39 @@ function PowerRatings({
     }
   }, [saveStatus])
 
+  const leagueRanks = useMemo(
+    () => getPowerRatingLeagueRanks(ratings),
+    [ratings],
+  )
   const ratedTeams = useMemo(
     () =>
       NHL_TEAMS.map((team) => {
         const rating = ratings[team.id]
+        const breakdown = getPowerRatingBreakdown(rating, {
+          seasonId: startingRatingSeasonId,
+        })
 
         return {
           ...team,
           baseRating: rating.baseRating,
           effectiveRating: getEffectiveBaseRating(rating),
           homeAdjustment: rating.homeAdjustment,
+          leagueRank: leagueRanks[team.id] ?? null,
           manualAdjustment: rating.manualAdjustment,
+          startingRating: canEditStartingRatings
+            ? rating.baseRating
+            : startingScaleLocked
+              ? breakdown.startingRating
+              : null,
         }
       }),
-    [ratings],
+    [
+      canEditStartingRatings,
+      leagueRanks,
+      ratings,
+      startingRatingSeasonId,
+      startingScaleLocked,
+    ],
   )
 
   const startingScaleDraftValidation = useMemo(
@@ -415,6 +442,10 @@ function PowerRatings({
       let isInvalid = false
 
       ratingFields.forEach((field) => {
+        if (field.key === 'baseRating' && !canEditStartingRatings) {
+          return
+        }
+
         const parsedValue = parsePowerRatingDraftValue(draftTeam[field.key])
 
         if (parsedValue === null) {
@@ -455,7 +486,7 @@ function PowerRatings({
       invalidTeamIds,
       updates,
     }
-  }, [draftRatings, ratings])
+  }, [canEditStartingRatings, draftRatings, ratings])
 
   const summary = useMemo(() => {
     const highestTeam = ratedTeams.reduce((bestTeam, team) =>
@@ -711,6 +742,7 @@ function PowerRatings({
       setStartingScale(normalizedScale)
       setStartingScaleDraft(createStartingRatingScaleDraft(normalizedScale))
       setStartingScaleLocked(Boolean(result.locked))
+      setStartingRatingSeasonId(String(result.seasonId ?? ''))
       setStartingScaleStatus('success')
       setStartingScaleMessage(
         'Starting scale saved. Existing Power Ratings were not changed.',
@@ -1337,6 +1369,27 @@ function PowerRatings({
                       const fieldId = `${team.id}-${field.key}`
                       const isInvalid = draftSummary.invalidFields.has(fieldId)
                       const isDirtyField = draftSummary.dirtyFields.has(fieldId)
+                      const isActive = activeRatingFieldId === fieldId
+                      const parsedDraftValue = parsePowerRatingDraftValue(
+                        draftRatings[team.id]?.[field.key],
+                      )
+                      const showSignedAdjustment =
+                        field.key !== 'baseRating' &&
+                        !isActive &&
+                        !isInvalid &&
+                        parsedDraftValue !== null
+
+                      if (field.key === 'baseRating' && !canEditStartingRatings) {
+                        return (
+                          <div
+                            className="rating-value-field rating-value-readonly"
+                            key={field.key}
+                          >
+                            <span>{field.label}</span>
+                            <strong>{formatRating(team.startingRating)}</strong>
+                          </div>
+                        )
+                      }
 
                       return (
                         <label
@@ -1346,28 +1399,46 @@ function PowerRatings({
                           key={field.key}
                         >
                           <span>{field.label}</span>
-                          <input
-                            aria-invalid={isInvalid}
-                            data-testid={`rating-${team.id}-${field.key}`}
-                            type="number"
-                            min={field.min}
-                            max={field.max}
-                            step={field.step}
-                            value={getDraftInputValue(team.id, field.key)}
-                            inputMode="decimal"
-                            onBlur={() => setActiveRatingFieldId('')}
-                            onChange={(event) =>
-                              handleDraftChange(
-                                team.id,
-                                field.key,
-                                event.target.value,
-                              )
-                            }
-                            onFocus={() => setActiveRatingFieldId(fieldId)}
-                          />
+                          <div className="rating-input-shell">
+                            <input
+                              aria-invalid={isInvalid}
+                              data-testid={`rating-${team.id}-${field.key}`}
+                              type="number"
+                              min={field.min}
+                              max={field.max}
+                              step={field.step}
+                              value={getDraftInputValue(team.id, field.key)}
+                              inputMode="decimal"
+                              onBlur={() => setActiveRatingFieldId('')}
+                              onChange={(event) =>
+                                handleDraftChange(
+                                  team.id,
+                                  field.key,
+                                  event.target.value,
+                                )
+                              }
+                              onFocus={() => setActiveRatingFieldId(fieldId)}
+                            />
+                            {showSignedAdjustment ? (
+                              <output
+                                className="rating-input-formatted"
+                                aria-hidden="true"
+                              >
+                                {formatSignedPowerRatingDisplayValue(
+                                  parsedDraftValue,
+                                )}
+                              </output>
+                            ) : null}
+                          </div>
                         </label>
                       )
                     })}
+
+                    <div className="power-rating-current-value">
+                      <span>Power Rating</span>
+                      <strong>{formatRating(team.effectiveRating)}</strong>
+                      <small>{team.leagueRank ? `#${team.leagueRank}` : '#TBD'}</small>
+                    </div>
 
                     {isDirty ? (
                       <span className="team-rating-status">Unsaved</span>
