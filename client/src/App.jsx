@@ -564,7 +564,7 @@ function AuthenticatedApp({ authUser, onLogout }) {
     const confirmed =
       typeof window === "undefined" ||
       window.confirm(
-        "Import customized local ratings into MongoDB? This only runs while MongoDB still contains default ratings.",
+        "Import customized local ratings into your saved team ratings? This only runs while saved ratings still contain defaults.",
       );
 
     if (!confirmed) {
@@ -586,7 +586,7 @@ function AuthenticatedApp({ authUser, onLogout }) {
 
       if (!arePowerRatingsDefault(normalizedLatestRatings)) {
         throw new Error(
-          "MongoDB ratings are no longer all defaults. Import stopped so existing database values are not overwritten.",
+          "Saved ratings are no longer all defaults. Import stopped so existing values are not overwritten.",
         );
       }
 
@@ -619,7 +619,7 @@ function AuthenticatedApp({ authUser, onLogout }) {
       setMigrationMessage(
         `Imported ${customizedTeamIds.length} customized local ${
           customizedTeamIds.length === 1 ? "rating" : "ratings"
-        } into MongoDB.`,
+        } into your saved ratings.`,
       );
       return nextRatings;
     } catch (error) {

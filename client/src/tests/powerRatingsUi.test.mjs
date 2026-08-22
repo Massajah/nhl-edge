@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { readFile } from 'node:fs/promises'
 import { after, before, test } from 'node:test'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
@@ -24,7 +25,7 @@ after(async () => {
   await vite?.close()
 })
 
-test('Power Ratings renders the polished primary labels and signed adjustments', () => {
+test('Power Ratings renders the polished primary labels and signed adjustments', async () => {
   const ratings = normalizePowerRatings([
     {
       baseRating: 46,
@@ -50,9 +51,35 @@ test('Power Ratings renders the polished primary labels and signed adjustments',
   assert.match(markup, />Starting Rating<\/span>/)
   assert.match(markup, />Home Adjustment<\/span>/)
   assert.match(markup, />Manual Adjustment<\/span>/)
-  assert.match(markup, />Power Rating<\/span><strong>46\.50<\/strong><small>#1<\/small>/)
+  assert.match(
+    markup,
+    />Power Rating<\/span><div class="power-rating-current-display"><strong>46\.50<\/strong><small>#1<\/small><\/div>/,
+  )
   assert.match(markup, /class="rating-input-formatted" aria-hidden="true">\+0\.75<\/output>/)
   assert.match(markup, /class="rating-input-formatted" aria-hidden="true">\+0\.50<\/output>/)
+  assert.match(markup, />32 teams<\/span>/)
+  assert.match(markup, /class="update-ratings-button manual-rating-update-button"/)
+  assert.match(markup, /Manual Rating Update/)
+  assert.doesNotMatch(markup, /Ratings update automatically/)
+  assert.doesNotMatch(markup, /ratings-update-control/)
+  assert.match(markup, /step="0\.1"[^>]*data-testid="rating-ANA-homeAdjustment"|data-testid="rating-ANA-homeAdjustment"[^>]*step="0\.1"/)
+  assert.match(markup, /data-testid="rating-ANA-manualAdjustment"[^>]*step="0\.5"/)
+  assert.doesNotMatch(markup, /MongoDB/)
   assert.doesNotMatch(markup, />Model Rating<\/span>/)
   assert.doesNotMatch(markup, />Current<\/span>/)
+
+  const css = await readFile(new URL('../App.css', import.meta.url), 'utf8')
+
+  assert.match(
+    css,
+    /\.manual-rating-update-button\s*\{[^}]*background:/s,
+  )
+  assert.match(
+    css,
+    /\.manual-rating-update-button\s*\{[^}]*border(?:-color)?:/s,
+  )
+  assert.match(
+    css,
+    /\.save-ratings-button[^}]*\{[^}]*background:\s*var\(--accent\)/s,
+  )
 })

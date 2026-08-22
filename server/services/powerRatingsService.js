@@ -9,7 +9,9 @@ const {
   getRatingHomeAdjustment,
 } = require('./homeAdvantageService')
 const {
+  STARTING_RATING_ASSIGNMENT_STEP,
   getStartingRatingScale,
+  isRatingAlignedToStep,
   updateStartingRatingScale,
   validateStartingRatingAssignment,
 } = require('./startingRatingScaleService')
@@ -206,6 +208,17 @@ const validateUpdatePayload = (payload = {}) => {
       )
     }
 
+    if (
+      field === 'manualAdjustment' &&
+      !isRatingAlignedToStep(value, STARTING_RATING_ASSIGNMENT_STEP)
+    ) {
+      throw new PowerRatingsError(
+        `Manual Adjustment must use ${STARTING_RATING_ASSIGNMENT_STEP}-point increments.`,
+        400,
+        { field, step: STARTING_RATING_ASSIGNMENT_STEP },
+      )
+    }
+
     updates[FIELD_STORAGE_MAP[field] ?? field] = value
     return updates
   }, {})
@@ -282,7 +295,11 @@ const getPowerRatings = async (userId, options = {}) => {
   return ratings.map(serializeRating)
 }
 
-const updatePowerRating = async (userId, teamId, payload) => {
+const resolveStartingRatingLifecycle = async (userId, options = {}) =>
+  options.startingRatingLifecycle ??
+  getStartingRatingScaleLifecycle(userId, options)
+
+const updatePowerRating = async (userId, teamId, payload, options = {}) => {
   const normalizedTeamId = normalizeIdentifier(teamId)
 
   if (!normalizedTeamId) {
@@ -290,7 +307,25 @@ const updatePowerRating = async (userId, teamId, payload) => {
   }
 
   const updates = validateUpdatePayload(payload)
-  const rating = await PowerRating.findOne({
+  const powerRatingModel = getPowerRatingModel(options)
+
+  if (Object.hasOwn(updates, 'baseRating')) {
+    const lifecycle = await resolveStartingRatingLifecycle(userId, options)
+
+    if (lifecycle.locked) {
+      throw new PowerRatingsError(
+        'Starting Rating cannot be changed after live rating updates begin.',
+        409,
+        { field: 'baseRating', seasonId: lifecycle.seasonId },
+      )
+    }
+
+    const startingRatingScale = await resolveStartingRatingScale(userId, options)
+
+    validateStartingRatingAssignment(updates.baseRating, startingRatingScale)
+  }
+
+  const rating = await powerRatingModel.findOne({
     teamId: normalizedTeamId,
     userId,
   })
@@ -332,18 +367,7 @@ const updateStartingPowerRating = async (
   payload,
   options = {},
 ) => {
-  if (
-    payload &&
-    !Array.isArray(payload) &&
-    typeof payload === 'object' &&
-    Object.hasOwn(payload, 'baseRating')
-  ) {
-    const startingRatingScale = await resolveStartingRatingScale(userId, options)
-
-    validateStartingRatingAssignment(payload.baseRating, startingRatingScale)
-  }
-
-  return updatePowerRating(userId, teamId, payload)
+  return updatePowerRating(userId, teamId, payload, options)
 }
 
 const getStartingRatingScaleLifecycle = async (userId, options = {}) => {
@@ -483,6 +507,18 @@ const seedPowerRatings = async (userId, options = {}) => {
 }
 
 const resetPowerRatings = async (userId, options = {}) => {
+  if (!options.clearSeasonStartingRating) {
+    const lifecycle = await resolveStartingRatingLifecycle(userId, options)
+
+    if (lifecycle.locked) {
+      throw new PowerRatingsError(
+        'Power Ratings cannot be reset after Starting Ratings are locked.',
+        409,
+        { seasonId: lifecycle.seasonId },
+      )
+    }
+  }
+
   const powerRatingModel = getPowerRatingModel(options)
   const seedTeams = await getSeedTeams()
   const startingRatingScale = await resolveStartingRatingScale(userId, options)

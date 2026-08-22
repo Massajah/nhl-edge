@@ -614,8 +614,56 @@
   font-size: 0.9rem;
 }
 
+.playoff-bracket-content {
+  display: grid;
+  min-width: 0;
+  gap: 10px;
+}
+
+.playoff-seed-legend {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  color: var(--text-muted);
+  font-size: 0.62rem;
+}
+
+.playoff-seed-legend-title,
+.playoff-seed-legend strong {
+  color: #8197a8;
+  font-weight: 900;
+}
+
+.playoff-seed-legend-title {
+  letter-spacing: 0.075em;
+  text-transform: uppercase;
+}
+
+.playoff-bracket-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) minmax(210px, 1fr);
+  align-items: stretch;
+  gap: 18px;
+}
+
+.playoff-championship-column {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto minmax(0, 1fr);
+  min-width: 0;
+  align-self: stretch;
+}
+
+.playoff-championship-column .playoff-champion-summary {
+  grid-row: 1;
+  width: 100%;
+  align-self: end;
+  margin-bottom: 12px;
+}
+
 .playoff-conferences {
   display: grid;
+  min-width: 0;
   gap: 22px;
 }
 
@@ -637,12 +685,13 @@
 .playoff-rounds {
   display: grid;
   grid-template-columns: minmax(0, 1.35fr) repeat(2, minmax(0, 1fr));
-  align-items: start;
+  align-items: stretch;
   gap: 12px;
 }
 
 .playoff-round {
   display: grid;
+  grid-template-rows: auto 1fr;
   min-width: 0;
   gap: 8px;
 }
@@ -667,7 +716,9 @@
 }
 
 .playoff-series-list {
-  display: grid;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-around;
   gap: 8px;
 }
 
@@ -765,8 +816,8 @@
 
 .stanley-cup-final {
   display: grid;
-  width: min(430px, 100%);
-  justify-self: center;
+  grid-row: 2;
+  min-width: 0;
   gap: 8px;
   padding: 15px;
   border: 1px solid rgba(245, 202, 97, 0.24);
@@ -774,6 +825,29 @@
   background:
     linear-gradient(145deg, rgba(120, 86, 14, 0.11), transparent 58%),
     rgba(8, 14, 21, 0.58);
+}
+
+@media (max-width: 1080px) {
+  .playoff-bracket-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .playoff-championship-column {
+    grid-template-rows: auto;
+    width: min(430px, 100%);
+    align-self: start;
+    justify-self: center;
+    gap: 12px;
+  }
+
+  .playoff-championship-column .playoff-champion-summary {
+    grid-row: auto;
+    margin-bottom: 0;
+  }
+
+  .stanley-cup-final {
+    grid-row: auto;
+  }
 }
 
 @media (max-width: 720px) {
@@ -845,7 +919,16 @@
 
   .playoff-rounds {
     grid-template-columns: 1fr;
+    align-items: start;
     gap: 16px;
+  }
+
+  .playoff-round {
+    grid-template-rows: auto auto;
+  }
+
+  .playoff-series-list {
+    display: grid;
   }
 
   .playoff-team-name span {
@@ -6285,10 +6368,11 @@
   opacity: 0.5;
 }
 
-.ratings-update-control {
-  display: grid;
-  align-content: end;
-  min-width: 0;
+.power-update-intro {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  line-height: 1.35;
 }
 
 .ratings-update-metadata {
@@ -6398,6 +6482,18 @@
 .power-history-pagination button:focus-visible {
   outline: 3px solid rgba(35, 211, 182, 0.34);
   outline-offset: 2px;
+}
+
+.manual-rating-update-button {
+  border-color: rgba(148, 163, 184, 0.34);
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.manual-rating-update-button:hover {
+  border-color: rgba(148, 163, 184, 0.56);
+  color: var(--text-strong);
+  background: rgba(255, 255, 255, 0.065);
 }
 
 .migration-panel,
@@ -7231,7 +7327,9 @@
 }
 
 .rating-value-readonly {
+  display: grid;
   align-content: end;
+  gap: 5px;
   min-height: 62px;
 }
 
@@ -7244,6 +7342,15 @@
   font-size: 0.92rem;
   font-weight: 900;
   font-variant-numeric: tabular-nums;
+}
+
+.rating-locked-status {
+  justify-self: end;
+  color: var(--text-muted);
+  font-size: 0.62rem;
+  font-weight: 850;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
 .power-rating-current-value {
@@ -7267,6 +7374,19 @@
 .power-rating-current-value strong {
   color: var(--accent);
   font-size: 1rem;
+  font-weight: 950;
+}
+
+.power-rating-current-display {
+  display: flex;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.power-rating-current-display small {
+  color: #9db2c2;
+  font-size: 0.8rem;
   font-weight: 950;
 }
 
@@ -13630,7 +13750,15 @@ optgroup {
     justify-content: flex-start;
   }
 
+  .rating-locked-status {
+    justify-self: start;
+  }
+
   .power-rating-current-value {
     text-align: left;
+  }
+
+  .power-rating-current-display {
+    justify-content: flex-start;
   }
 }

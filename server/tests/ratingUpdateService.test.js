@@ -471,6 +471,7 @@ test('automatic updates preserve baseline and keep manual overlay out of model m
   assert.equal(boston.seasonStartingRating, 44.5)
   assert.equal(boston.seasonStartingRatingSeasonId, '20242025')
   assert.equal(auditRecord.homeRatingBefore, 44.5)
+  assert.equal(Number.isInteger(auditRecord.homeRatingChange * 2), false)
   assertAlmostEqual(
     boston.baseRating - boston.seasonStartingRating,
     auditRecord.homeRatingChange,

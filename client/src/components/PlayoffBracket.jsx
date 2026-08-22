@@ -100,28 +100,48 @@ function PlayoffBracket({
         </p>
       ) : null}
 
-      {result.champion ? <ChampionSummary champion={result.champion} /> : null}
+      <div className="playoff-bracket-content">
+        <aside
+          className="playoff-seed-legend"
+          aria-label="Playoff seed abbreviations"
+        >
+          <span className="playoff-seed-legend-title">Seeds</span>
+          <span><strong>D1–D3</strong> = Division seed</span>
+          <span><strong>WC1–WC2</strong> = Wild Card</span>
+        </aside>
 
-      <div className="playoff-conferences">
-        {['eastern', 'western'].map((conferenceId) => {
-          const conference = result.conferences[conferenceId]
+        <div className="playoff-bracket-layout">
+          <div className="playoff-conferences">
+            {['eastern', 'western'].map((conferenceId) => {
+              const conference = result.conferences[conferenceId]
 
-          return conference ? (
-            <PlayoffConference
-              conference={conference}
-              key={conferenceId}
-            />
-          ) : null
-        })}
-      </div>
+              return conference ? (
+                <PlayoffConference
+                  conference={conference}
+                  key={conferenceId}
+                />
+              ) : null
+            })}
+          </div>
 
-      <section className="stanley-cup-final" aria-labelledby="cup-final-title">
-        <div className="playoff-round-heading">
-          <span>Championship</span>
-          <h3 id="cup-final-title">Stanley Cup Final</h3>
+          <div className="playoff-championship-column">
+            {result.champion ? (
+              <ChampionSummary champion={result.champion} />
+            ) : null}
+
+            <section
+              className="stanley-cup-final"
+              aria-labelledby="cup-final-title"
+            >
+              <div className="playoff-round-heading">
+                <span>Championship</span>
+                <h3 id="cup-final-title">Stanley Cup Final</h3>
+              </div>
+              <SeriesCard series={result.stanleyCupFinal} />
+            </section>
+          </div>
         </div>
-        <SeriesCard series={result.stanleyCupFinal} />
-      </section>
+      </div>
     </div>
   )
 }
@@ -172,7 +192,10 @@ function PlayoffConference({ conference }) {
       </h3>
       <div className="playoff-rounds">
         {conference.rounds.map((round) => (
-          <section className="playoff-round" key={round.id}>
+          <section
+            className={`playoff-round round-${round.number}`}
+            key={round.id}
+          >
             <div className="playoff-round-heading">
               <span>Round {round.number}</span>
               <h4>{round.label}</h4>

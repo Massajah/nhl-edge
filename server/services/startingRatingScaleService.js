@@ -23,6 +23,7 @@ const STANDARD_STARTING_RATING_SPREADS = Object.freeze(
 const STARTING_RATING_SCALE_LIMITS = Object.freeze({
   rating: Object.freeze({ max: 100, min: 0 }),
 })
+const STARTING_RATING_ASSIGNMENT_STEP = 0.5
 const DEFAULT_STARTING_RATING_SCALE = Object.freeze({
   center: BASE_MODEL_V1.startingRatings.center,
   mode: STARTING_RATING_SCALE_MODES.STANDARD,
@@ -58,6 +59,25 @@ const isSupportedRange = ({ max, min }) =>
   min >= STARTING_RATING_SCALE_LIMITS.rating.min &&
   max <= STARTING_RATING_SCALE_LIMITS.rating.max &&
   min < max
+
+const isRatingAlignedToStep = (
+  value,
+  step = STARTING_RATING_ASSIGNMENT_STEP,
+) => {
+  const numericValue = Number(value)
+  const numericStep = Number(step)
+
+  if (!Number.isFinite(numericValue) || !Number.isFinite(numericStep) || numericStep <= 0) {
+    return false
+  }
+
+  const stepCount = numericValue / numericStep
+
+  return Math.abs(stepCount - Math.round(stepCount)) <= 1e-9
+}
+
+const formatStartingRatingBoundary = (value) =>
+  Number(value).toFixed(2).replace(/0$/, '')
 
 const getStandardScaleBySpread = (spread) =>
   STANDARD_STARTING_RATING_SCALES.find(
@@ -304,7 +324,7 @@ const validateStartingRatingAssignment = (value, scale) => {
 
   if (!Number.isFinite(rating)) {
     throw new StartingRatingScaleError(
-      'Starting rating must be a finite number.',
+      'Starting Rating must be a finite number.',
       400,
       { field: 'baseRating' },
     )
@@ -312,12 +332,23 @@ const validateStartingRatingAssignment = (value, scale) => {
 
   if (rating < normalizedScale.min || rating > normalizedScale.max) {
     throw new StartingRatingScaleError(
-      `Starting rating must be between ${normalizedScale.min.toFixed(2)} and ${normalizedScale.max.toFixed(2)} for the selected scale.`,
+      `Starting Rating must be between ${formatStartingRatingBoundary(normalizedScale.min)} and ${formatStartingRatingBoundary(normalizedScale.max)}.`,
       400,
       {
         field: 'baseRating',
         max: normalizedScale.max,
         min: normalizedScale.min,
+      },
+    )
+  }
+
+  if (!isRatingAlignedToStep(rating)) {
+    throw new StartingRatingScaleError(
+      `Starting Rating must use ${STARTING_RATING_ASSIGNMENT_STEP}-point increments.`,
+      400,
+      {
+        field: 'baseRating',
+        step: STARTING_RATING_ASSIGNMENT_STEP,
       },
     )
   }
@@ -329,12 +360,14 @@ module.exports = {
   DEFAULT_STARTING_RATING_SCALE,
   STANDARD_STARTING_RATING_SCALES,
   STANDARD_STARTING_RATING_SPREADS,
+  STARTING_RATING_ASSIGNMENT_STEP,
   STARTING_RATING_SCALE_LIMITS,
   STARTING_RATING_SCALE_MODES,
   StartingRatingScaleError,
   deriveStartingRatingCenterAndSpread,
   deriveStartingRatingRange,
   getStartingRatingScale,
+  isRatingAlignedToStep,
   normalizeStartingRatingScale,
   normalizeStartingRatingScalePayload,
   updateStartingRatingScale,

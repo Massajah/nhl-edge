@@ -890,7 +890,7 @@ test('Dashboard preseason-ready status is neutral and requires no action', () =>
   assert.match(html, /Power Ratings ready for season start/)
   assert.match(html, /automatic-rating-update-status neutral/)
   assert.doesNotMatch(html, /initialization required/i)
-  assert.doesNotMatch(html, /Update Power Ratings<\/button>/)
+  assert.doesNotMatch(html, /Manual Rating Update<\/button>/)
   assertNoInvalidNumbers(html)
 })
 
@@ -910,7 +910,7 @@ test('Dashboard unprocessed-games status links to update workflow', () => {
 
   assert.match(html, /Power Rating update available/)
   assert.match(html, /Completed games are waiting to be processed\./)
-  assert.match(html, /Update Power Ratings/)
+  assert.match(html, /Manual Rating Update/)
   assert.doesNotMatch(html, /initialization required/i)
   assertNoInvalidNumbers(html)
 })

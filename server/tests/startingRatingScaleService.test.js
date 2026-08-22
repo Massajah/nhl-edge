@@ -201,19 +201,25 @@ test('custom scale rejects inverted, malformed and unsupported min/max ranges', 
   )
 })
 
-test('starting assignment validation includes boundaries and rejects outside values', () => {
+test('starting assignment validation enforces scale boundaries and half steps', () => {
   const scale = normalizeStartingRatingScale(DEFAULT_STARTING_RATING_SCALE)
 
   assert.equal(validateStartingRatingAssignment(42, scale), 42)
+  assert.equal(validateStartingRatingAssignment(42.5, scale), 42.5)
   assert.equal(validateStartingRatingAssignment(46, scale), 46)
+  assert.equal(validateStartingRatingAssignment(46.5, scale), 46.5)
   assert.equal(validateStartingRatingAssignment(50, scale), 50)
   assert.throws(
-    () => validateStartingRatingAssignment(41.99, scale),
-    /Starting rating must be between 42\.00 and 50\.00/,
+    () => validateStartingRatingAssignment(41.5, scale),
+    /Starting Rating must be between 42\.0 and 50\.0/,
   )
   assert.throws(
-    () => validateStartingRatingAssignment(50.01, scale),
-    /Starting rating must be between 42\.00 and 50\.00/,
+    () => validateStartingRatingAssignment(50.5, scale),
+    /Starting Rating must be between 42\.0 and 50\.0/,
+  )
+  assert.throws(
+    () => validateStartingRatingAssignment(46.25, scale),
+    /Starting Rating must use 0\.5-point increments/,
   )
 })
 

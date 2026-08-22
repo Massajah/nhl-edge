@@ -1309,7 +1309,7 @@ function AutomaticPowerRatingUpdateStatus({
       </div>
       {hasUnprocessedGames && typeof onOpenManualUpdate === 'function' ? (
         <button type="button" onClick={onOpenManualUpdate}>
-          Update Power Ratings
+          Manual Rating Update
         </button>
       ) : null}
     </div>

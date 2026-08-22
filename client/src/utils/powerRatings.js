@@ -7,6 +7,11 @@ export const HOME_ADJUSTMENT_LIMITS = Object.freeze({
   max: 5,
   min: -5,
 })
+export const MANUAL_POWER_RATING_STEP = 0.5
+export const MANUAL_ADJUSTMENT_LIMITS = Object.freeze({
+  max: 25,
+  min: -25,
+})
 
 export const DEFAULT_POWER_RATING_VALUES = {
   baseRating: BASE_MODEL_V1.startingRatings.center,
@@ -42,6 +47,98 @@ export const parsePowerRatingDraftValue = (value) => {
   const parsedValue = Number(value)
 
   return Number.isFinite(parsedValue) ? parsedValue : null
+}
+
+export const isPowerRatingValueAlignedToStep = (
+  value,
+  step = MANUAL_POWER_RATING_STEP,
+) => {
+  const numericValue = Number(value)
+  const numericStep = Number(step)
+
+  if (
+    !Number.isFinite(numericValue) ||
+    !Number.isFinite(numericStep) ||
+    numericStep <= 0
+  ) {
+    return false
+  }
+
+  const stepCount = numericValue / numericStep
+
+  return Math.abs(stepCount - Math.round(stepCount)) <= 1e-9
+}
+
+const formatManualRatingBoundary = (value) =>
+  Number(value).toFixed(2).replace(/0$/, '')
+
+export const validateStartingRatingManualValue = (value, scale = {}) => {
+  const rating = parsePowerRatingDraftValue(value)
+  const min = Number(scale.min)
+  const max = Number(scale.max)
+
+  if (rating === null) {
+    return {
+      isValid: false,
+      message: 'Starting Rating must be a finite number.',
+      value: null,
+    }
+  }
+
+  if (
+    Number.isFinite(min) &&
+    Number.isFinite(max) &&
+    (rating < min || rating > max)
+  ) {
+    return {
+      isValid: false,
+      message: `Starting Rating must be between ${formatManualRatingBoundary(min)} and ${formatManualRatingBoundary(max)}.`,
+      value: rating,
+    }
+  }
+
+  if (!isPowerRatingValueAlignedToStep(rating)) {
+    return {
+      isValid: false,
+      message: `Starting Rating must use ${MANUAL_POWER_RATING_STEP}-point increments.`,
+      value: rating,
+    }
+  }
+
+  return { isValid: true, message: '', value: rating }
+}
+
+export const validateManualAdjustmentValue = (value) => {
+  const adjustment = parsePowerRatingDraftValue(value)
+
+  if (adjustment === null) {
+    return {
+      isValid: false,
+      message: 'Manual Adjustment must be a finite number.',
+      value: null,
+    }
+  }
+
+  if (
+    adjustment < MANUAL_ADJUSTMENT_LIMITS.min ||
+    adjustment > MANUAL_ADJUSTMENT_LIMITS.max
+  ) {
+    return {
+      isValid: false,
+      message: `Manual Adjustment must be between ${MANUAL_ADJUSTMENT_LIMITS.min} and ${MANUAL_ADJUSTMENT_LIMITS.max}.`,
+      value: adjustment,
+    }
+  }
+
+  if (!isPowerRatingValueAlignedToStep(adjustment)) {
+    return {
+      isValid: false,
+      message: `Manual Adjustment must use ${MANUAL_POWER_RATING_STEP}-point increments.`,
+      value: adjustment,
+    }
+  }
+
+  return { isValid: true, message: '', value: adjustment }
 }
 
 export const formatPowerRatingDisplayValue = (

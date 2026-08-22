@@ -177,12 +177,56 @@ const makeSeries = ({
   winnerTeamId: status === 'complete' ? top?.teamId : null,
 })
 
+const makeSeededSeries = ({
+  bottomSeed = 'D3',
+  conference,
+  id,
+  round = 1,
+  topSeed = 'D1',
+}) => {
+  const series = makeSeries({ conference, id, round })
+
+  return {
+    ...series,
+    higherSeedTeam: { ...series.higherSeedTeam, seed: topSeed },
+    lowerSeedTeam: { ...series.lowerSeedTeam, seed: bottomSeed },
+  }
+}
+
 const makeConference = (id, name) => ({
   id,
   name,
   rounds: [
-    { id: 'round1', label: 'Round 1', number: 1, series: [makeSeries({ id: `${id}-a`, conference: id })] },
-    { id: 'round2', label: 'Round 2', number: 2, series: [makeSeries({ id: `${id}-i`, conference: id, round: 2 })] },
+    {
+      id: 'round1',
+      label: 'Round 1',
+      number: 1,
+      series: [
+        ['D1', 'WC2'],
+        ['D1', 'WC1'],
+        ['D2', 'D3'],
+        ['D2', 'D3'],
+      ].map(([topSeed, bottomSeed], index) =>
+        makeSeededSeries({
+          bottomSeed,
+          conference: id,
+          id: `${id}-round1-${index + 1}`,
+          topSeed,
+        }),
+      ),
+    },
+    {
+      id: 'round2',
+      label: 'Round 2',
+      number: 2,
+      series: Array.from({ length: 2 }, (_, index) =>
+        makeSeededSeries({
+          id: `${id}-round2-${index + 1}`,
+          conference: id,
+          round: 2,
+        }),
+      ),
+    },
     { id: 'conferenceFinal', label: 'Conference Final', number: 3, series: [makeSeries({ id: `${id}-m`, conference: id, round: 3 })] },
   ],
 })
@@ -395,6 +439,123 @@ test('Playoffs uses the same season selector and renders actual historical resul
   assert.match(html, />Winner</)
 })
 
+test('playoff bracket keeps the completed Final in a right-side championship column', async () => {
+  const html = renderStandings({
+    initialPlayoffResult: playoffResult(),
+    initialView: 'playoffs',
+  })
+  const css = await readFile(new URL('../App.css', import.meta.url), 'utf8')
+  const easternIndex = html.indexOf('Eastern Conference')
+  const westernIndex = html.indexOf('Western Conference')
+  const championshipColumnIndex = html.indexOf('class="playoff-championship-column"')
+  const championIndex = html.indexOf('Stanley Cup Champion')
+  const finalIndex = html.indexOf('id="cup-final-title"')
+
+  assert.match(html, /class="playoff-bracket-layout"/)
+  assert.ok(easternIndex >= 0)
+  assert.ok(easternIndex < westernIndex)
+  assert.ok(westernIndex < championshipColumnIndex)
+  assert.ok(championshipColumnIndex < championIndex)
+  assert.ok(championIndex < finalIndex)
+  assert.equal((html.match(/Stanley Cup Champion/g) ?? []).length, 1)
+  assert.match(html, /FLA wins 4–2/)
+  assert.match(html, />Winner</)
+  assert.match(
+    css,
+    /\.playoff-bracket-layout\s*\{[\s\S]*?grid-template-columns: minmax\(0, 3fr\) minmax\(210px, 1fr\)/,
+  )
+  assert.match(
+    css,
+    /\.playoff-championship-column\s*\{[\s\S]*?grid-template-rows: minmax\(0, 1fr\) auto minmax\(0, 1fr\)/,
+  )
+  assert.match(
+    css,
+    /\.stanley-cup-final\s*\{[\s\S]*?grid-row: 2/,
+  )
+})
+
+test('compact seed legend explains every unchanged playoff seed abbreviation', () => {
+  const html = renderStandings({
+    initialPlayoffResult: playoffResult(),
+    initialView: 'playoffs',
+  })
+
+  assert.match(html, /aria-label="Playoff seed abbreviations"/)
+  assert.match(html, /D1–D3/)
+  assert.match(html, /Division seed/)
+  assert.match(html, /WC1–WC2/)
+  assert.match(html, /Wild Card/)
+  for (const seed of ['D1', 'D2', 'D3', 'WC1', 'WC2']) {
+    assert.match(
+      html,
+      new RegExp(`class="playoff-team-seed">${seed}</span>`),
+    )
+  }
+})
+
+test('conference brackets preserve reusable 4-2-1 midpoint progression', async () => {
+  const html = renderStandings({
+    initialPlayoffResult: playoffResult(),
+    initialView: 'playoffs',
+  })
+  const css = await readFile(new URL('../App.css', import.meta.url), 'utf8')
+  const getRoundSeriesCounts = (roundNumber) =>
+    [
+      ...html.matchAll(
+        new RegExp(
+          `<section class="playoff-round round-${roundNumber}">([\\s\\S]*?)</section>`,
+          'g',
+        ),
+      ),
+    ].map(
+      (match) =>
+        (match[1].match(/class="playoff-series-card/g) ?? []).length,
+    )
+
+  assert.deepEqual(getRoundSeriesCounts(1), [4, 4])
+  assert.deepEqual(getRoundSeriesCounts(2), [2, 2])
+  assert.deepEqual(getRoundSeriesCounts(3), [1, 1])
+  assert.match(
+    css,
+    /\.playoff-round\s*\{[\s\S]*?grid-template-rows: auto 1fr/,
+  )
+  assert.match(
+    css,
+    /\.playoff-series-list\s*\{[\s\S]*?display: flex[\s\S]*?justify-content: space-around/,
+  )
+})
+
+test('championship column preserves the pending Final when one team is unknown', () => {
+  const pendingFinal = makeSeries({
+    bottom: null,
+    conference: '',
+    id: 'series-o',
+    round: 4,
+    status: 'pending',
+    top: makePlayoffTeam({
+      abbreviation: 'FLA',
+      name: 'Florida Panthers',
+      wins: null,
+    }),
+  })
+  const html = renderStandings({
+    initialPlayoffResult: playoffResult({
+      champion: null,
+      stanleyCupFinal: pendingFinal,
+    }),
+    initialView: 'playoffs',
+  })
+
+  assert.match(html, /class="stanley-cup-final"/)
+  assert.match(html, /class="playoff-championship-column"/)
+  assert.match(html, /Championship/)
+  assert.match(html, /Stanley Cup Final/)
+  assert.match(html, /Florida Panthers/)
+  assert.match(html, />TBD</)
+  assert.match(html, /Matchup TBD/)
+  assert.doesNotMatch(html, /Stanley Cup Champion/)
+})
+
 test('projected playoff view is explicitly a standings snapshot with TBD future rounds', () => {
   const projectedSeries = makeSeries({
     id: 'projected-a',
@@ -597,12 +758,16 @@ test('standings grouping and formatting are deterministic and safe', () => {
   )
 })
 
-test('playoff bracket responsive layout stacks rounds on narrow screens', async () => {
+test('playoff bracket moves the Final below conferences and stacks rounds on narrow screens', async () => {
   const css = await readFile(new URL('../App.css', import.meta.url), 'utf8')
 
   assert.match(
     css,
-    /@media \(max-width: 720px\)[\s\S]*\.playoff-rounds[\s\S]*grid-template-columns: 1fr/,
+    /@media \(max-width: 1080px\)[\s\S]*?\.playoff-bracket-layout[\s\S]*?grid-template-columns: 1fr[\s\S]*?\.playoff-championship-column[\s\S]*?grid-template-rows: auto[\s\S]*?width: min\(430px, 100%\)[\s\S]*?\.stanley-cup-final[\s\S]*?grid-row: auto/,
+  )
+  assert.match(
+    css,
+    /@media \(max-width: 720px\)[\s\S]*?\.playoff-rounds[\s\S]*?grid-template-columns: 1fr[\s\S]*?\.playoff-series-list[\s\S]*?display: grid/,
   )
 })
 

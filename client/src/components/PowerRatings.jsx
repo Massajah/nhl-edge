@@ -38,12 +38,15 @@ import {
   validatePowerRatingHistoryFilters,
 } from '../utils/powerRatingHistory.js'
 import {
+  MANUAL_POWER_RATING_STEP,
   formatPowerRatingDisplayValue,
   formatSignedPowerRatingDisplayValue,
   getEffectiveBaseRating,
   getPowerRatingBreakdown,
   getPowerRatingLeagueRanks,
   parsePowerRatingDraftValue,
+  validateManualAdjustmentValue,
+  validateStartingRatingManualValue,
 } from '../utils/powerRatings.js'
 import {
   DEFAULT_STARTING_RATING_SCALE,
@@ -89,7 +92,7 @@ const ratingFields = [
     label: 'Starting Rating',
     min: 0,
     max: 100,
-    step: 0.5,
+    step: MANUAL_POWER_RATING_STEP,
   },
   {
     key: 'homeAdjustment',
@@ -103,7 +106,7 @@ const ratingFields = [
     label: 'Manual Adjustment',
     min: -25,
     max: 25,
-    step: 0.5,
+    step: MANUAL_POWER_RATING_STEP,
   },
 ]
 
@@ -433,6 +436,7 @@ function PowerRatings({
     const dirtyFields = new Set()
     const invalidTeamIds = []
     const invalidFields = new Set()
+    const invalidMessages = new Map()
 
     NHL_TEAMS.forEach((team) => {
       const rating = ratings[team.id]
@@ -451,22 +455,43 @@ function PowerRatings({
         if (parsedValue === null) {
           isInvalid = true
           invalidFields.add(`${team.id}-${field.key}`)
-          return
-        }
-
-        if (parsedValue < field.min || parsedValue > field.max) {
-          isInvalid = true
-          invalidFields.add(`${team.id}-${field.key}`)
+          invalidMessages.set(
+            `${team.id}-${field.key}`,
+            `${field.label} must be a finite number.`,
+          )
           return
         }
 
         const isDirtyField = parsedValue !== rating[field.key]
 
-        if (isDirtyField) {
-          isDirty = true
-          dirtyFields.add(`${team.id}-${field.key}`)
-          teamUpdate[field.key] = parsedValue
+        if (!isDirtyField) {
+          return
         }
+
+        const validation =
+          field.key === 'baseRating'
+            ? validateStartingRatingManualValue(parsedValue, startingScale)
+            : field.key === 'manualAdjustment'
+              ? validateManualAdjustmentValue(parsedValue)
+              : {
+                  isValid:
+                    parsedValue >= field.min && parsedValue <= field.max,
+                  message: `${field.label} must be between ${field.min} and ${field.max}.`,
+                }
+
+        if (!validation.isValid) {
+          isInvalid = true
+          invalidFields.add(`${team.id}-${field.key}`)
+          invalidMessages.set(
+            `${team.id}-${field.key}`,
+            validation.message,
+          )
+          return
+        }
+
+        isDirty = true
+        dirtyFields.add(`${team.id}-${field.key}`)
+        teamUpdate[field.key] = parsedValue
       })
 
       if (isInvalid) {
@@ -483,10 +508,11 @@ function PowerRatings({
       dirtyFields,
       dirtyTeamIds,
       invalidFields,
+      invalidMessages,
       invalidTeamIds,
       updates,
     }
-  }, [canEditStartingRatings, draftRatings, ratings])
+  }, [canEditStartingRatings, draftRatings, ratings, startingScale])
 
   const summary = useMemo(() => {
     const highestTeam = ratedTeams.reduce((bestTeam, team) =>
@@ -793,7 +819,10 @@ function PowerRatings({
   const handleSave = async () => {
     if (draftSummary.invalidTeamIds.length > 0) {
       setSaveStatus('error')
-      setSaveMessage('Fix invalid rating values before saving.')
+      setSaveMessage(
+        draftSummary.invalidMessages.values().next().value ||
+          'Fix invalid rating values before saving.',
+      )
       return
     }
 
@@ -821,7 +850,7 @@ function PowerRatings({
     const confirmed =
       typeof window === 'undefined' ||
       window.confirm(
-        `Reset all power ratings in MongoDB to the selected starting center (${startingScale.center.toFixed(2)}) and clear team adjustments? This will replace every team rating.`,
+        `Reset all power ratings to the selected starting center (${startingScale.center.toFixed(2)}) and clear team adjustments? This will replace every team rating.`,
       )
 
     if (!confirmed) {
@@ -1115,10 +1144,8 @@ function PowerRatings({
                     : 'records'
                 }`
               : status === 'success'
-                ? `${ratingsCount} MongoDB ${
-                    ratingsCount === 1 ? 'team' : 'teams'
-                  }`
-                : 'MongoDB ratings'}
+                ? pluralizeTeams(ratingsCount)
+                : 'Team ratings'}
           </span>
         </div>
 
@@ -1158,7 +1185,7 @@ function PowerRatings({
             {status === 'empty' ? (
               <RatingsState
                 actionLabel="Seed teams"
-                message="MongoDB does not have power ratings yet. Seed the 32 NHL teams before editing or calculating games."
+                message="Power ratings have not been initialized yet. Seed the 32 NHL teams before editing or calculating games."
                 onAction={onRetry}
                 title="No power ratings found"
               />
@@ -1171,7 +1198,7 @@ function PowerRatings({
                 <div>
                   <strong>Local custom ratings found</strong>
                   <p>
-                    MongoDB still has default values. Importing is optional and
+                    Saved ratings still have default values. Importing is optional and
                     will only happen after confirmation.
                   </p>
                 </div>
@@ -1267,17 +1294,15 @@ function PowerRatings({
                 </select>
               </label>
 
-              <div className="ratings-update-control">
-                <button
-                  className="update-ratings-button"
-                  type="button"
-                  disabled={isSaving || isResetting}
-                  onClick={handleOpenUpdatePanel}
-                >
-                  <RefreshCw aria-hidden="true" size={16} />
-                  <span>Update Power Ratings</span>
-                </button>
-              </div>
+              <button
+                className="update-ratings-button manual-rating-update-button"
+                type="button"
+                disabled={isSaving || isResetting}
+                onClick={handleOpenUpdatePanel}
+              >
+                <RefreshCw aria-hidden="true" size={16} />
+                <span>Manual Rating Update</span>
+              </button>
 
               <button
                 className="save-ratings-button"
@@ -1293,20 +1318,22 @@ function PowerRatings({
                 {saveButtonLabel}
               </button>
 
-              <button
-                className="reset-button"
-                type="button"
-                disabled={
-                  isSaving ||
-                  isResetting ||
-                  !startingScaleReady ||
-                  startingScaleDirty ||
-                  startingScaleIsSaving
-                }
-                onClick={handleReset}
-              >
-                {isResetting ? 'Resetting...' : 'Reset to starting center'}
-              </button>
+              {!startingScaleLocked ? (
+                <button
+                  className="reset-button"
+                  type="button"
+                  disabled={
+                    isSaving ||
+                    isResetting ||
+                    !startingScaleReady ||
+                    startingScaleDirty ||
+                    startingScaleIsSaving
+                  }
+                  onClick={handleReset}
+                >
+                  {isResetting ? 'Resetting...' : 'Reset to starting center'}
+                </button>
+              ) : null}
             </div>
 
             {lastUpdateInfo ? (
@@ -1368,6 +1395,8 @@ function PowerRatings({
                     {ratingFields.map((field) => {
                       const fieldId = `${team.id}-${field.key}`
                       const isInvalid = draftSummary.invalidFields.has(fieldId)
+                      const invalidMessage =
+                        draftSummary.invalidMessages.get(fieldId) ?? ''
                       const isDirtyField = draftSummary.dirtyFields.has(fieldId)
                       const isActive = activeRatingFieldId === fieldId
                       const parsedDraftValue = parsePowerRatingDraftValue(
@@ -1387,6 +1416,11 @@ function PowerRatings({
                           >
                             <span>{field.label}</span>
                             <strong>{formatRating(team.startingRating)}</strong>
+                            {startingScaleLocked ? (
+                              <small className="rating-locked-status">
+                                Locked
+                              </small>
+                            ) : null}
                           </div>
                         )
                       }
@@ -1404,8 +1438,16 @@ function PowerRatings({
                               aria-invalid={isInvalid}
                               data-testid={`rating-${team.id}-${field.key}`}
                               type="number"
-                              min={field.min}
-                              max={field.max}
+                              min={
+                                field.key === 'baseRating'
+                                  ? startingScale.min
+                                  : field.min
+                              }
+                              max={
+                                field.key === 'baseRating'
+                                  ? startingScale.max
+                                  : field.max
+                              }
                               step={field.step}
                               value={getDraftInputValue(team.id, field.key)}
                               inputMode="decimal"
@@ -1430,14 +1472,23 @@ function PowerRatings({
                               </output>
                             ) : null}
                           </div>
+                          {invalidMessage ? (
+                            <small className="rating-field-error">
+                              {invalidMessage}
+                            </small>
+                          ) : null}
                         </label>
                       )
                     })}
 
                     <div className="power-rating-current-value">
                       <span>Power Rating</span>
-                      <strong>{formatRating(team.effectiveRating)}</strong>
-                      <small>{team.leagueRank ? `#${team.leagueRank}` : '#TBD'}</small>
+                      <div className="power-rating-current-display">
+                        <strong>{formatRating(team.effectiveRating)}</strong>
+                        <small>
+                          {team.leagueRank ? `#${team.leagueRank}` : '#TBD'}
+                        </small>
+                      </div>
                     </div>
 
                     {isDirty ? (
@@ -1571,7 +1622,7 @@ function StartingRatingScaleCard({
         ) : null}
 
         <span className={`starting-scale-status ${locked ? 'locked' : ''}`}>
-          {locked ? 'Starting scale locked' : 'Preseason'}
+          {locked ? 'Regular season · Locked' : 'Preseason'}
         </span>
 
         {isCustom ? (
@@ -2207,13 +2258,19 @@ function PowerRatingUpdatePanel({
         <form className="power-update-form" onSubmit={onRun}>
           <div className="power-update-modal-header">
             <div>
-              <p className="eyebrow">Manual Update</p>
-              <h3 id="power-rating-update-title">Update Power Ratings</h3>
+              <p className="eyebrow">Manual recovery</p>
+              <h3 id="power-rating-update-title">Manual Rating Update</h3>
             </div>
             <button type="button" disabled={isRunning} onClick={onClose}>
               Close
             </button>
           </div>
+
+          <p className="power-update-intro">
+            Ratings update automatically from processed completed games. Use
+            this manual update for completed games that have not yet been
+            applied.
+          </p>
 
           <div className="power-update-date-grid">
             <label className="field" htmlFor="power-update-from">

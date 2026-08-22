@@ -376,14 +376,19 @@ regular-season boundaries. Prior-season records do not lock the next preseason.
 `PUT /api/power-ratings/starting-scale` returns `409` when locked; while
 unlocked, it persists configuration only and never writes team ratings.
 
-New-team seeding and explicit `POST /api/power-ratings/reset` use the selected
+New-team seeding and preseason `POST /api/power-ratings/reset` use the selected
 center. A scale change alone never resets or redistributes current ratings, and
 existing live values outside the range are neither clamped nor invalidated.
-The scale lock does not affect normal `PUT /api/power-ratings/:teamId` edits,
-automatic or manual Rating Engine updates, Home Adjustment, or Manual
-Adjustment. The explicit starting-assignment endpoint remains available for
-initialization workflows, but ordinary Power Ratings editing is never routed
-through it automatically. Probability Scale, K factor, rating formulas, Home
+New manual Starting Rating assignments through either team-rating endpoint must
+stay inside the selected scale and use `0.5`-point increments. Both Starting
+Rating writes and ordinary reset return `409` after the canonical lifecycle
+locks; the internal New Season Reset explicitly clears the prior baseline and
+returns initialization to preseason.
+
+The lock does not affect automatic Rating Engine updates, Home Adjustment, or
+Manual Adjustment. New Manual Adjustment edits use `0.5`-point increments,
+while automatic rating deltas retain full engine precision and Home Adjustment
+keeps its `0.1` UI step. Probability Scale, K factor, rating formulas, Home
 Advantage, and Rating Lab are unchanged.
 
 ## Power Rating Updates

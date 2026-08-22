@@ -120,7 +120,7 @@ test('default team Home Adjustment is zero', async () => {
   )
 })
 
-test('Power Ratings update API accepts homeAdjustment and stores compatibility field', async () => {
+test('Power Ratings update API preserves 0.1 Home Adjustment inputs', async () => {
   const userId = new mongoose.Types.ObjectId().toString()
   const document = {
     _id: new mongoose.Types.ObjectId(),
@@ -145,13 +145,64 @@ test('Power Ratings update API accepts homeAdjustment and stores compatibility f
   await withPatches(
     [[PowerRating, 'findOne', async () => document]],
     async () => {
-      const rating = await powerRatingsService.updatePowerRating(userId, 'BOS', {
-        homeAdjustment: -1.2,
-      })
+      for (const homeAdjustment of [-0.2, 0.3, 0.5]) {
+        const rating = await powerRatingsService.updatePowerRating(
+          userId,
+          'BOS',
+          { homeAdjustment },
+        )
 
-      assert.equal(document.homeAdvantage, -1.2)
-      assert.equal(rating.homeAdjustment, -1.2)
-      assert.equal(Object.hasOwn(rating, 'homeAdvantage'), false)
+        assert.equal(document.homeAdvantage, homeAdjustment)
+        assert.equal(rating.homeAdjustment, homeAdjustment)
+        assert.equal(Object.hasOwn(rating, 'homeAdvantage'), false)
+      }
+    },
+  )
+})
+
+test('new Manual Adjustment edits require 0.5-point increments', async () => {
+  const userId = new mongoose.Types.ObjectId().toString()
+  const document = {
+    _id: new mongoose.Types.ObjectId(),
+    abbreviation: 'BOS',
+    baseRating: 49.173,
+    homeAdvantage: 0.3,
+    lastRatingChange: 0.173,
+    manualAdjustment: 0,
+    save: async () => {},
+    teamId: 'BOS',
+    teamName: 'Boston Bruins',
+    toJSON() {
+      return { ...this, id: this._id.toString(), userId }
+    },
+    userId,
+  }
+
+  await withPatches(
+    [[PowerRating, 'findOne', async () => document]],
+    async () => {
+      for (const manualAdjustment of [0, 0.5, -0.5, 1]) {
+        await powerRatingsService.updatePowerRating(userId, 'BOS', {
+          manualAdjustment,
+        })
+        assert.equal(document.manualAdjustment, manualAdjustment)
+        assert.equal(document.baseRating, 49.173)
+      }
+
+      await assert.rejects(
+        () =>
+          powerRatingsService.updatePowerRating(userId, 'BOS', {
+            manualAdjustment: 0.25,
+          }),
+        /Manual Adjustment must use 0\.5-point increments/,
+      )
+
+      document.manualAdjustment = 0.25
+      await powerRatingsService.updatePowerRating(userId, 'BOS', {
+        homeAdjustment: 0.4,
+      })
+      assert.equal(document.manualAdjustment, 0.25)
+      assert.equal(document.baseRating, 49.173)
     },
   )
 })
@@ -181,7 +232,7 @@ test('season starting rating is read-only through ordinary rating updates', asyn
   )
 })
 
-test('explicit starting assignments use the selected scale while live edits remain free', async () => {
+test('manual Starting Rating edits use the selected scale, half steps, and lifecycle lock', async () => {
   const userId = new mongoose.Types.ObjectId().toString()
   const document = {
     _id: new mongoose.Types.ObjectId(),
@@ -207,16 +258,21 @@ test('explicit starting assignments use the selected scale while live edits rema
     mode: 'standard',
     spread: 8,
   }
+  const unlockedLifecycle = {
+    locked: false,
+    seasonId: '20262027',
+    status: 'preseason',
+  }
 
   await withPatches(
     [[PowerRating, 'findOne', async () => document]],
     async () => {
-      for (const baseRating of [42, 46, 50]) {
+      for (const baseRating of [42, 42.5, 46, 50]) {
         const rating = await powerRatingsService.updateStartingPowerRating(
           userId,
           'BOS',
           { baseRating },
-          { startingRatingScale },
+          { startingRatingLifecycle: unlockedLifecycle, startingRatingScale },
         )
 
         assert.equal(rating.baseRating, baseRating)
@@ -227,39 +283,61 @@ test('explicit starting assignments use the selected scale while live edits rema
           powerRatingsService.updateStartingPowerRating(
             userId,
             'BOS',
-            { baseRating: 41.99 },
-            { startingRatingScale },
+            { baseRating: 41.5 },
+            { startingRatingLifecycle: unlockedLifecycle, startingRatingScale },
           ),
-        /Starting rating must be between 42\.00 and 50\.00/,
+        /Starting Rating must be between 42\.0 and 50\.0/,
       )
       await assert.rejects(
         () =>
           powerRatingsService.updateStartingPowerRating(
             userId,
             'BOS',
-            { baseRating: 50.01 },
-            { startingRatingScale },
+            { baseRating: 50.5 },
+            { startingRatingLifecycle: unlockedLifecycle, startingRatingScale },
           ),
-        /Starting rating must be between 42\.00 and 50\.00/,
+        /Starting Rating must be between 42\.0 and 50\.0/,
+      )
+      await assert.rejects(
+        () =>
+          powerRatingsService.updateStartingPowerRating(
+            userId,
+            'BOS',
+            { baseRating: 46.25 },
+            { startingRatingLifecycle: unlockedLifecycle, startingRatingScale },
+          ),
+        /Starting Rating must use 0\.5-point increments/,
       )
 
-      const liveRating = await powerRatingsService.updatePowerRating(
-        userId,
-        'BOS',
-        { baseRating: 51.4 },
+      await assert.rejects(
+        () =>
+          powerRatingsService.updatePowerRating(
+            userId,
+            'BOS',
+            { baseRating: 48.5 },
+            {
+              startingRatingLifecycle: {
+                locked: true,
+                seasonId: '20262027',
+                status: 'locked',
+              },
+              startingRatingScale,
+            },
+          ),
+        (error) =>
+          error.statusCode === 409 &&
+          /Starting Rating cannot be changed/.test(error.message),
       )
-
-      assert.equal(liveRating.baseRating, 51.4)
 
       const unchangedLiveRating =
         await powerRatingsService.updateStartingPowerRating(
           userId,
           'BOS',
           { homeAdjustment: 0.5 },
-          { startingRatingScale },
+          { startingRatingLifecycle: unlockedLifecycle, startingRatingScale },
         )
 
-      assert.equal(unchangedLiveRating.baseRating, 51.4)
+      assert.equal(unchangedLiveRating.baseRating, 50)
       assert.equal(unchangedLiveRating.homeAdjustment, 0.5)
     },
   )
@@ -599,6 +677,11 @@ test('explicit reset applies the selected center without distributing teams', as
     ],
     async () => {
       const result = await powerRatingsService.resetPowerRatings(userId, {
+        startingRatingLifecycle: {
+          locked: false,
+          seasonId: '20262027',
+          status: 'preseason',
+        },
         startingRatingScale: {
           center: 47.5,
           max: 52,
@@ -662,7 +745,7 @@ test('new-season rating reset clears the prior baseline explicitly', async () =>
   )
 })
 
-test('ordinary reset to starting center does not rewrite a locked baseline', async () => {
+test('unlocked ordinary reset does not rewrite a captured season baseline', async () => {
   let operations = []
   const powerRatingModel = {
     async bulkWrite(nextOperations) {
@@ -673,6 +756,11 @@ test('ordinary reset to starting center does not rewrite a locked baseline', asy
 
   await powerRatingsService.resetPowerRatings('user-1', {
     powerRatingModel,
+    startingRatingLifecycle: {
+      locked: false,
+      seasonId: '20262027',
+      status: 'preseason',
+    },
     startingRatingScale: {
       center: 46,
       max: 50,
@@ -693,4 +781,36 @@ test('ordinary reset to starting center does not rewrite a locked baseline', asy
     ),
     true,
   )
+})
+
+test('ordinary reset is rejected after Starting Ratings lock', async () => {
+  let writeAttempted = false
+
+  await assert.rejects(
+    () =>
+      powerRatingsService.resetPowerRatings('user-1', {
+        powerRatingModel: {
+          async bulkWrite() {
+            writeAttempted = true
+          },
+        },
+        startingRatingLifecycle: {
+          locked: true,
+          seasonId: '20262027',
+          status: 'locked',
+        },
+        startingRatingScale: {
+          center: 46,
+          max: 50,
+          min: 42,
+          mode: 'standard',
+          spread: 8,
+        },
+      }),
+    (error) =>
+      error.statusCode === 409 &&
+      error.message ===
+        'Power Ratings cannot be reset after Starting Ratings are locked.',
+  )
+  assert.equal(writeAttempted, false)
 })

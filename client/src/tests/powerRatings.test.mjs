@@ -5,6 +5,7 @@ import { createInputsForTeams } from '../utils/modelAnalysis.js'
 import { calculateGame } from '../utils/calculateGame.js'
 import {
   DEFAULT_POWER_RATING_VALUES,
+  MANUAL_POWER_RATING_STEP,
   formatPowerRatingDisplayValue,
   formatSignedHomeAdjustment,
   formatSignedPowerRatingDisplayValue,
@@ -14,6 +15,8 @@ import {
   getPowerRatingLeagueRanks,
   normalizePowerRatings,
   parsePowerRatingDraftValue,
+  validateManualAdjustmentValue,
+  validateStartingRatingManualValue,
 } from '../utils/powerRatings.js'
 
 test('Power Rating utilities default team Home Adjustment to zero', () => {
@@ -71,6 +74,40 @@ test('signed Power Rating display formatting includes sign and two decimals', ()
   assert.equal(formatSignedPowerRatingDisplayValue(0), '0.00')
 })
 
+test('manual Starting Rating validation follows the selected scale and half steps', () => {
+  const scale = { max: 50, min: 42 }
+
+  for (const value of [42, 42.5, 46, 46.5, 50]) {
+    assert.equal(
+      validateStartingRatingManualValue(value, scale).isValid,
+      true,
+    )
+  }
+  for (const value of [41.5, 50.5]) {
+    const validation = validateStartingRatingManualValue(value, scale)
+
+    assert.equal(validation.isValid, false)
+    assert.match(validation.message, /between 42\.0 and 50\.0/)
+  }
+
+  const invalidStep = validateStartingRatingManualValue(46.25, scale)
+
+  assert.equal(MANUAL_POWER_RATING_STEP, 0.5)
+  assert.equal(invalidStep.isValid, false)
+  assert.match(invalidStep.message, /0\.5-point increments/)
+})
+
+test('new Manual Adjustment edits use half steps', () => {
+  for (const value of [0, 0.5, -0.5, 1]) {
+    assert.equal(validateManualAdjustmentValue(value).isValid, true)
+  }
+
+  const invalidStep = validateManualAdjustmentValue(0.25)
+
+  assert.equal(invalidStep.isValid, false)
+  assert.match(invalidStep.message, /0\.5-point increments/)
+})
+
 test('Power Rating breakdown separates start, automatic Change, Manual Adjustment, and final Power Rating', () => {
   const breakdown = getPowerRatingBreakdown(
     {
@@ -102,6 +139,22 @@ test('Power Rating breakdown separates start, automatic Change, Manual Adjustmen
     ).startingRating,
     null,
   )
+})
+
+test('precise live rating plus manual overlay excludes Home Adjustment', () => {
+  const breakdown = getPowerRatingBreakdown({
+    baseRating: 49.17,
+    homeAdjustment: 0.3,
+    manualAdjustment: 0.5,
+    seasonStartingRating: 48.5,
+    seasonStartingRatingSeasonId: '20262027',
+  })
+
+  assert.equal(breakdown.startingRating, 48.5)
+  assert.equal(breakdown.modelRating, 49.17)
+  assert.equal(breakdown.manualAdjustment, 0.5)
+  assert.equal(breakdown.currentRating, 49.67)
+  assert.equal(formatPowerRatingDisplayValue(breakdown.currentRating), '49.67')
 })
 
 test('Power Rating breakdown formats negative automatic movement independently from Manual Adjustment', () => {
@@ -258,6 +311,7 @@ test('Power Ratings page explains calibrated starting scale and live-rating free
   assert.match(source, /40–52/)
   assert.match(source, /Live ratings may move outside this range/)
   assert.match(source, /Starting scale cannot be changed after live rating updates begin/)
+  assert.match(source, /Regular season · Locked/)
   assert.match(source, /Minimum starting rating/)
   assert.match(source, /Maximum starting rating/)
   assert.match(source, /Current live range/)
@@ -269,6 +323,19 @@ test('Power Ratings page explains calibrated starting scale and live-rating free
   assert.match(source, /formatSignedPowerRatingDisplayValue/)
   assert.match(source, /className="rating-input-formatted"/)
   assert.match(source, /canEditStartingRatings/)
+  assert.match(
+    source,
+    /field\.key === 'baseRating' && !canEditStartingRatings/,
+  )
+  assert.match(source, /field\.key === 'baseRating'\s*\? startingScale\.min/)
+  assert.match(source, /field\.key === 'baseRating'\s*\? startingScale\.max/)
+  assert.match(source, /!startingScaleLocked/)
+  assert.match(source, /Reset to starting center/)
+  assert.match(source, /Manual Rating Update/)
+  assert.match(source, /Ratings update automatically from processed completed games/)
+  assert.doesNotMatch(source, /Catch Up Ratings/)
+  assert.match(source, /manual-rating-update-button/)
+  assert.doesNotMatch(source, /MongoDB/)
   assert.doesNotMatch(source, /label: 'Model Rating'/)
   assert.doesNotMatch(source, /<span>Current<\/span>/)
   assert.doesNotMatch(source, /League \{team\.leagueRank/)
