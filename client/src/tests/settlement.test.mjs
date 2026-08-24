@@ -146,6 +146,6 @@ test('Bet Tracker triggers settlement only from its explicit action and refreshe
 
   assert.equal((source.match(/await settleCompletedBets\(\)/g) ?? []).length, 1)
   assert.match(source, /onClick=\{handleSettleCompletedBets\}/)
-  assert.match(source, /const refreshedBets = await fetchBets\(\)/)
+  assert.match(source, /await loadBets\(\{ quiet: true \}\)/)
   assert.match(source, /await refreshBankrollQuietly\(\)/)
 })

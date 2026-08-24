@@ -9,12 +9,13 @@ const MONEY_PATTERN = /^(?:0|[1-9]\d*)(?:\.\d{1,2})?$/
 
 export const BANKROLL_DEFAULT_CURRENCY = 'EUR'
 export const BANKROLL_DEFAULT_PAGE = 1
-export const BANKROLL_DEFAULT_LIMIT = 10
-export const BANKROLL_LIMIT_OPTIONS = [10, 25, 50]
+export const BANKROLL_DEFAULT_LIMIT = 5
+export const BANKROLL_LIMIT_OPTIONS = [5, 10, 20]
 export const BANKROLL_PERIOD_ALL_TIME = 'all-time'
 export const BANKROLL_PERIOD_SEASON = 'season'
 export const BANKROLL_PERIOD_CUSTOM = 'custom'
 export const BANKROLL_SEASON_ALL = 'all'
+export const BANKROLL_SEASON_CURRENT = 'current'
 export const BANKROLL_SEASON_CUSTOM = 'custom'
 export const BANKROLL_TRANSACTION_TYPES = [
   'STARTING_BALANCE',
@@ -263,7 +264,13 @@ export const createDefaultBankrollFilters = () => ({
 })
 
 export const getBankrollSeasonById = (seasonMetadata, seasonId) =>
-  seasonMetadata?.seasons?.find((season) => season.id === seasonId) ?? null
+  seasonMetadata?.seasons?.find(
+    (season) =>
+      season.id ===
+      (seasonId === BANKROLL_SEASON_CURRENT
+        ? getCurrentBankrollSeasonId(seasonMetadata)
+        : seasonId),
+  ) ?? null
 
 export const getBankrollPeriodSelectValue = (filters = {}) => {
   if (filters.period === BANKROLL_PERIOD_CUSTOM) {

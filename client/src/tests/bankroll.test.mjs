@@ -147,6 +147,26 @@ test('bankroll period selection follows available season metadata', () => {
   assert.equal(dateFields.to, '2026-04-16')
 })
 
+test('current season selection resolves through canonical season metadata', () => {
+  const metadata =
+    bankrollUtils.normalizeBankrollSeasonsResponse(seasonResponse)
+  const filters = bankrollUtils.applyBankrollPeriodSelection(
+    bankrollUtils.createDefaultBankrollFilters(),
+    bankrollUtils.BANKROLL_SEASON_CURRENT,
+    metadata,
+  )
+
+  assert.equal(filters.period, 'season')
+  assert.equal(filters.season, 'current')
+  assert.equal(
+    bankrollUtils.buildBankrollTransactionsQueryString({
+      filters,
+      seasonMetadata: metadata,
+    }),
+    '?page=1&limit=5&season=20252026',
+  )
+})
+
 test('custom bankroll date validation rejects inverted ranges', () => {
   const validation = bankrollUtils.validateBankrollFilters(
     {
@@ -165,6 +185,68 @@ test('custom bankroll date validation rejects inverted ranges', () => {
   assert.equal(
     validation.fieldErrors.from,
     'Date From must be on or before Date To.',
+  )
+})
+
+test('switching from Custom to a preset makes canonical preset dates authoritative', () => {
+  const metadata =
+    bankrollUtils.normalizeBankrollSeasonsResponse(seasonResponse)
+  const customFilters = {
+    from: '2026-01-01',
+    period: bankrollUtils.BANKROLL_PERIOD_CUSTOM,
+    season: bankrollUtils.BANKROLL_SEASON_CUSTOM,
+    to: '2026-01-31',
+    type: '',
+  }
+  const presetFilters = bankrollUtils.applyBankrollPeriodSelection(
+    customFilters,
+    '20252026',
+    metadata,
+  )
+
+  assert.equal(presetFilters.from, '2025-10-07')
+  assert.equal(presetFilters.to, '2026-04-16')
+  assert.equal(
+    bankrollUtils.buildBankrollTransactionsQueryString({
+      filters: presetFilters,
+      seasonMetadata: metadata,
+    }),
+    '?page=1&limit=5&season=20252026',
+  )
+
+  const allTimeFilters = bankrollUtils.applyBankrollPeriodSelection(
+    customFilters,
+    bankrollUtils.BANKROLL_SEASON_ALL,
+    metadata,
+  )
+
+  assert.equal(allTimeFilters.from, '')
+  assert.equal(allTimeFilters.to, '')
+  assert.equal(
+    bankrollUtils.buildBankrollTransactionsQueryString({
+      filters: allTimeFilters,
+      seasonMetadata: metadata,
+    }),
+    '?page=1&limit=5',
+  )
+})
+
+test('Custom filtering continues to send its validated manual date range', () => {
+  const filters = {
+    from: '2026-01-01',
+    period: bankrollUtils.BANKROLL_PERIOD_CUSTOM,
+    season: bankrollUtils.BANKROLL_SEASON_CUSTOM,
+    to: '2026-01-31',
+    type: '',
+  }
+  const validation = bankrollUtils.validateBankrollFilters(filters, {
+    today: '2026-02-01',
+  })
+
+  assert.equal(validation.isValid, true)
+  assert.equal(
+    bankrollUtils.buildBankrollTransactionsQueryString({ filters }),
+    '?page=1&limit=5&from=2026-01-01&to=2026-01-31',
   )
 })
 
@@ -337,5 +419,14 @@ test('transactions API includes pagination, period, and type filters', async () 
   assert.equal(
     capturedRequests[0].url,
     '/api/bankroll/transactions?page=2&limit=10&season=20252026&type=DEPOSIT',
+  )
+})
+
+test('transaction history defaults to 5 rows and supports 5, 10, and 20', () => {
+  assert.equal(bankrollUtils.BANKROLL_DEFAULT_LIMIT, 5)
+  assert.deepEqual(bankrollUtils.BANKROLL_LIMIT_OPTIONS, [5, 10, 20])
+  assert.equal(
+    bankrollUtils.buildBankrollTransactionsQueryString(),
+    '?page=1&limit=5',
   )
 })

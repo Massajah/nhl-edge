@@ -3,6 +3,24 @@ const betSettlementService = require('../services/betSettlementService')
 
 const getBets = async (request, response, next) => {
   try {
+    const usesPaginatedQuery = [
+      'page',
+      'limit',
+      'result',
+      'modelStatus',
+      'season',
+    ].some((field) => request.query[field] !== undefined)
+
+    if (usesPaginatedQuery) {
+      const result = await betsService.getBetsPage(
+        request.user.id,
+        request.query,
+      )
+
+      response.json(result)
+      return
+    }
+
     const bets = await betsService.getBets(request.user.id)
 
     response.json({ bets })

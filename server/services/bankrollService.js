@@ -11,8 +11,9 @@ const DEFAULT_BANKROLL_CURRENCY =
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/
 const MONEY_PATTERN = /^(?:0|[1-9]\d*)(?:\.\d{1,2})?$/
 const DEFAULT_TRANSACTION_PAGE = 1
-const DEFAULT_TRANSACTION_LIMIT = 10
-const MAX_TRANSACTION_LIMIT = 100
+const DEFAULT_TRANSACTION_LIMIT = 5
+const SUPPORTED_TRANSACTION_LIMITS = Object.freeze([5, 10, 20])
+const MAX_TRANSACTION_LIMIT = Math.max(...SUPPORTED_TRANSACTION_LIMITS)
 const SUMMARY_PERIODS = Object.freeze(['all-time', 'season', 'custom'])
 const SEASON_ALL = 'all'
 const SEASON_CUSTOM = 'custom'
@@ -445,6 +446,17 @@ const normalizeTransactionQuery = async (query = {}, options = {}) => {
   })
   const type = normalizeTransactionType(query.type)
   const seasonValue = String(query.season ?? '').trim()
+
+  if (!SUPPORTED_TRANSACTION_LIMITS.includes(limit)) {
+    throw new BankrollError(
+      `limit must be one of: ${SUPPORTED_TRANSACTION_LIMITS.join(', ')}.`,
+      400,
+      {
+        field: 'limit',
+        supportedValues: SUPPORTED_TRANSACTION_LIMITS,
+      },
+    )
+  }
 
   if (seasonValue && seasonValue !== SEASON_ALL && seasonValue !== SEASON_CUSTOM) {
     const boundary = await resolveSeasonBoundary(seasonValue, options)
@@ -1598,6 +1610,7 @@ module.exports = {
   DEFAULT_TRANSACTION_LIMIT,
   DEFAULT_TRANSACTION_PAGE,
   MAX_TRANSACTION_LIMIT,
+  SUPPORTED_TRANSACTION_LIMITS,
   SEASON_ALL,
   SEASON_CUSTOM,
   SUMMARY_PERIODS,

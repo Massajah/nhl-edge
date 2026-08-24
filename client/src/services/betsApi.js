@@ -1,4 +1,8 @@
 import { apiRequest } from './apiClient.js'
+import {
+  buildBetHistoryQueryString,
+  normalizeBetHistoryResponse,
+} from '../utils/betHistory.js'
 
 const requestBets = async (path, options = {}) => {
   return apiRequest(path, options, {
@@ -36,6 +40,14 @@ export const deleteBet = async (id) => {
   })
 
   return data.bet
+}
+
+export const fetchBetsPage = async (params = {}) => {
+  const data = await requestBets(
+    `/api/bets${buildBetHistoryQueryString(params)}`,
+  )
+
+  return normalizeBetHistoryResponse(data)
 }
 
 export const settleCompletedBets = async () => {

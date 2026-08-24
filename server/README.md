@@ -541,6 +541,9 @@ Protected endpoints:
   newest-first, user-scoped ledger page.
 - `GET /api/bankroll/seasons` reuses the centralized NHL regular-season
   metadata used by Power Rating Update History.
+- `GET /api/bets?page&limit&result&modelStatus` returns a newest-first,
+  user-scoped bet page plus global Bet History summary totals. The legacy
+  `GET /api/bets` response remains available for existing all-bets consumers.
 - `POST /api/bets/settle` checks only the authenticated user's pending bets and
   returns win/loss/pending counts. It is an explicit v1 trigger, not a cron or
   polling worker.

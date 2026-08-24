@@ -1,15 +1,14 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useState } from 'react'
 import {
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
-  Minus,
-  Plus,
+  ChevronUp,
+  FileText,
   RefreshCw,
   WalletCards,
 } from 'lucide-react'
 import {
-  addBankrollDeposit,
-  addBankrollWithdrawal,
   getBankrollSeasons,
   getBankrollSummary,
   getBankrollTransactions,
@@ -19,6 +18,7 @@ import {
   createBet,
   deleteBet,
   fetchBets,
+  fetchBetsPage,
   settleCompletedBets,
   updateBet,
 } from '../services/betsApi.js'
@@ -28,6 +28,7 @@ import {
   BANKROLL_DEFAULT_PAGE,
   BANKROLL_LIMIT_OPTIONS,
   BANKROLL_SEASON_ALL,
+  BANKROLL_SEASON_CURRENT,
   BANKROLL_SEASON_CUSTOM,
   BANKROLL_TRANSACTION_TYPES,
   applyBankrollPeriodSelection,
@@ -39,11 +40,19 @@ import {
   getBankrollPeriodSelectValue,
   getBankrollTransactionLabel,
   getBankrollTransactionTone,
-  getCurrentBankrollSeasonId,
-  validateBankrollCashTransaction,
   validateBankrollFilters,
   validateBankrollInitialization,
 } from '../utils/bankroll.js'
+import {
+  BET_HISTORY_DEFAULT_LIMIT,
+  BET_HISTORY_DEFAULT_PAGE,
+  BET_HISTORY_LIMIT_OPTIONS,
+  BET_HISTORY_MODEL_STATUSES,
+  BET_HISTORY_SEASON_ALL,
+  BET_HISTORY_SEASON_CURRENT,
+  createEmptyBetHistoryResponse,
+  normalizeBetHistoryModelStatus,
+} from '../utils/betHistory.js'
 import {
   BET_RESULT_OPTIONS,
   calculateProfit,
@@ -56,13 +65,11 @@ import {
   normalizeBets,
   removeSavedAnalyses,
 } from '../utils/savedAnalyses.js'
-import {
-  MODEL_STATUSES,
-  PROBABILITY_EDGE_HELP_TEXT,
-} from '../utils/calculateGame.js'
+import { PROBABILITY_EDGE_HELP_TEXT } from '../utils/calculateGame.js'
 import { formatSignedGameContextAdjustment } from '../utils/gameContext.js'
 import { formatGoalieSelectionSnapshot } from '../utils/goalies.js'
 import { formatLocalDateInputValue } from '../utils/powerRatingUpdates.js'
+import BankrollCashActions from './bankroll/BankrollCashActions.jsx'
 
 const filterOptions = [
   {
@@ -93,28 +100,20 @@ const modelStatusFilterOptions = [
     label: 'All statuses',
   },
   {
-    value: MODEL_STATUSES.POSITIVE_VALUE,
-    label: MODEL_STATUSES.POSITIVE_VALUE,
+    value: BET_HISTORY_MODEL_STATUSES.BET_CANDIDATE,
+    label: BET_HISTORY_MODEL_STATUSES.BET_CANDIDATE,
   },
   {
-    value: MODEL_STATUSES.BET_CANDIDATE,
-    label: MODEL_STATUSES.BET_CANDIDATE,
+    value: BET_HISTORY_MODEL_STATUSES.POSITIVE_VALUE_BELOW_THRESHOLD,
+    label: BET_HISTORY_MODEL_STATUSES.POSITIVE_VALUE_BELOW_THRESHOLD,
   },
   {
-    value: MODEL_STATUSES.POSITIVE_VALUE_BELOW_THRESHOLD,
-    label: MODEL_STATUSES.POSITIVE_VALUE_BELOW_THRESHOLD,
+    value: BET_HISTORY_MODEL_STATUSES.NO_VALUE,
+    label: BET_HISTORY_MODEL_STATUSES.NO_VALUE,
   },
   {
-    value: MODEL_STATUSES.BELOW_THRESHOLD,
-    label: MODEL_STATUSES.BELOW_THRESHOLD,
-  },
-  {
-    value: MODEL_STATUSES.NO_VALUE,
-    label: MODEL_STATUSES.NO_VALUE,
-  },
-  {
-    value: MODEL_STATUSES.LEGACY,
-    label: MODEL_STATUSES.LEGACY,
+    value: BET_HISTORY_MODEL_STATUSES.LEGACY,
+    label: BET_HISTORY_MODEL_STATUSES.LEGACY,
   },
 ]
 
@@ -168,6 +167,8 @@ const formatExpectedValue = (value) => {
 const formatUnits = (value) => `${toNumber(value).toFixed(2)}u`
 const formatSignedUnits = (value) =>
   `${toNumber(value) >= 0 ? '+' : ''}${formatUnits(value)}`
+const formatResultProfit = (value) =>
+  toNumber(value) === 0 ? formatUnits(0) : formatSignedUnits(value)
 const formatSignedNumber = (value) => {
   const number = toNullableNumber(value)
   return number === null ? '--' : `${number >= 0 ? '+' : ''}${number.toFixed(1)}`
@@ -192,39 +193,21 @@ const modelStatusClass = (modelStatus = '') =>
 const profitClass = (profit) =>
   profit > 0 ? 'positive' : profit < 0 ? 'negative' : ''
 
-const isSettledResult = (result) => result !== 'pending'
-
-const filterBetsByResult = (bets, filter) => {
-  if (filter === 'all') {
-    return bets
-  }
-
-  if (filter === 'settled') {
-    return bets.filter((bet) => isSettledResult(bet.result))
-  }
-
-  return bets.filter((bet) => bet.result === filter)
-}
-
-const filterBets = (bets, resultFilter, modelStatusFilter) => {
-  const resultFilteredBets = filterBetsByResult(bets, resultFilter)
-
-  if (modelStatusFilter === 'all') {
-    return resultFilteredBets
-  }
-
-  return resultFilteredBets.filter(
-    (bet) => bet.modelStatus === modelStatusFilter,
-  )
-}
-
 function BetTracker() {
   const todayInputValue = useMemo(() => formatLocalDateInputValue(new Date()), [])
   const [bets, setBets] = useState([])
   const [status, setStatus] = useState('loading')
   const [errorMessage, setErrorMessage] = useState('')
   const [filter, setFilter] = useState('pending')
+  const [betSeasonFilter, setBetSeasonFilter] = useState(
+    BET_HISTORY_SEASON_ALL,
+  )
   const [modelStatusFilter, setModelStatusFilter] = useState('all')
+  const [betPage, setBetPage] = useState(BET_HISTORY_DEFAULT_PAGE)
+  const [betLimit, setBetLimit] = useState(BET_HISTORY_DEFAULT_LIMIT)
+  const [betHistory, setBetHistory] = useState(() =>
+    createEmptyBetHistoryResponse(),
+  )
   const [actionMessage, setActionMessage] = useState('')
   const [actionStatus, setActionStatus] = useState('idle')
   const [settlementStatus, setSettlementStatus] = useState('idle')
@@ -255,20 +238,12 @@ function BetTracker() {
     startDate: formatLocalDateInputValue(new Date()),
     startingBalance: '',
   }))
-  const [bankrollCashMode, setBankrollCashMode] = useState('')
-  const [bankrollCashDraft, setBankrollCashDraft] = useState(() => ({
-    amount: '',
-    description: '',
-    occurredAt: formatLocalDateInputValue(new Date()),
-  }))
-
-  const applyBets = useCallback((nextBets) => {
-    const normalizedBets = normalizeBets(nextBets)
-
-    setBets(normalizedBets)
+  const applyBetHistory = useCallback((nextHistory) => {
+    setBetHistory(nextHistory)
+    setBets(nextHistory.items)
     setStatus('success')
 
-    return normalizedBets
+    return nextHistory
   }, [])
 
   const loadBankroll = useCallback(
@@ -325,40 +300,62 @@ function BetTracker() {
     await loadBankroll({ quiet: true })
   }, [bankrollSummary?.initialized, loadBankroll])
 
-  const loadBets = useCallback(async () => {
-    setStatus('loading')
-    setErrorMessage('')
+  const loadBets = useCallback(
+    async ({
+      limit: nextLimit = betLimit,
+      modelStatus: nextModelStatus = modelStatusFilter,
+      page: nextPage = betPage,
+      quiet = false,
+      result: nextResult = filter,
+      season: nextSeason = betSeasonFilter,
+      shouldApply = () => true,
+    } = {}) => {
+      if (!quiet) {
+        setStatus('loading')
+      }
+      setErrorMessage('')
 
-    try {
-      applyBets(await fetchBets())
-      setMigrationAvailable(hasSavedAnalysesInLocalStorage())
-    } catch (error) {
-      setStatus('error')
-      setErrorMessage(error.message)
-    }
-  }, [applyBets])
-
-  useEffect(() => {
-    let isCurrent = true
-
-    const loadInitialBets = async () => {
       try {
-        const nextBets = await fetchBets()
+        const nextHistory = await fetchBetsPage({
+          limit: nextLimit,
+          modelStatus: nextModelStatus,
+          page: nextPage,
+          result: nextResult,
+          season: nextSeason,
+        })
 
-        if (!isCurrent) {
+        if (!shouldApply()) {
           return
         }
 
-        applyBets(nextBets)
+        applyBetHistory(nextHistory)
         setMigrationAvailable(hasSavedAnalysesInLocalStorage())
       } catch (error) {
-        if (!isCurrent) {
+        if (!shouldApply()) {
           return
         }
 
         setStatus('error')
         setErrorMessage(error.message)
       }
+    },
+    [
+      applyBetHistory,
+      betLimit,
+      betPage,
+      betSeasonFilter,
+      filter,
+      modelStatusFilter,
+    ],
+  )
+
+  useEffect(() => {
+    let isCurrent = true
+
+    const loadInitialBets = async () => {
+      await loadBets({
+        shouldApply: () => isCurrent,
+      })
     }
 
     loadInitialBets()
@@ -366,7 +363,7 @@ function BetTracker() {
     return () => {
       isCurrent = false
     }
-  }, [applyBets])
+  }, [loadBets])
 
   useEffect(() => {
     let isCurrent = true
@@ -414,64 +411,10 @@ function BetTracker() {
     }
   }, [loadBankroll])
 
-  const summary = useMemo(
-    () =>
-      bets.reduce(
-        (totals, bet) => {
-          const profit = Number.isFinite(bet.profit)
-            ? bet.profit
-            : calculateProfit(bet)
-          const isSettled = isSettledResult(bet.result)
-
-          totals.totalBets += 1
-          totals.totalProfit += profit
-          totals.totalStake += bet.stake
-
-          if (bet.result === 'win') {
-            totals.wins += 1
-          } else if (bet.result === 'loss') {
-            totals.losses += 1
-          } else if (bet.result === 'push') {
-            totals.pushes += 1
-          } else if (bet.result === 'pending') {
-            totals.pending += 1
-          }
-
-          totals.statusCounts[bet.modelStatus] =
-            (totals.statusCounts[bet.modelStatus] ?? 0) + 1
-
-          if (isSettled) {
-            totals.settledStake += bet.stake
-          }
-
-          return totals
-        },
-        {
-          totalBets: 0,
-          wins: 0,
-          losses: 0,
-          pushes: 0,
-          pending: 0,
-          totalProfit: 0,
-          totalStake: 0,
-          settledStake: 0,
-          statusCounts: {
-            [MODEL_STATUSES.POSITIVE_VALUE]: 0,
-            [MODEL_STATUSES.BELOW_THRESHOLD]: 0,
-            [MODEL_STATUSES.NO_VALUE]: 0,
-            [MODEL_STATUSES.LEGACY]: 0,
-          },
-        },
-      ),
-    [bets],
-  )
+  const summary = betHistory.summary
   const roi = summary.settledStake
     ? summary.totalProfit / summary.settledStake
     : 0
-  const visibleBets = useMemo(
-    () => filterBets(bets, filter, modelStatusFilter),
-    [bets, filter, modelStatusFilter],
-  )
   const bankrollFilterValidation = useMemo(
     () =>
       validateBankrollFilters(bankrollDraftFilters, {
@@ -486,20 +429,6 @@ function BetTracker() {
         today: todayInputValue,
       }),
     [bankrollSetupDraft, todayInputValue],
-  )
-  const bankrollCashValidation = useMemo(
-    () =>
-      validateBankrollCashTransaction(bankrollCashDraft, {
-        currentBankroll: bankrollSummary?.availableBankroll,
-        today: todayInputValue,
-        type: bankrollCashMode || 'DEPOSIT',
-      }),
-    [
-      bankrollCashDraft,
-      bankrollCashMode,
-      bankrollSummary?.availableBankroll,
-      todayInputValue,
-    ],
   )
 
   const replaceBet = (updatedBet) => {
@@ -516,7 +445,10 @@ function BetTracker() {
     replaceBet(updatedBet)
     setActionStatus('success')
     setActionMessage('Bet updated.')
-    await refreshBankrollQuietly()
+    await Promise.all([
+      loadBets({ quiet: true }),
+      refreshBankrollQuietly(),
+    ])
 
     return updatedBet
   }
@@ -534,6 +466,13 @@ function BetTracker() {
     setBets((currentBets) => currentBets.filter((bet) => bet.id !== betId))
     setActionStatus('success')
     setActionMessage('Bet deleted.')
+    const nextPage = bets.length === 1 && betPage > 1 ? betPage - 1 : betPage
+
+    if (nextPage !== betPage) {
+      setBetPage(nextPage)
+    } else {
+      await loadBets({ page: nextPage, quiet: true })
+    }
     await refreshBankrollQuietly()
   }
 
@@ -544,9 +483,8 @@ function BetTracker() {
 
     try {
       const settlementSummary = await settleCompletedBets()
-      const refreshedBets = await fetchBets()
 
-      applyBets(refreshedBets)
+      await loadBets({ quiet: true })
       await refreshBankrollQuietly()
       setSettlementStatus('success')
       setActionStatus('success')
@@ -573,7 +511,7 @@ function BetTracker() {
       window.confirm(
         `Import ${localAnalyses.length} old local saved ${
           localAnalyses.length === 1 ? 'bet' : 'bets'
-        } into MongoDB? Existing matching bets will be skipped.`,
+        } into your Bet Tracker account? Existing matching bets will be skipped.`,
       )
 
     if (!confirmed) {
@@ -603,7 +541,11 @@ function BetTracker() {
         importedBets.push(await createBet(payload))
       }
 
-      applyBets([...importedBets, ...existingBets])
+      setBetPage(BET_HISTORY_DEFAULT_PAGE)
+      await loadBets({
+        page: BET_HISTORY_DEFAULT_PAGE,
+        quiet: true,
+      })
       await refreshBankrollQuietly()
       setMigrationStatus('success')
       setMigrationMessage(
@@ -693,6 +635,7 @@ function BetTracker() {
         [field]: value,
       }
     })
+    setBankrollPage(BANKROLL_DEFAULT_PAGE)
     setBankrollActionStatus('idle')
     setBankrollActionMessage('')
   }
@@ -722,128 +665,51 @@ function BetTracker() {
     setBankrollActionMessage('')
   }
 
-  const handleOpenBankrollCashForm = (mode) => {
-    setBankrollCashMode(mode)
-    setBankrollCashDraft({
-      amount: '',
-      description: '',
-      occurredAt: todayInputValue,
+  const handleBankrollCashTransactionRecorded = async (result) => {
+    setBankrollSummary(result.summary)
+    setBankrollPage(BANKROLL_DEFAULT_PAGE)
+    await loadBankroll({
+      page: BANKROLL_DEFAULT_PAGE,
+      quiet: true,
     })
-    setBankrollActionStatus('idle')
-    setBankrollActionMessage('')
-  }
-
-  const handleBankrollCashDraftChange = (field, value) => {
-    setBankrollCashDraft((currentDraft) => ({
-      ...currentDraft,
-      [field]: value,
-    }))
-    setBankrollActionStatus('idle')
-    setBankrollActionMessage('')
-  }
-
-  const handleSubmitBankrollCashTransaction = async (event) => {
-    event.preventDefault()
-
-    if (!bankrollCashValidation.isValid) {
-      setBankrollActionStatus('error')
-      setBankrollActionMessage(bankrollCashValidation.message)
-      return
-    }
-
-    setBankrollActionStatus('saving')
-    setBankrollActionMessage('')
-
-    try {
-      const result =
-        bankrollCashMode === 'WITHDRAWAL'
-          ? await addBankrollWithdrawal(bankrollCashDraft, {
-              currentBankroll: bankrollSummary?.currentBankroll,
-              type: 'WITHDRAWAL',
-            })
-          : await addBankrollDeposit(bankrollCashDraft)
-
-      setBankrollSummary(result.summary)
-      setBankrollCashMode('')
-      setBankrollCashDraft({
-        amount: '',
-        description: '',
-        occurredAt: todayInputValue,
-      })
-      setBankrollPage(BANKROLL_DEFAULT_PAGE)
-      setBankrollActionStatus('success')
-      setBankrollActionMessage(
-        bankrollCashMode === 'WITHDRAWAL'
-          ? 'Withdrawal recorded.'
-          : 'Deposit recorded.',
-      )
-      await loadBankroll({
-        page: BANKROLL_DEFAULT_PAGE,
-        quiet: true,
-      })
-    } catch (error) {
-      setBankrollActionStatus('error')
-      setBankrollActionMessage(error.message)
-    }
   }
 
   const handleBankrollPageChange = (nextPage) => {
     setBankrollPage(nextPage)
   }
 
+  const handleBetFilterChange = (nextFilter) => {
+    setFilter(nextFilter)
+    setBetPage(BET_HISTORY_DEFAULT_PAGE)
+  }
+
+  const handleBetSeasonFilterChange = (nextFilter) => {
+    setBetSeasonFilter(nextFilter)
+    setBetPage(BET_HISTORY_DEFAULT_PAGE)
+  }
+
+  const handleModelStatusFilterChange = (nextFilter) => {
+    setModelStatusFilter(nextFilter)
+    setBetPage(BET_HISTORY_DEFAULT_PAGE)
+  }
+
   return (
     <section className="bet-tracker-page" aria-label="Bet Tracker">
       <div className="tracker-panel">
-        <div className="section-heading">
+        <div className="section-heading bet-tracker-heading">
           <div>
             <p className="eyebrow">Bet Tracker</p>
-            <h2>Saved Analyses</h2>
+            <h2>Bankroll &amp; Bet History</h2>
           </div>
-          <span>{bets.length} MongoDB saved</span>
+          <span>
+            {summary.totalBets} {summary.totalBets === 1 ? 'bet' : 'bets'} ·{' '}
+            {summary.pending} pending
+          </span>
         </div>
-
-        {migrationAvailable ? (
-          <div className="migration-panel">
-            <div>
-              <strong>Old local saved analyses found</strong>
-              <p>
-                Importing is optional. Local data will stay in place until a
-                successful import and explicit removal.
-              </p>
-            </div>
-            <button
-              type="button"
-              disabled={migrationStatus === 'saving'}
-              onClick={handleImportLocalBets}
-            >
-              {migrationStatus === 'saving' ? 'Importing...' : 'Import old local bets'}
-            </button>
-          </div>
-        ) : null}
-
-        {migrationMessage ? (
-          <div className={`form-status-row ${migrationStatus}`}>
-            <p className={`form-status ${migrationStatus}`}>
-              {migrationMessage}
-            </p>
-            {migrationStatus === 'success' && hasSavedAnalysesInLocalStorage() ? (
-              <button
-                className="secondary-inline-button"
-                type="button"
-                onClick={handleRemoveLocalBets}
-              >
-                Remove old local data
-              </button>
-            ) : null}
-          </div>
-        ) : null}
 
         <BankrollPanel
           actionMessage={bankrollActionMessage}
           actionStatus={bankrollActionStatus}
-          cashDraft={bankrollCashDraft}
-          cashMode={bankrollCashMode}
-          cashValidation={bankrollCashValidation}
           draftFilters={bankrollDraftFilters}
           errorMessage={bankrollErrorMessage}
           filterValidation={bankrollFilterValidation}
@@ -858,7 +724,7 @@ function BetTracker() {
           todayInputValue={todayInputValue}
           transactions={bankrollTransactions}
           onApplyFilters={handleApplyBankrollFilters}
-          onCashDraftChange={handleBankrollCashDraftChange}
+          onCashTransactionRecorded={handleBankrollCashTransactionRecorded}
           onClearFilters={handleClearBankrollFilters}
           onFilterChange={handleBankrollDraftFilterChange}
           onInitialize={handleInitializeBankroll}
@@ -866,7 +732,6 @@ function BetTracker() {
             setBankrollLimit(nextLimit)
             setBankrollPage(BANKROLL_DEFAULT_PAGE)
           }}
-          onOpenCashForm={handleOpenBankrollCashForm}
           onPageChange={handleBankrollPageChange}
           onRefresh={() => loadBankroll()}
           onRetrySeasons={() => {
@@ -884,137 +749,246 @@ function BetTracker() {
               })
           }}
           onSetupChange={handleBankrollSetupChange}
-          onSubmitCashTransaction={handleSubmitBankrollCashTransaction}
         />
 
-        <div className="bet-summary" aria-label="Bet tracker summary">
-          <SummaryMetric
-            label="Total bets"
-            value={String(summary.totalBets)}
-            detail={`${summary.pending} pending`}
-          />
-          <SummaryMetric
-            label="Record"
-            value={`${summary.wins}-${summary.losses}-${summary.pushes}`}
-            detail="W-L-P"
-          />
-          <SummaryMetric
-            label="Total stake"
-            value={formatUnits(summary.totalStake)}
-            detail="All bets"
-          />
-          <SummaryMetric
-            label="Profit"
-            value={formatSignedUnits(summary.totalProfit)}
-            detail="Units"
-            tone={profitClass(summary.totalProfit)}
-          />
-          <SummaryMetric
-            label="ROI"
-            value={formatPercent(roi)}
-            detail={`${formatUnits(summary.settledStake)} settled`}
-            tone={profitClass(roi)}
-          />
-        </div>
+        <section className="bet-history-panel" aria-label="Bet History">
+          <div className="bet-history-heading">
+            <div>
+              <p className="eyebrow">Bet History</p>
+              <h3>Saved bets / analyses</h3>
+            </div>
+            <span>{betHistory.pagination.totalItems} matching</span>
+          </div>
 
-        <div className="status-count-summary" aria-label="Model status counts">
-          {modelStatusFilterOptions
-            .filter((option) => option.value !== 'all')
-            .map((option) => (
-              <span
-                className={`status-count-pill ${modelStatusClass(option.value)}`}
-                key={option.value}
+          {migrationAvailable ? (
+            <div className="migration-panel">
+              <div>
+                <strong>Old local saved analyses found</strong>
+                <p>
+                  Importing is optional. Local data will stay in place until a
+                  successful import and explicit removal.
+                </p>
+              </div>
+              <button
+                type="button"
+                disabled={migrationStatus === 'saving'}
+                onClick={handleImportLocalBets}
               >
-                {option.label}: {summary.statusCounts[option.value] ?? 0}
-              </span>
-            ))}
-        </div>
+                {migrationStatus === 'saving'
+                  ? 'Importing...'
+                  : 'Import old local bets'}
+              </button>
+            </div>
+          ) : null}
 
-        <div className="tracker-toolbar">
-          <label className="field tracker-field" htmlFor="bet-filter">
-            <span>Result</span>
-            <select
-              id="bet-filter"
-              value={filter}
-              onChange={(event) => setFilter(event.target.value)}
-            >
-              {filterOptions.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
+          {migrationMessage ? (
+            <div className={`form-status-row ${migrationStatus}`}>
+              <p className={`form-status ${migrationStatus}`}>
+                {migrationMessage}
+              </p>
+              {migrationStatus === 'success' &&
+              hasSavedAnalysesInLocalStorage() ? (
+                <button
+                  className="secondary-inline-button"
+                  type="button"
+                  onClick={handleRemoveLocalBets}
+                >
+                  Remove old local data
+                </button>
+              ) : null}
+            </div>
+          ) : null}
 
-          <label className="field tracker-field" htmlFor="model-status-filter">
-            <span>Model status</span>
-            <select
-              id="model-status-filter"
-              value={modelStatusFilter}
-              onChange={(event) => setModelStatusFilter(event.target.value)}
-            >
-              {modelStatusFilterOptions.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <button type="button" onClick={loadBets}>
-            Refresh
-          </button>
-          <button
-            className="secondary-inline-button"
-            type="button"
-            disabled={settlementStatus === 'saving'}
-            onClick={handleSettleCompletedBets}
-          >
-            <RefreshCw aria-hidden="true" size={15} />
-            <span>
-              {settlementStatus === 'saving'
-                ? 'Checking results...'
-                : 'Settle completed bets'}
-            </span>
-          </button>
-        </div>
-
-        {actionMessage ? (
-          <p className={`form-status ${actionStatus}`}>{actionMessage}</p>
-        ) : null}
-
-        {status === 'loading' ? <TrackerLoadingState /> : null}
-
-        {status === 'error' ? (
-          <div className="ratings-state error" role="alert">
-            <strong>Bet Tracker unavailable</strong>
-            <p>{errorMessage}</p>
-            <button type="button" onClick={loadBets}>
-              Try again
-            </button>
+          <div className="bet-summary" aria-label="Bet history summary">
+            <SummaryMetric
+              label="Total bets"
+              value={String(summary.totalBets)}
+              detail={`${summary.pending} pending`}
+            />
+            <SummaryMetric
+              label="Record"
+              value={`${summary.wins}-${summary.losses}-${summary.pushes}`}
+              detail="W-L-P"
+            />
+            <SummaryMetric
+              label="Total stake"
+              value={formatUnits(summary.totalStake)}
+              detail="Selected scope · units"
+            />
+            <SummaryMetric
+              label="Profit"
+              value={formatSignedUnits(summary.totalProfit)}
+              detail="Units"
+              tone={profitClass(summary.totalProfit)}
+            />
+            <SummaryMetric
+              label="ROI"
+              value={formatPercent(roi)}
+              detail={`${formatUnits(summary.settledStake)} settled`}
+              tone={profitClass(roi)}
+            />
           </div>
-        ) : null}
 
-        {status === 'success' && visibleBets.length ? (
-          <div className="bet-list">
-            {visibleBets.map((bet) => (
-              <BetCard
-                bet={bet}
-                key={`${bet.id}-${bet.updatedAt ?? ''}`}
-                onDelete={() => handleDeleteBet(bet.id)}
-                onUpdate={(updates) => handleUpdateBet(bet.id, updates)}
-              />
-            ))}
+          <div className="status-count-summary" aria-label="Model status counts">
+            {modelStatusFilterOptions
+              .filter((option) => option.value !== 'all')
+              .map((option) => (
+                <span
+                  className={`status-count-pill ${modelStatusClass(option.value)}`}
+                  key={option.value}
+                >
+                  {option.label}: {summary.statusCounts[option.value] ?? 0}
+                </span>
+              ))}
           </div>
-        ) : null}
 
-        {status === 'success' && !visibleBets.length ? (
-          <p className="empty-state">
-            {bets.length
-              ? 'No bets match that filter.'
-              : 'No saved analyses yet.'}
+          <div className="tracker-toolbar">
+            <label className="field tracker-field" htmlFor="bet-season-filter">
+              <span>Season</span>
+              <select
+                id="bet-season-filter"
+                value={betSeasonFilter}
+                onChange={(event) =>
+                  handleBetSeasonFilterChange(event.target.value)
+                }
+              >
+                <option value={BET_HISTORY_SEASON_ALL}>All time</option>
+                <option value={BET_HISTORY_SEASON_CURRENT}>Current season</option>
+                {bankrollSeasonMetadata?.seasons?.map((season) => (
+                  <option key={season.id} value={season.id}>
+                    {season.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="field tracker-field" htmlFor="bet-filter">
+              <span>Result</span>
+              <select
+                id="bet-filter"
+                value={filter}
+                onChange={(event) => handleBetFilterChange(event.target.value)}
+              >
+                {filterOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="field tracker-field" htmlFor="model-status-filter">
+              <span>Model status</span>
+              <select
+                id="model-status-filter"
+                value={modelStatusFilter}
+                onChange={(event) =>
+                  handleModelStatusFilterChange(event.target.value)
+                }
+              >
+                {modelStatusFilterOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="field tracker-field bet-history-rows" htmlFor="bet-limit">
+              <span>Rows</span>
+              <select
+                id="bet-limit"
+                value={betLimit}
+                onChange={(event) => {
+                  setBetLimit(Number(event.target.value))
+                  setBetPage(BET_HISTORY_DEFAULT_PAGE)
+                }}
+              >
+                {BET_HISTORY_LIMIT_OPTIONS.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <div className="bet-history-actions">
+              <button
+                className="secondary-inline-button"
+                type="button"
+                disabled={status === 'loading'}
+                onClick={() => loadBets()}
+              >
+                <RefreshCw aria-hidden="true" size={15} />
+                <span>Refresh</span>
+              </button>
+              <button
+                className="secondary-inline-button"
+                type="button"
+                disabled={settlementStatus === 'saving'}
+                title="Manually check pending linked moneyline bets against final NHL results."
+                onClick={handleSettleCompletedBets}
+              >
+                <RefreshCw aria-hidden="true" size={15} />
+                <span>
+                  {settlementStatus === 'saving'
+                    ? 'Checking results...'
+                    : 'Settle completed bets'}
+                </span>
+              </button>
+            </div>
+          </div>
+
+          <p className="settlement-action-help">
+            Settlement is a manual fallback check for pending linked moneyline
+            bets.
           </p>
-        ) : null}
+
+          {actionMessage ? (
+            <p className={`form-status ${actionStatus}`}>{actionMessage}</p>
+          ) : null}
+
+          {status === 'loading' ? <TrackerLoadingState /> : null}
+
+          {status === 'error' ? (
+            <div className="ratings-state error" role="alert">
+              <strong>Bet History unavailable</strong>
+              <p>{errorMessage}</p>
+              <button type="button" onClick={() => loadBets()}>
+                Try again
+              </button>
+            </div>
+          ) : null}
+
+          {status === 'success' && bets.length ? (
+            <>
+              <BetListHeader />
+              <div className="bet-list">
+                {bets.map((bet) => (
+                  <BetCard
+                    bet={bet}
+                    key={bet.id}
+                    onDelete={() => handleDeleteBet(bet.id)}
+                    onUpdate={(updates) => handleUpdateBet(bet.id, updates)}
+                  />
+                ))}
+              </div>
+              <BetHistoryPagination
+                pagination={betHistory.pagination}
+                status={status}
+                onPageChange={setBetPage}
+              />
+            </>
+          ) : null}
+
+          {status === 'success' && !bets.length ? (
+            <p className="empty-state">
+              {summary.totalBets
+                ? 'No bets match that filter.'
+                : 'No saved analyses yet.'}
+            </p>
+          ) : null}
+        </section>
       </div>
     </section>
   )
@@ -1037,9 +1011,6 @@ function TrackerLoadingState() {
 function BankrollPanel({
   actionMessage,
   actionStatus,
-  cashDraft,
-  cashMode,
-  cashValidation,
   draftFilters,
   errorMessage,
   filterValidation,
@@ -1054,17 +1025,15 @@ function BankrollPanel({
   todayInputValue,
   transactions,
   onApplyFilters,
-  onCashDraftChange,
+  onCashTransactionRecorded,
   onClearFilters,
   onFilterChange,
   onInitialize,
   onLimitChange,
-  onOpenCashForm,
   onPageChange,
   onRefresh,
   onRetrySeasons,
   onSetupChange,
-  onSubmitCashTransaction,
 }) {
   const isLoading = status === 'loading' && !summary
   const isInitialized = Boolean(summary?.initialized)
@@ -1133,6 +1102,13 @@ function BankrollPanel({
       {isInitialized ? (
         <>
           <BankrollSummaryCards summary={summary} />
+          <BankrollCashActions
+            availableBankroll={summary.availableBankroll}
+            currency={summary.currency}
+            currentBankroll={summary.currentBankroll}
+            todayInputValue={todayInputValue}
+            onTransactionRecorded={onCashTransactionRecorded}
+          />
           <BankrollControls
             draftFilters={draftFilters}
             filterValidation={filterValidation}
@@ -1146,17 +1122,6 @@ function BankrollPanel({
             onFilterChange={onFilterChange}
             onLimitChange={onLimitChange}
             onRefresh={onRefresh}
-          />
-          <BankrollCashActions
-            cashDraft={cashDraft}
-            cashMode={cashMode}
-            currency={summary.currency}
-            isSaving={isSaving}
-            todayInputValue={todayInputValue}
-            validation={cashValidation}
-            onCashDraftChange={onCashDraftChange}
-            onOpenCashForm={onOpenCashForm}
-            onSubmitCashTransaction={onSubmitCashTransaction}
           />
           <BankrollLedger
             currency={summary.currency}
@@ -1287,7 +1252,7 @@ function BankrollSummaryCards({ summary }) {
           summary.bettingProfit,
           summary.currency,
         )}
-        detail={`${summary.settledBets} settled`}
+        detail="Selected period"
         tone={profitClass(summary.bettingProfit)}
       />
       <SummaryMetric
@@ -1295,17 +1260,6 @@ function BankrollSummaryCards({ summary }) {
         value={formatBankrollCurrency(summary.pendingStake, summary.currency)}
         detail="Open stakes"
         tone={summary.pendingStake > 0 ? 'negative' : ''}
-      />
-      <SummaryMetric
-        label="Deposits"
-        value={formatBankrollCurrency(summary.deposits, summary.currency)}
-        detail="Selected period"
-      />
-      <SummaryMetric
-        label="Withdrawals"
-        value={formatBankrollCurrency(summary.withdrawals, summary.currency)}
-        detail="Selected period"
-        tone={summary.withdrawals > 0 ? 'negative' : ''}
       />
     </div>
   )
@@ -1327,13 +1281,18 @@ function BankrollControls({
 }) {
   const periodValue = getBankrollPeriodSelectValue(draftFilters)
   const dateFields = getBankrollDateFields(draftFilters, seasonMetadata)
+  const isCustomPeriod = periodValue === BANKROLL_SEASON_CUSTOM
   const hasSeasonOptions = seasonMetadata?.seasons?.length > 0
-  const currentSeasonId = getCurrentBankrollSeasonId(seasonMetadata)
   const hasActiveFilters =
     periodValue !== BANKROLL_SEASON_ALL || Boolean(draftFilters.type)
 
   return (
-    <form className="bankroll-toolbar" onSubmit={onApplyFilters}>
+    <form
+      className={`bankroll-toolbar${
+        isCustomPeriod ? ' bankroll-toolbar-custom' : ''
+      }`}
+      onSubmit={onApplyFilters}
+    >
       <label className="field tracker-field" htmlFor="bankroll-period">
         <span>Period</span>
         <select
@@ -1343,15 +1302,14 @@ function BankrollControls({
           onChange={(event) => onFilterChange('period', event.target.value)}
         >
           <option value={BANKROLL_SEASON_ALL}>All time</option>
+          <option value={BANKROLL_SEASON_CURRENT}>Current season</option>
           {seasonStatus === 'loading' ? (
             <option value={periodValue}>Loading seasons...</option>
           ) : null}
           {seasonStatus !== 'loading' && hasSeasonOptions
             ? seasonMetadata.seasons.map((season) => (
                 <option key={season.id} value={season.id}>
-                  {season.id === currentSeasonId
-                    ? `Current season - ${season.label}`
-                    : season.label}
+                  {season.label}
                 </option>
               ))
             : null}
@@ -1364,39 +1322,39 @@ function BankrollControls({
         </small>
       </label>
 
-      <label className="field tracker-field" htmlFor="bankroll-from">
-        <span>Date From</span>
-        <input
-          aria-invalid={Boolean(filterValidation.fieldErrors.from)}
-          aria-readonly={dateFields.disabled}
-          disabled={dateFields.disabled}
-          id="bankroll-from"
-          max={todayInputValue}
-          type="date"
-          value={dateFields.from}
-          onChange={(event) => onFilterChange('from', event.target.value)}
-        />
-        <small className="field-error-slot">
-          {filterValidation.fieldErrors.from || ' '}
-        </small>
-      </label>
+      {isCustomPeriod ? (
+        <>
+          <label className="field tracker-field" htmlFor="bankroll-from">
+            <span>Date From</span>
+            <input
+              aria-invalid={Boolean(filterValidation.fieldErrors.from)}
+              id="bankroll-from"
+              max={todayInputValue}
+              type="date"
+              value={dateFields.from}
+              onChange={(event) => onFilterChange('from', event.target.value)}
+            />
+            <small className="field-error-slot">
+              {filterValidation.fieldErrors.from || ' '}
+            </small>
+          </label>
 
-      <label className="field tracker-field" htmlFor="bankroll-to">
-        <span>Date To</span>
-        <input
-          aria-invalid={Boolean(filterValidation.fieldErrors.to)}
-          aria-readonly={dateFields.disabled}
-          disabled={dateFields.disabled}
-          id="bankroll-to"
-          max={todayInputValue}
-          type="date"
-          value={dateFields.to}
-          onChange={(event) => onFilterChange('to', event.target.value)}
-        />
-        <small className="field-error-slot">
-          {filterValidation.fieldErrors.to || ' '}
-        </small>
-      </label>
+          <label className="field tracker-field" htmlFor="bankroll-to">
+            <span>Date To</span>
+            <input
+              aria-invalid={Boolean(filterValidation.fieldErrors.to)}
+              id="bankroll-to"
+              max={todayInputValue}
+              type="date"
+              value={dateFields.to}
+              onChange={(event) => onFilterChange('to', event.target.value)}
+            />
+            <small className="field-error-slot">
+              {filterValidation.fieldErrors.to || ' '}
+            </small>
+          </label>
+        </>
+      ) : null}
 
       <label className="field tracker-field" htmlFor="bankroll-type">
         <span>Ledger Type</span>
@@ -1452,132 +1410,6 @@ function BankrollControls({
         >
           <RefreshCw aria-hidden="true" size={15} />
           <span>Refresh</span>
-        </button>
-      </div>
-    </form>
-  )
-}
-
-function BankrollCashActions({
-  cashDraft,
-  cashMode,
-  currency,
-  isSaving,
-  todayInputValue,
-  validation,
-  onCashDraftChange,
-  onOpenCashForm,
-  onSubmitCashTransaction,
-}) {
-  return (
-    <div className="bankroll-cash-section">
-      <div className="bankroll-cash-actions">
-        <button
-          type="button"
-          disabled={isSaving}
-          onClick={() => onOpenCashForm('DEPOSIT')}
-        >
-          <Plus aria-hidden="true" size={15} />
-          <span>Add Deposit</span>
-        </button>
-        <button
-          className="secondary-inline-button"
-          type="button"
-          disabled={isSaving}
-          onClick={() => onOpenCashForm('WITHDRAWAL')}
-        >
-          <Minus aria-hidden="true" size={15} />
-          <span>Add Withdrawal</span>
-        </button>
-      </div>
-
-      {cashMode ? (
-        <BankrollCashForm
-          cashDraft={cashDraft}
-          cashMode={cashMode}
-          currency={currency}
-          isSaving={isSaving}
-          todayInputValue={todayInputValue}
-          validation={validation}
-          onCashDraftChange={onCashDraftChange}
-          onSubmitCashTransaction={onSubmitCashTransaction}
-        />
-      ) : null}
-    </div>
-  )
-}
-
-function BankrollCashForm({
-  cashDraft,
-  cashMode,
-  currency,
-  isSaving,
-  todayInputValue,
-  validation,
-  onCashDraftChange,
-  onSubmitCashTransaction,
-}) {
-  const modeLabel = cashMode === 'WITHDRAWAL' ? 'Withdrawal' : 'Deposit'
-
-  return (
-    <form className="bankroll-cash-form" onSubmit={onSubmitCashTransaction}>
-      <label className="field tracker-field" htmlFor="bankroll-cash-amount">
-        <span>{modeLabel} Amount</span>
-        <input
-          aria-invalid={Boolean(validation.fieldErrors.amount)}
-          id="bankroll-cash-amount"
-          inputMode="decimal"
-          min="0.01"
-          step="0.01"
-          type="number"
-          value={cashDraft.amount}
-          onChange={(event) =>
-            onCashDraftChange('amount', event.target.value)
-          }
-        />
-        <small className="field-error-slot">
-          {validation.fieldErrors.amount || currency}
-        </small>
-      </label>
-
-      <label className="field tracker-field" htmlFor="bankroll-cash-date">
-        <span>Date</span>
-        <input
-          aria-invalid={Boolean(validation.fieldErrors.occurredAt)}
-          id="bankroll-cash-date"
-          max={todayInputValue}
-          type="date"
-          value={cashDraft.occurredAt}
-          onChange={(event) =>
-            onCashDraftChange('occurredAt', event.target.value)
-          }
-        />
-        <small className="field-error-slot">
-          {validation.fieldErrors.occurredAt || ' '}
-        </small>
-      </label>
-
-      <label className="field tracker-field" htmlFor="bankroll-cash-description">
-        <span>Description</span>
-        <input
-          id="bankroll-cash-description"
-          type="text"
-          value={cashDraft.description}
-          onChange={(event) =>
-            onCashDraftChange('description', event.target.value)
-          }
-        />
-        <small className="field-error-slot"> </small>
-      </label>
-
-      <div className="bankroll-form-actions">
-        <button type="submit" disabled={isSaving}>
-          {cashMode === 'WITHDRAWAL' ? (
-            <Minus aria-hidden="true" size={15} />
-          ) : (
-            <Plus aria-hidden="true" size={15} />
-          )}
-          <span>{isSaving ? 'Saving...' : `Save ${modeLabel}`}</span>
         </button>
       </div>
     </form>
@@ -1644,11 +1476,10 @@ function BankrollLedger({ currency, status, transactions, onPageChange }) {
           onClick={() => onPageChange(Math.max(1, pagination.page - 1))}
         >
           <ChevronLeft aria-hidden="true" size={15} />
-          <span>Previous</span>
+          <span>Prev</span>
         </button>
         <span>
-          Page {pagination.page}
-          {pagination.totalPages ? ` of ${pagination.totalPages}` : ''}
+          Page {pagination.page} / {pagination.totalPages || 1}
         </span>
         <button
           className="secondary-inline-button"
@@ -1674,19 +1505,90 @@ function SummaryMetric({ label, value, detail, tone = '' }) {
   )
 }
 
-function BetCard({ bet, onDelete, onUpdate }) {
+function BetListHeader() {
+  return (
+    <div className="bet-list-header" aria-hidden="true">
+      <span>Date</span>
+      <span>Game</span>
+      <span>Pick</span>
+      <span>Market odds</span>
+      <span>Stake (u)</span>
+      <span>Model status</span>
+      <span>Result / Profit (u)</span>
+      <span>Details</span>
+    </div>
+  )
+}
+
+function BetHistoryPagination({ pagination, status, onPageChange }) {
+  const isLoading = status === 'loading'
+
+  return (
+    <div className="bet-history-pagination" aria-label="Bet history pages">
+      <button
+        className="secondary-inline-button"
+        type="button"
+        disabled={isLoading || !pagination.hasPreviousPage}
+        onClick={() => onPageChange(Math.max(1, pagination.page - 1))}
+      >
+        <ChevronLeft aria-hidden="true" size={15} />
+        <span>Prev</span>
+      </button>
+      <span>
+        Page {pagination.page} / {pagination.totalPages || 1}
+      </span>
+      <button
+        className="secondary-inline-button"
+        type="button"
+        disabled={isLoading || !pagination.hasNextPage}
+        onClick={() => onPageChange(pagination.page + 1)}
+      >
+        <span>Next</span>
+        <ChevronRight aria-hidden="true" size={15} />
+      </button>
+    </div>
+  )
+}
+
+const getCompactResultLabel = (result) => {
+  if (result === 'win') {
+    return 'Won'
+  }
+
+  if (result === 'loss') {
+    return 'Lost'
+  }
+
+  if (result === 'void') {
+    return 'Void'
+  }
+
+  if (result === 'push') {
+    return 'Push'
+  }
+
+  return 'Pending'
+}
+
+function BetCard({ bet, initialExpanded = false, onDelete, onUpdate }) {
   const [draft, setDraft] = useState(() => ({
     closingOdds: bet.closingOdds === '' ? '' : String(bet.closingOdds),
     notes: bet.notes,
     sportsbook: bet.sportsbook,
     stake: String(bet.stake),
   }))
+  const [isExpanded, setIsExpanded] = useState(initialExpanded)
   const [status, setStatus] = useState('idle')
   const [message, setMessage] = useState('')
+  const detailsId = useId()
 
   const profit = Number.isFinite(bet.profit) ? bet.profit : calculateProfit(bet)
   const settlementDisplay = getBetSettlementDisplay(bet)
   const isSettled = bet.result !== 'pending'
+  const compactResultLabel = getCompactResultLabel(bet.result)
+  const displayModelStatus = normalizeBetHistoryModelStatus(
+    bet.recommendationState || bet.modelStatus,
+  )
 
   const updateField = async (updates) => {
     setStatus('saving')
@@ -1755,164 +1657,235 @@ function BetCard({ bet, onDelete, onUpdate }) {
   }
 
   return (
-    <article className={`bet-card ${modelStatusClass(bet.modelStatus)}`}>
-      <div className="bet-card-main">
-        <div className="bet-date">
-          <span>Date</span>
+    <article className={`bet-card ${modelStatusClass(displayModelStatus)}`}>
+      <div className="bet-compact-row">
+        <div className="bet-compact-date">
+          <span className="bet-compact-label">Date</span>
           <strong>{formatDate(bet.analyzedAt)}</strong>
         </div>
 
-        <div className="bet-game">
-          <span>Game</span>
+        <div className="bet-compact-game">
+          <span className="bet-compact-label">Game</span>
           <strong>
-            {bet.homeTeam.name} vs {bet.awayTeam.name}
+            {bet.awayTeam.abbreviation} vs {bet.homeTeam.abbreviation}
           </strong>
           <small>
-            {bet.homeTeam.abbreviation} vs {bet.awayTeam.abbreviation}
+            {bet.awayTeam.name} @ {bet.homeTeam.name}
           </small>
         </div>
 
-        <div className="bet-side">
-          <span>Selected side</span>
+        <div className="bet-compact-pick">
+          <span className="bet-compact-label">Pick</span>
           <strong>{bet.selectedSide.name}</strong>
-          <small>{bet.selectedSide.homeAway === 'home' ? 'Home' : 'Away'}</small>
         </div>
-        <div className={`bet-settlement-status ${settlementDisplay.tone}`}>
-          <span>Settlement</span>
-          <strong>{settlementDisplay.label}</strong>
-          <small>{settlementDisplay.message}</small>
-          {settlementDisplay.finalScore ? (
-            <small>{settlementDisplay.finalScore}</small>
-          ) : null}
+
+        <div className="bet-compact-odds">
+          <span className="bet-compact-label">Market odds</span>
+          <strong>@{formatOdds(bet.marketOdds)}</strong>
         </div>
-      </div>
 
-      <div className="bet-odds-grid">
-        <BetStat
-          label="Model status"
-          value={bet.modelStatus}
-          tone={modelStatusClass(bet.modelStatus)}
-        />
-        <BetStat label="Fair odds" value={formatOdds(bet.fairOdds)} />
-        <BetStat label="Market odds" value={formatOdds(bet.marketOdds)} />
-        <BetStat
-          label="Probability edge"
-          title={PROBABILITY_EDGE_HELP_TEXT}
-          value={formatProbabilityEdge(bet.probabilityEdge)}
-          tone={
-            toNullableNumber(bet.probabilityEdge) === null
-              ? ''
-              : bet.probabilityEdge >= 0
-                ? 'positive'
-                : 'negative'
-          }
-        />
-        <BetStat
-          label="Expected value"
-          value={formatExpectedValue(bet.expectedValue)}
-          tone={
-            toNullableNumber(bet.expectedValue) === null
-              ? ''
-              : bet.expectedValue >= 0
-                ? 'positive'
-                : 'negative'
-          }
-        />
-      </div>
+        <div className="bet-compact-stake">
+          <span className="bet-compact-label">Stake</span>
+          <strong>{formatUnits(bet.stake)}</strong>
+        </div>
 
-      <div className="bet-controls">
-        <label className="field tracker-field">
-          <span>Result</span>
-          <select
-            value={bet.result}
-            onChange={(event) => updateField({ result: event.target.value })}
+        <div className="bet-compact-status">
+          <span className="bet-compact-label">Model status</span>
+          <strong
+            className={`model-status-badge ${modelStatusClass(
+              displayModelStatus,
+            )}`}
           >
-            {BET_RESULT_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <label className="field tracker-field">
-          <span>Stake</span>
-          <input
-            disabled={isSettled}
-            type="number"
-            min="0.01"
-            step="0.25"
-            value={draft.stake}
-            inputMode="decimal"
-            onBlur={() => handleDraftBlur('stake')}
-            onChange={(event) => handleDraftChange('stake', event.target.value)}
-          />
-        </label>
-
-        <label className="field tracker-field">
-          <span>Sportsbook</span>
-          <input
-            type="text"
-            value={draft.sportsbook}
-            onBlur={() => handleDraftBlur('sportsbook')}
-            onChange={(event) =>
-              handleDraftChange('sportsbook', event.target.value)
-            }
-          />
-        </label>
-
-        <label className="field tracker-field">
-          <span>Closing odds</span>
-          <input
-            type="number"
-            min="1.01"
-            step="0.01"
-            value={draft.closingOdds}
-            inputMode="decimal"
-            onBlur={() => handleDraftBlur('closingOdds')}
-            onChange={(event) =>
-              handleDraftChange('closingOdds', event.target.value)
-            }
-          />
-        </label>
-
-        <div className={`tracker-profit ${profitClass(profit)}`}>
-          <span>Profit</span>
-          <strong>{formatSignedUnits(profit)}</strong>
+            {displayModelStatus}
+          </strong>
         </div>
-      </div>
 
-      <BetAnalysisDetails bet={bet} />
+        <div className={`bet-compact-result ${settlementDisplay.tone}`}>
+          <span className="bet-compact-label">Result / Profit</span>
+          <strong>
+            {compactResultLabel}
+            {isSettled ? ` ${formatResultProfit(profit)}` : ''}
+          </strong>
+        </div>
 
-      <div className="bet-notes-row">
-        <label className="field tracker-field">
-          <span>Notes</span>
-          <textarea
-            value={draft.notes}
-            onBlur={() => handleDraftBlur('notes')}
-            onChange={(event) => handleDraftChange('notes', event.target.value)}
-          />
-        </label>
-
-        <div className="bet-card-actions">
-          {message ? (
-            <span className={`save-analysis-status ${status}`}>{message}</span>
+        <div className="bet-expand-cell">
+          {bet.notes ? (
+            <span className="bet-note-indicator" title="This bet has a note">
+              <FileText aria-hidden="true" size={14} />
+              <span className="visually-hidden">Has note</span>
+            </span>
           ) : null}
           <button
-            className="delete-bet-button"
+            aria-controls={detailsId}
+            aria-expanded={isExpanded}
+            aria-label={isExpanded ? 'Hide bet details' : 'View bet details'}
+            className="bet-expand-button"
             type="button"
-            disabled={status === 'saving' || isSettled}
-            title={
-              isSettled
-                ? 'Settled bets are retained to preserve bankroll history.'
-                : 'Delete this pending bet and return its locked stake.'
-            }
-            onClick={onDelete}
+            onClick={() => setIsExpanded((currentValue) => !currentValue)}
           >
-            Delete
+            {isExpanded ? (
+              <ChevronUp aria-hidden="true" size={18} />
+            ) : (
+              <ChevronDown aria-hidden="true" size={18} />
+            )}
           </button>
         </div>
       </div>
+
+      {isExpanded ? (
+        <div className="bet-expanded-details" id={detailsId}>
+          <div className="bet-expanded-summary" aria-label="Bet detail summary">
+            <CompactBetMetric
+              label="Fair odds"
+              value={formatOdds(bet.fairOdds)}
+            />
+            <CompactBetMetric
+              label="Edge"
+              title={PROBABILITY_EDGE_HELP_TEXT}
+              value={formatProbabilityEdge(bet.probabilityEdge)}
+              tone={
+                toNullableNumber(bet.probabilityEdge) === null
+                  ? ''
+                  : bet.probabilityEdge >= 0
+                    ? 'positive'
+                    : 'negative'
+              }
+            />
+            <CompactBetMetric
+              label="EV"
+              value={formatExpectedValue(bet.expectedValue)}
+              tone={
+                toNullableNumber(bet.expectedValue) === null
+                  ? ''
+                  : bet.expectedValue >= 0
+                    ? 'positive'
+                    : 'negative'
+              }
+            />
+            <CompactBetMetric
+              className="bet-expanded-settlement"
+              label="Settlement"
+              metadata={
+                bet.settlementCorrections?.length
+                  ? `${bet.settlementCorrections.length} ${
+                      bet.settlementCorrections.length === 1
+                        ? 'correction'
+                        : 'corrections'
+                    }`
+                  : ''
+              }
+              value={`${compactResultLabel} · ${settlementDisplay.message}`}
+              tone={settlementDisplay.tone}
+            />
+            <CompactBetMetric
+              label="Final score"
+              value={settlementDisplay.finalScore || '--'}
+            />
+            <CompactBetMetric
+              label="Profit"
+              value={formatSignedUnits(profit)}
+              tone={profitClass(profit)}
+            />
+          </div>
+
+          <div className="bet-edit-grid">
+            <label className="field tracker-field">
+              <span>Result</span>
+              <select
+                value={bet.result}
+                onChange={(event) => updateField({ result: event.target.value })}
+              >
+                {BET_RESULT_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="field tracker-field">
+              <span>Stake (units)</span>
+              <input
+                disabled={isSettled}
+                type="number"
+                min="0.01"
+                step="0.25"
+                value={draft.stake}
+                inputMode="decimal"
+                onBlur={() => handleDraftBlur('stake')}
+                onChange={(event) =>
+                  handleDraftChange('stake', event.target.value)
+                }
+              />
+            </label>
+
+            <label className="field tracker-field">
+              <span>Sportsbook</span>
+              <input
+                type="text"
+                value={draft.sportsbook}
+                onBlur={() => handleDraftBlur('sportsbook')}
+                onChange={(event) =>
+                  handleDraftChange('sportsbook', event.target.value)
+                }
+              />
+            </label>
+
+            <label className="field tracker-field">
+              <span>Closing odds</span>
+              <input
+                type="number"
+                min="1.01"
+                step="0.01"
+                value={draft.closingOdds}
+                inputMode="decimal"
+                onBlur={() => handleDraftBlur('closingOdds')}
+                onChange={(event) =>
+                  handleDraftChange('closingOdds', event.target.value)
+                }
+              />
+            </label>
+
+          </div>
+
+          <BetAnalysisDetails bet={bet} />
+
+          <div className="bet-notes-row">
+            <label className="field tracker-field">
+              <span>Notes</span>
+              <textarea
+                rows={2}
+                value={draft.notes}
+                onBlur={() => handleDraftBlur('notes')}
+                onChange={(event) =>
+                  handleDraftChange('notes', event.target.value)
+                }
+              />
+            </label>
+
+            <div className="bet-card-actions">
+              {message ? (
+                <span className={`save-analysis-status ${status}`}>
+                  {message}
+                </span>
+              ) : null}
+              <button
+                className="delete-bet-button"
+                type="button"
+                disabled={status === 'saving' || isSettled}
+                title={
+                  isSettled
+                    ? 'Settled bets are retained to preserve bankroll history.'
+                    : 'Delete this pending bet and return its locked stake.'
+                }
+                onClick={onDelete}
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </article>
   )
 }
@@ -2044,13 +2017,31 @@ function BetAnalysisDetails({ bet }) {
   )
 }
 
-function BetStat({ label, title, value, tone = '' }) {
+function CompactBetMetric({
+  className = '',
+  label,
+  metadata = '',
+  title,
+  tone = '',
+  value,
+}) {
   return (
-    <div className={`bet-stat ${tone}`} title={title}>
+    <div
+      className={`bet-compact-metric ${tone} ${className}`.trim()}
+      title={title}
+    >
       <span>{label}</span>
       <strong>{value}</strong>
+      {metadata ? <small>{metadata}</small> : null}
     </div>
   )
 }
 
+export {
+  BankrollControls,
+  BankrollLedger,
+  BetCard,
+  BetHistoryPagination,
+  BetListHeader,
+}
 export default BetTracker

@@ -2,6 +2,7 @@ const mongoose = require('mongoose')
 const Bet = require('../models/Bet')
 const bankrollService = require('./bankrollService')
 const betSettlementService = require('./betSettlementService')
+const nhlSeasonService = require('./nhlSeasonService')
 const {
   SPECIAL_TEAMS_MATCHUP_STATUSES,
   SPECIAL_TEAMS_MODES,
@@ -9,6 +10,13 @@ const {
 } = require('../../shared/specialTeamsMatchups')
 
 const RESULT_VALUES = Bet.RESULT_VALUES
+const DEFAULT_BET_PAGE = 1
+const DEFAULT_BET_LIMIT = 5
+const SUPPORTED_BET_LIMITS = Object.freeze([5, 10, 20])
+const MAX_BET_LIMIT = Math.max(...SUPPORTED_BET_LIMITS)
+const BET_RESULT_FILTERS = new Set(['all', 'settled', ...RESULT_VALUES])
+const BET_SEASON_ALL = 'all'
+const BET_SEASON_CURRENT = 'current'
 const EDITABLE_FIELDS = [
   'result',
   'stake',
@@ -24,7 +32,21 @@ const MODEL_STATUSES = {
   POSITIVE_VALUE_BELOW_THRESHOLD: 'Positive Value · Below Threshold',
   BELOW_THRESHOLD: 'Below Threshold',
   NO_VALUE: 'No Value',
+  LEGACY: 'Legacy bet',
 }
+const BET_HISTORY_MODEL_STATUSES = Object.freeze({
+  BET_CANDIDATE: 'Bet Candidate',
+  POSITIVE_VALUE_BELOW_THRESHOLD: 'Positive Value · Below Threshold',
+  NO_VALUE: 'No Value',
+  LEGACY: 'Legacy',
+})
+const STORED_CURRENT_MODEL_STATUSES = Object.freeze([
+  MODEL_STATUSES.BET_CANDIDATE,
+  MODEL_STATUSES.POSITIVE_VALUE,
+  MODEL_STATUSES.POSITIVE_VALUE_BELOW_THRESHOLD,
+  MODEL_STATUSES.BELOW_THRESHOLD,
+  MODEL_STATUSES.NO_VALUE,
+])
 const RECOMMENDATION_STATES = new Set([
   'NO_VALUE',
   'POSITIVE_VALUE_BELOW_THRESHOLD',
@@ -940,6 +962,420 @@ const getBets = async (userId) => {
   return bets.map(serializeBet)
 }
 
+const parsePositiveIntegerQuery = (
+  value,
+  { defaultValue, field, maxValue = Number.MAX_SAFE_INTEGER },
+) => {
+  if (value === undefined || value === null || value === '') {
+    return defaultValue
+  }
+
+  const parsedValue = Number(value)
+
+  if (
+    !Number.isInteger(parsedValue) ||
+    parsedValue <= 0 ||
+    parsedValue > maxValue
+  ) {
+    throw new BetsError(`${field} must be a positive integer.`, 400, {
+      field,
+      maxValue,
+    })
+  }
+
+  return parsedValue
+}
+
+const normalizeBetListQuery = (query = {}) => {
+  if (!query || Array.isArray(query) || typeof query !== 'object') {
+    throw new BetsError('Query parameters must be an object.', 400)
+  }
+
+  const page = parsePositiveIntegerQuery(query.page, {
+    defaultValue: DEFAULT_BET_PAGE,
+    field: 'page',
+  })
+  const limit = parsePositiveIntegerQuery(query.limit, {
+    defaultValue: DEFAULT_BET_LIMIT,
+    field: 'limit',
+    maxValue: MAX_BET_LIMIT,
+  })
+  const result = toText(query.result, 'all').toLowerCase() || 'all'
+  const modelStatus = toText(query.modelStatus, 'all') || 'all'
+  const season = toText(query.season, BET_SEASON_ALL) || BET_SEASON_ALL
+
+  if (!BET_RESULT_FILTERS.has(result)) {
+    throw new BetsError('result must be a supported bet result filter.', 400, {
+      field: 'result',
+      supportedValues: [...BET_RESULT_FILTERS],
+    })
+  }
+
+  if (modelStatus.length > 100) {
+    throw new BetsError('modelStatus must be 100 characters or fewer.', 400, {
+      field: 'modelStatus',
+    })
+  }
+
+  if (season.length > 20) {
+    throw new BetsError('season must be a supported NHL season.', 400, {
+      field: 'season',
+    })
+  }
+
+  if (!SUPPORTED_BET_LIMITS.includes(limit)) {
+    throw new BetsError(
+      `limit must be one of: ${SUPPORTED_BET_LIMITS.join(', ')}.`,
+      400,
+      {
+        field: 'limit',
+        supportedValues: SUPPORTED_BET_LIMITS,
+      },
+    )
+  }
+
+  return {
+    limit,
+    modelStatus,
+    page,
+    result,
+    season,
+  }
+}
+
+const resolveBetListSeason = async (query, options = {}) => {
+  if (query.season === BET_SEASON_ALL) {
+    return {
+      ...query,
+      seasonBoundary: null,
+      seasonMetadata: null,
+    }
+  }
+
+  const seasonMetadata =
+    options.seasonMetadata ??
+    (await nhlSeasonService.getAvailablePowerRatingHistorySeasons(
+      options.seasonOptions,
+    ))
+  const seasonId =
+    query.season === BET_SEASON_CURRENT
+      ? seasonMetadata?.currentSeasonId
+      : query.season
+  const season = seasonMetadata?.seasons?.find(
+    (item) => item.id === String(seasonId),
+  )
+
+  if (!season) {
+    throw new BetsError('season must match an available NHL season.', 400, {
+      field: 'season',
+    })
+  }
+
+  const start = new Date(`${season.startDate}T00:00:00.000Z`)
+  const endExclusive = new Date(`${season.endDate}T00:00:00.000Z`)
+
+  endExclusive.setUTCDate(endExclusive.getUTCDate() + 1)
+
+  if (Number.isNaN(start.getTime()) || Number.isNaN(endExclusive.getTime())) {
+    throw new BetsError('NHL season dates were unavailable.', 500)
+  }
+
+  return {
+    ...query,
+    season: season.id,
+    seasonBoundary: {
+      endExclusive,
+      start,
+    },
+    seasonMetadata: {
+      endDate: season.endDate,
+      id: season.id,
+      isCurrent: Boolean(season.isCurrent),
+      label: season.label,
+      startDate: season.startDate,
+    },
+  }
+}
+
+const normalizeBetHistoryModelStatus = (value) => {
+  const normalizedValue = toText(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_|_$/g, '')
+
+  if (
+    normalizedValue === 'bet_candidate' ||
+    normalizedValue === 'positive_value'
+  ) {
+    return BET_HISTORY_MODEL_STATUSES.BET_CANDIDATE
+  }
+
+  if (
+    normalizedValue === 'positive_value_below_threshold' ||
+    normalizedValue === 'below_threshold'
+  ) {
+    return BET_HISTORY_MODEL_STATUSES.POSITIVE_VALUE_BELOW_THRESHOLD
+  }
+
+  if (normalizedValue === 'no_value') {
+    return BET_HISTORY_MODEL_STATUSES.NO_VALUE
+  }
+
+  return BET_HISTORY_MODEL_STATUSES.LEGACY
+}
+
+const buildBetListFilter = (userId, query) => {
+  const filter = { userId }
+  const compoundConditions = []
+
+  if (query.result === 'settled') {
+    filter.result = {
+      $in: RESULT_VALUES.filter((result) => result !== 'pending'),
+    }
+  } else if (query.result === 'pending') {
+    compoundConditions.push({
+      $or: [{ result: 'pending' }, { result: null }],
+    })
+  } else if (query.result !== 'all') {
+    filter.result = query.result
+  }
+
+  if (query.modelStatus !== 'all') {
+    const normalizedModelStatus = normalizeBetHistoryModelStatus(
+      query.modelStatus,
+    )
+
+    if (normalizedModelStatus === BET_HISTORY_MODEL_STATUSES.LEGACY) {
+      compoundConditions.push({
+        $or: [
+          { modelStatus: BET_HISTORY_MODEL_STATUSES.LEGACY },
+          { modelStatus: MODEL_STATUSES.LEGACY },
+          {
+            expectedValue: null,
+            modelStatus: { $in: [null, ''] },
+          },
+          {
+            modelStatus: { $nin: [...STORED_CURRENT_MODEL_STATUSES, null, ''] },
+          },
+        ],
+      })
+    } else if (
+      normalizedModelStatus === BET_HISTORY_MODEL_STATUSES.BET_CANDIDATE
+    ) {
+      compoundConditions.push({
+        $or: [
+          {
+            modelStatus: {
+              $in: [
+                MODEL_STATUSES.BET_CANDIDATE,
+                MODEL_STATUSES.POSITIVE_VALUE,
+              ],
+            },
+          },
+          { recommendationState: 'BET_CANDIDATE' },
+        ],
+      })
+    } else if (
+      normalizedModelStatus ===
+      BET_HISTORY_MODEL_STATUSES.POSITIVE_VALUE_BELOW_THRESHOLD
+    ) {
+      compoundConditions.push({
+        $or: [
+          {
+            modelStatus: {
+              $in: [
+                MODEL_STATUSES.POSITIVE_VALUE_BELOW_THRESHOLD,
+                MODEL_STATUSES.BELOW_THRESHOLD,
+              ],
+            },
+          },
+          { recommendationState: 'POSITIVE_VALUE_BELOW_THRESHOLD' },
+        ],
+      })
+    } else {
+      compoundConditions.push({
+        $or: [
+          { modelStatus: MODEL_STATUSES.NO_VALUE },
+          { recommendationState: 'NO_VALUE' },
+        ],
+      })
+    }
+  }
+
+  if (query.seasonBoundary) {
+    const dateRange = {
+      $gte: query.seasonBoundary.start,
+      $lt: query.seasonBoundary.endExclusive,
+    }
+
+    compoundConditions.push({
+      $or: [
+        { scheduledStart: dateRange },
+        {
+          $and: [
+            {
+              $or: [
+                { scheduledStart: null },
+                { scheduledStart: { $exists: false } },
+              ],
+            },
+            { analyzedAt: dateRange },
+          ],
+        },
+      ],
+    })
+  }
+
+  if (compoundConditions.length > 0) {
+    filter.$and = compoundConditions
+  }
+
+  return filter
+}
+
+const resolveQueryRecords = async (query, selectedFields = '') => {
+  let resolvedQuery = query
+
+  if (selectedFields && typeof resolvedQuery.select === 'function') {
+    resolvedQuery = resolvedQuery.select(selectedFields)
+  }
+
+  if (typeof resolvedQuery.lean === 'function') {
+    resolvedQuery = resolvedQuery.lean()
+  }
+
+  return resolvedQuery
+}
+
+const getSummaryModelStatus = (bet) => {
+  const recommendationStatus = RECOMMENDATION_STATE_LABELS[
+    toText(bet.recommendationState).toUpperCase()
+  ]
+
+  if (recommendationStatus) {
+    return normalizeBetHistoryModelStatus(recommendationStatus)
+  }
+
+  const rawModelStatus = toText(bet.modelStatus)
+  const normalizedStatus = normalizeModelStatus(bet.modelStatus)
+
+  if (normalizedStatus) {
+    return normalizeBetHistoryModelStatus(normalizedStatus)
+  }
+
+  if (rawModelStatus) {
+    return BET_HISTORY_MODEL_STATUSES.LEGACY
+  }
+
+  if (
+    bet.expectedValue === null ||
+    bet.expectedValue === '' ||
+    bet.expectedValue === undefined
+  ) {
+    return BET_HISTORY_MODEL_STATUSES.LEGACY
+  }
+
+  const expectedValue = Number(bet.expectedValue)
+
+  return Number.isFinite(expectedValue)
+    ? normalizeBetHistoryModelStatus(getModelStatus(expectedValue))
+    : BET_HISTORY_MODEL_STATUSES.LEGACY
+}
+
+const summarizeBets = (bets = []) =>
+  bets.reduce(
+    (summary, bet) => {
+      const result = RESULT_VALUES.includes(bet.result) ? bet.result : 'pending'
+      const stake = Math.max(toNumber(bet.stake, 1), 0)
+      const profit = Number.isFinite(bet.profit)
+        ? bet.profit
+        : calculateProfit(bet)
+      const modelStatus = getSummaryModelStatus(bet)
+
+      summary.totalBets += 1
+      summary.totalProfit += profit
+      summary.totalStake += stake
+
+      if (result === 'win') {
+        summary.wins += 1
+      } else if (result === 'loss') {
+        summary.losses += 1
+      } else if (result === 'push') {
+        summary.pushes += 1
+      } else if (result === 'pending') {
+        summary.pending += 1
+      }
+
+      if (result !== 'pending') {
+        summary.settledStake += stake
+      }
+
+      summary.statusCounts[modelStatus] =
+        (summary.statusCounts[modelStatus] ?? 0) + 1
+
+      return summary
+    },
+    {
+      losses: 0,
+      pending: 0,
+      pushes: 0,
+      settledStake: 0,
+      statusCounts: {},
+      totalBets: 0,
+      totalProfit: 0,
+      totalStake: 0,
+      wins: 0,
+    },
+  )
+
+const getBetsPage = async (userId, query = {}, options = {}) => {
+  if (!userId) {
+    throw new BetsError('Authenticated userId is required.', 401)
+  }
+
+  const betModel = options.betModel ?? Bet
+  const normalizedQuery = await resolveBetListSeason(
+    normalizeBetListQuery(query),
+    options,
+  )
+  const filter = buildBetListFilter(userId, normalizedQuery)
+  const skip = (normalizedQuery.page - 1) * normalizedQuery.limit
+  const recordsQuery = betModel
+    .find(filter)
+    .sort({ analyzedAt: -1, createdAt: -1 })
+    .skip(skip)
+    .limit(normalizedQuery.limit)
+  const summaryQuery = betModel.find(filter)
+  const [records, totalItems, summaryRecords] = await Promise.all([
+    resolveQueryRecords(recordsQuery),
+    betModel.countDocuments(filter),
+    resolveQueryRecords(
+      summaryQuery,
+      'expectedValue marketOdds modelStatus profit recommendationState result stake',
+    ),
+  ])
+  const totalPages = Math.ceil(totalItems / normalizedQuery.limit)
+
+  return {
+    filters: {
+      modelStatus: normalizedQuery.modelStatus,
+      result: normalizedQuery.result,
+      season: normalizedQuery.season,
+    },
+    items: (Array.isArray(records) ? records : []).map(serializeBet),
+    pagination: {
+      hasNextPage: normalizedQuery.page < totalPages,
+      hasPreviousPage: normalizedQuery.page > 1,
+      page: normalizedQuery.page,
+      pageSize: normalizedQuery.limit,
+      totalItems,
+      totalPages,
+    },
+    summary: summarizeBets(Array.isArray(summaryRecords) ? summaryRecords : []),
+    season: normalizedQuery.seasonMetadata,
+  }
+}
+
 const createBet = async (userId, payload, options = {}) => {
   const normalizedPayload = normalizeCreatePayload(payload)
 
@@ -1176,11 +1612,17 @@ const deleteBet = async (userId, id, options = {}) => {
 
 module.exports = {
   BetsError,
+  DEFAULT_BET_LIMIT,
+  DEFAULT_BET_PAGE,
+  MAX_BET_LIMIT,
+  SUPPORTED_BET_LIMITS,
   RESULT_VALUES,
   calculateProfit,
   createBet,
   deleteBet,
   getBets,
+  getBetsPage,
+  normalizeBetListQuery,
   normalizeCreatePayload,
   normalizeGoalieSelectionSnapshot,
   updateBet,

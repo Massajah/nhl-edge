@@ -9677,7 +9677,7 @@
 
 .bankroll-summary-grid {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
 }
 
@@ -9717,6 +9717,14 @@
 .bankroll-toolbar {
   grid-template-columns:
     minmax(190px, 0.62fr)
+    minmax(170px, 0.52fr)
+    minmax(88px, 0.22fr)
+    auto;
+}
+
+.bankroll-toolbar-custom {
+  grid-template-columns:
+    minmax(190px, 0.62fr)
     minmax(145px, 0.42fr)
     minmax(145px, 0.42fr)
     minmax(170px, 0.52fr)
@@ -9738,6 +9746,9 @@
 .bankroll-form-actions,
 .bankroll-filter-actions {
   justify-content: flex-end;
+  flex-wrap: nowrap;
+  align-self: end;
+  margin-bottom: 20px;
 }
 
 .bankroll-cash-section {
@@ -9863,6 +9874,12 @@
   justify-content: flex-end;
 }
 
+.bankroll-pagination button {
+  min-height: 34px;
+  padding: 0 9px;
+  font-size: 0.72rem;
+}
+
 .bankroll-pagination > span {
   color: var(--text-muted);
   font-size: 0.76rem;
@@ -9941,14 +9958,19 @@
 }
 
 .tracker-toolbar {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns:
+    minmax(145px, 0.72fr)
+    minmax(120px, 0.58fr)
+    minmax(190px, 1fr)
+    minmax(76px, 0.3fr)
+    auto;
   gap: 10px;
   align-items: end;
 }
 
 .tracker-toolbar .tracker-field {
-  width: min(220px, 100%);
+  width: 100%;
 }
 
 .tracker-toolbar button,
@@ -13242,9 +13264,7 @@ optgroup {
   .bankroll-filter-actions,
   .bankroll-filter-actions button,
   .bankroll-cash-actions,
-  .bankroll-cash-actions button,
-  .bankroll-pagination,
-  .bankroll-pagination button {
+  .bankroll-cash-actions button {
     width: 100%;
   }
 
@@ -13265,9 +13285,18 @@ optgroup {
   .power-history-filter-actions,
   .power-history-pagination,
   .bankroll-filter-actions,
-  .bankroll-cash-actions,
+  .bankroll-cash-actions {
+    display: grid;
+  }
+
   .bankroll-pagination {
     display: grid;
+    width: 100%;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+
+  .bankroll-pagination > span {
+    justify-self: center;
   }
 
   .power-history-pagination .field {
@@ -13760,5 +13789,567 @@ optgroup {
 
   .power-rating-current-display {
     justify-content: flex-start;
+  }
+}
+
+/* Bet Tracker compact history and hierarchy */
+.bet-tracker-heading > span,
+.bet-history-heading > span {
+  color: var(--text-muted);
+  font-size: 0.76rem;
+  font-weight: 850;
+}
+
+.bet-history-panel {
+  display: grid;
+  gap: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 8px;
+  padding: 14px;
+  background:
+    linear-gradient(145deg, rgba(148, 163, 184, 0.055), transparent 46%),
+    rgba(12, 18, 25, 0.78);
+}
+
+.bet-history-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.bet-history-heading h3 {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: 1.04rem;
+  line-height: 1.2;
+}
+
+.bankroll-cash-actions .bankroll-deposit-button {
+  border-color: rgba(35, 211, 182, 0.72);
+  color: #061914;
+  background: var(--accent);
+  box-shadow: 0 5px 16px rgba(35, 211, 182, 0.16);
+}
+
+.bankroll-cash-actions .bankroll-deposit-button:hover {
+  border-color: rgba(93, 235, 211, 0.9);
+  background: #5debd3;
+}
+
+.bankroll-cash-actions .bankroll-withdrawal-button {
+  border-color: rgba(148, 163, 184, 0.34);
+  color: var(--text-strong);
+  background: transparent;
+}
+
+.bankroll-cash-actions .bankroll-withdrawal-button:hover {
+  border-color: rgba(35, 211, 182, 0.48);
+  background: rgba(35, 211, 182, 0.08);
+}
+
+.bet-history-actions,
+.bet-history-pagination {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.bet-history-actions {
+  margin-left: auto;
+  flex-wrap: nowrap;
+}
+
+.settlement-action-help {
+  margin: -4px 0 0;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: 750;
+}
+
+.bet-list-header,
+.bet-compact-row {
+  display: grid;
+  grid-template-columns:
+    minmax(0, 0.72fr)
+    minmax(0, 0.9fr)
+    minmax(0, 1fr)
+    minmax(0, 0.48fr)
+    minmax(0, 0.42fr)
+    minmax(0, 0.9fr)
+    minmax(0, 0.7fr)
+    minmax(52px, 0.25fr);
+  gap: 10px;
+  align-items: center;
+}
+
+.bet-list-header {
+  padding: 0 12px;
+  color: var(--text-muted);
+  font-size: 0.67rem;
+  font-weight: 900;
+  letter-spacing: 0.035em;
+  text-transform: uppercase;
+}
+
+.bet-card {
+  display: block;
+  overflow: hidden;
+  padding: 0;
+  background:
+    linear-gradient(110deg, rgba(35, 211, 182, 0.055), transparent 34%),
+    var(--panel);
+  box-shadow: 0 7px 20px rgba(0, 0, 0, 0.14);
+}
+
+.bet-compact-row {
+  min-height: 68px;
+  padding: 7px 12px;
+}
+
+.bet-compact-row > div {
+  min-width: 0;
+}
+
+.bet-compact-date,
+.bet-compact-game,
+.bet-compact-pick,
+.bet-compact-odds,
+.bet-compact-stake,
+.bet-compact-status,
+.bet-compact-result {
+  display: grid;
+  gap: 3px;
+  align-content: center;
+}
+
+.bet-compact-label {
+  display: none;
+  color: var(--text-muted);
+  font-size: 0.64rem;
+  font-weight: 850;
+}
+
+.bet-compact-row strong {
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: 0.82rem;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bet-compact-game small {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 0.68rem;
+  font-weight: 750;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-status-badge {
+  justify-self: start;
+  max-width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 4px 8px;
+  background: rgba(255, 255, 255, 0.045);
+  font-size: 0.7rem !important;
+}
+
+.model-status-badge.positive-value,
+.model-status-badge.bet-candidate {
+  border-color: rgba(35, 211, 182, 0.38);
+  color: var(--accent);
+  background: rgba(35, 211, 182, 0.08);
+}
+
+.model-status-badge.below-threshold,
+.model-status-badge.positive-value-below-threshold {
+  border-color: rgba(255, 181, 71, 0.4);
+  color: var(--accent-warm);
+  background: rgba(255, 181, 71, 0.07);
+}
+
+.model-status-badge.no-value {
+  border-color: rgba(255, 90, 112, 0.36);
+  color: var(--danger);
+  background: rgba(255, 90, 112, 0.06);
+}
+
+.bet-compact-result.win strong {
+  color: var(--accent);
+}
+
+.bet-compact-result.loss strong {
+  color: var(--danger);
+}
+
+.bet-compact-result.void strong,
+.bet-compact-result.push strong {
+  color: var(--accent-warm);
+}
+
+.bet-expand-cell {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.bet-note-indicator {
+  display: inline-flex;
+  color: var(--text-muted);
+}
+
+.bet-expand-button {
+  display: inline-flex;
+  width: 34px;
+  height: 34px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0;
+  color: var(--text-strong);
+  background: rgba(255, 255, 255, 0.045);
+  cursor: pointer;
+}
+
+.bet-expand-button:hover,
+.bet-expand-button:focus-visible {
+  border-color: rgba(35, 211, 182, 0.55);
+  background: rgba(35, 211, 182, 0.1);
+  outline: none;
+}
+
+.bet-expanded-details {
+  display: grid;
+  gap: 8px;
+  border-top: 1px solid var(--border);
+  padding: 10px 12px 12px;
+  background: rgba(5, 10, 15, 0.2);
+}
+
+.bet-expanded-summary {
+  display: grid;
+  grid-template-columns:
+    minmax(70px, 0.55fr)
+    minmax(90px, 0.7fr)
+    minmax(78px, 0.6fr)
+    minmax(210px, 1.7fr)
+    minmax(120px, 0.95fr)
+    minmax(92px, 0.7fr);
+  gap: 6px 12px;
+  align-items: center;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: rgba(13, 20, 28, 0.48);
+}
+
+.bet-compact-metric {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  align-content: center;
+}
+
+.bet-compact-metric span,
+.bet-compact-metric small {
+  color: var(--text-muted);
+  font-size: 0.66rem;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+.bet-compact-metric strong {
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: 0.84rem;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bet-expanded-settlement strong {
+  white-space: normal;
+}
+
+.bet-compact-metric.positive strong,
+.bet-compact-metric.win strong {
+  color: var(--accent);
+}
+
+.bet-compact-metric.negative strong,
+.bet-compact-metric.loss strong {
+  color: var(--danger);
+}
+
+.bet-compact-metric.void strong,
+.bet-compact-metric.push strong {
+  color: var(--accent-warm);
+}
+
+.bet-edit-grid {
+  display: grid;
+  grid-template-columns:
+    minmax(120px, 0.68fr)
+    minmax(110px, 0.55fr)
+    minmax(180px, 1.25fr)
+    minmax(120px, 0.65fr);
+  gap: 8px;
+  align-items: end;
+}
+
+.bet-edit-grid .tracker-field {
+  gap: 3px;
+}
+
+.bet-edit-grid .tracker-field input,
+.bet-edit-grid .tracker-field select {
+  min-height: 34px;
+}
+
+.bet-expanded-details .bet-analysis-details {
+  padding-top: 7px;
+}
+
+.bet-expanded-details .bet-notes-row {
+  gap: 8px;
+  padding-top: 8px;
+}
+
+.bet-expanded-details .bet-notes-row textarea {
+  height: 54px;
+  min-height: 54px;
+  padding: 8px 10px;
+}
+
+.bet-expanded-details .bet-card-actions {
+  gap: 8px;
+}
+
+.bet-history-pagination {
+  justify-content: flex-end;
+}
+
+.bet-history-pagination button {
+  min-height: 34px;
+  padding: 0 9px;
+  font-size: 0.72rem;
+}
+
+.bet-history-pagination > span {
+  color: var(--text-muted);
+  font-size: 0.76rem;
+  font-weight: 850;
+}
+
+.bet-card-loading {
+  display: grid;
+  gap: 8px;
+  min-height: 82px;
+  padding: 14px;
+}
+
+@media (max-width: 1100px) {
+  .tracker-toolbar {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .bet-history-actions {
+    margin-left: 0;
+  }
+
+  .bet-list-header {
+    display: none;
+  }
+
+  .bet-compact-row {
+    grid-template-columns:
+      minmax(0, 0.75fr)
+      minmax(0, 0.95fr)
+      minmax(0, 1fr)
+      minmax(0, 0.45fr)
+      minmax(0, 0.4fr)
+      minmax(0, 0.85fr)
+      minmax(0, 0.7fr)
+      minmax(48px, 0.25fr);
+  }
+
+  .bet-compact-label {
+    display: block;
+  }
+}
+
+@media (max-width: 920px) {
+  .bankroll-filter-actions {
+    flex-wrap: wrap;
+    margin-bottom: 0;
+  }
+
+  .bet-compact-row {
+    grid-template-areas:
+      "game game pick pick expand"
+      "odds stake status result expand"
+      "date date status result expand";
+    grid-template-columns:
+      minmax(72px, 0.55fr)
+      minmax(72px, 0.55fr)
+      minmax(135px, 0.95fr)
+      minmax(120px, 0.85fr)
+      52px;
+    min-height: 78px;
+  }
+
+  .bet-compact-date {
+    grid-area: date;
+  }
+
+  .bet-compact-game {
+    grid-area: game;
+  }
+
+  .bet-compact-pick {
+    grid-area: pick;
+  }
+
+  .bet-compact-odds {
+    grid-area: odds;
+  }
+
+  .bet-compact-stake {
+    grid-area: stake;
+  }
+
+  .bet-compact-status {
+    grid-area: status;
+  }
+
+  .bet-compact-result {
+    grid-area: result;
+  }
+
+  .bet-expand-cell {
+    grid-area: expand;
+  }
+
+  .bet-expanded-summary {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .bet-expanded-settlement {
+    grid-column: span 2;
+  }
+
+  .bet-edit-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 680px) {
+  .bet-history-panel {
+    padding: 12px;
+  }
+
+  .bet-history-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .bet-history-actions,
+  .bet-history-actions button {
+    width: 100%;
+  }
+
+  .bet-history-actions {
+    display: grid;
+  }
+
+  .tracker-toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .bet-history-pagination {
+    display: grid;
+    width: 100%;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+
+  .bet-history-pagination > span {
+    justify-self: center;
+  }
+
+  .bet-compact-row {
+    grid-template-areas:
+      "game game expand"
+      "pick pick expand"
+      "status result expand"
+      "date odds stake";
+    grid-template-columns: minmax(0, 1fr) minmax(110px, 0.8fr) 44px;
+    gap: 5px 8px;
+    min-height: 0;
+    padding: 10px;
+  }
+
+  .bet-compact-label {
+    display: none;
+  }
+
+  .bet-compact-game small {
+    display: none;
+  }
+
+  .bet-compact-date strong,
+  .bet-compact-odds strong,
+  .bet-compact-stake strong {
+    color: var(--text-muted);
+    font-size: 0.7rem;
+  }
+
+  .bet-compact-odds strong::before {
+    content: "Odds ";
+  }
+
+  .bet-compact-stake strong::before {
+    content: "Stake ";
+  }
+
+  .model-status-badge {
+    padding: 3px 7px;
+  }
+
+  .bet-analysis-detail-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .bet-expanded-details {
+    padding: 10px;
+  }
+
+  .bet-expanded-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .bet-expanded-settlement {
+    grid-column: 1 / -1;
+  }
+
+  .bet-expanded-details .bet-notes-row {
+    grid-template-columns: 1fr;
+  }
+
+  .bet-expanded-details .bet-card-actions {
+    justify-content: flex-end;
+  }
+}
+
+@media (max-width: 480px) {
+  .bet-edit-grid {
+    grid-template-columns: 1fr;
   }
 }

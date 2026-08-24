@@ -528,10 +528,99 @@ test('season summary filters transactions through NHL season metadata', async ()
       seasonMetadata,
     },
   )
+  const allTimeSummary = await bankrollService.getBankrollSummary(
+    userId,
+    { period: 'all-time' },
+    models,
+  )
 
   assert.equal(summary.bettingProfit, 7.5)
   assert.equal(summary.currentBankroll, 112.5)
   assert.equal(summary.period.season.id, '20252026')
+  assert.equal(allTimeSummary.bettingProfit, 12.5)
+  assert.equal(summary.currentBankroll, allTimeSummary.currentBankroll)
+  assert.equal(summary.availableBankroll, allTimeSummary.availableBankroll)
+  assert.equal(summary.pendingStake, allTimeSummary.pendingStake)
+})
+
+test('transaction season filters use canonical dates before pagination', async () => {
+  const userId = new mongoose.Types.ObjectId()
+  const seasonMetadata = {
+    currentSeasonId: '20252026',
+    seasons: [
+      {
+        endDate: '2026-04-16',
+        id: '20252026',
+        isCurrent: true,
+        label: '2025–26',
+        startDate: '2025-10-07',
+      },
+    ],
+  }
+  const models = createMemoryModels({
+    transactions: [
+      createTransaction(userId, {
+        occurredAt: new Date('2025-10-06T23:59:59.000Z'),
+        type: 'DEPOSIT',
+      }),
+      ...Array.from({ length: 7 }, (_item, index) =>
+        createTransaction(userId, {
+          occurredAt: new Date(Date.UTC(2026, 0, index + 1)),
+          type: 'DEPOSIT',
+        }),
+      ),
+      createTransaction(userId, {
+        occurredAt: new Date('2026-04-17T00:00:00.000Z'),
+        type: 'DEPOSIT',
+      }),
+    ],
+  })
+  const result = await bankrollService.getBankrollTransactions(
+    userId,
+    { limit: 5, page: 1, season: '20252026' },
+    { ...models, seasonMetadata },
+  )
+
+  assert.equal(result.items.length, 5)
+  assert.equal(result.pagination.totalItems, 7)
+  assert.equal(result.pagination.totalPages, 2)
+  assert.equal(result.pagination.hasPreviousPage, false)
+  assert.equal(result.pagination.hasNextPage, true)
+  assert.equal(result.season.id, '20252026')
+})
+
+test('custom transaction dates filter timestamps inclusively', async () => {
+  const userId = new mongoose.Types.ObjectId()
+  const models = createMemoryModels({
+    transactions: [
+      createTransaction(userId, {
+        occurredAt: new Date('2026-01-31T23:59:59.000Z'),
+      }),
+      createTransaction(userId, {
+        occurredAt: new Date('2026-02-01T00:00:00.000Z'),
+      }),
+      createTransaction(userId, {
+        occurredAt: new Date('2026-02-28T23:59:59.000Z'),
+      }),
+      createTransaction(userId, {
+        occurredAt: new Date('2026-03-01T00:00:00.000Z'),
+      }),
+    ],
+  })
+  const result = await bankrollService.getBankrollTransactions(
+    userId,
+    { from: '2026-02-01', limit: 5, to: '2026-02-28' },
+    models,
+  )
+
+  assert.equal(result.items.length, 2)
+  assert.equal(result.pagination.totalItems, 2)
+  assert.deepEqual(result.filters, {
+    from: '2026-02-01',
+    season: '',
+    to: '2026-02-28',
+    type: null,
+  })
 })
 
 test('transactions include running balances for paginated ledger rows', async () => {
@@ -559,18 +648,62 @@ test('transactions include running balances for paginated ledger rows', async ()
   const result = await bankrollService.getBankrollTransactions(
     userId,
     {
-      limit: 2,
+      limit: 5,
       page: 1,
     },
     models,
   )
 
-  assert.equal(result.items.length, 2)
+  assert.equal(result.items.length, 3)
   assert.equal(result.items[0].amount, -3)
   assert.equal(result.items[0].runningBalance, 122)
   assert.equal(result.items[1].amount, 25)
   assert.equal(result.items[1].runningBalance, 125)
-  assert.equal(result.pagination.hasNextPage, true)
+  assert.equal(result.pagination.hasNextPage, false)
+})
+
+test('transaction pagination defaults to 5 and supports 20-row final pages', async () => {
+  const userId = new mongoose.Types.ObjectId()
+  const transactions = Array.from({ length: 30 }, (_, index) =>
+    createTransaction(userId, {
+      amountCents: index + 1,
+      occurredAt: new Date(Date.UTC(2026, 0, index + 1)),
+      type: index < 12 ? 'DEPOSIT' : 'ADJUSTMENT',
+    }),
+  )
+  const models = createMemoryModels({ transactions })
+  const defaultPage = await bankrollService.getBankrollTransactions(
+    userId,
+    {},
+    models,
+  )
+  const firstLargePage = await bankrollService.getBankrollTransactions(
+    userId,
+    { limit: 20, page: 1 },
+    models,
+  )
+  const finalLargePage = await bankrollService.getBankrollTransactions(
+    userId,
+    { limit: 20, page: 2 },
+    models,
+  )
+  const filteredPage = await bankrollService.getBankrollTransactions(
+    userId,
+    { limit: 10, page: 1, type: 'DEPOSIT' },
+    models,
+  )
+
+  assert.equal(defaultPage.items.length, 5)
+  assert.equal(defaultPage.pagination.limit, 5)
+  assert.equal(defaultPage.pagination.hasPreviousPage, false)
+  assert.equal(firstLargePage.items.length, 20)
+  assert.equal(firstLargePage.pagination.hasNextPage, true)
+  assert.equal(finalLargePage.items.length, 10)
+  assert.equal(finalLargePage.pagination.hasPreviousPage, true)
+  assert.equal(finalLargePage.pagination.hasNextPage, false)
+  assert.equal(filteredPage.items.length, 10)
+  assert.equal(filteredPage.pagination.totalItems, 12)
+  assert.ok(filteredPage.items.every((transaction) => transaction.type === 'DEPOSIT'))
 })
 
 test('backfill can dry-run and then write user-scoped settled bet transactions', async () => {
