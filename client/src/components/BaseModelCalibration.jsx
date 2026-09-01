@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { LoaderCircle, Play, RotateCcw } from 'lucide-react'
+import { ChevronDown, LoaderCircle, Play, RotateCcw } from 'lucide-react'
 import {
   getBaseModelCalibrationOptions,
   prepareHistoricalCalibrationSeason,
@@ -296,12 +296,16 @@ function BaseModelCalibration({
       !latest || season.endDate > latest.endDate ? season : latest,
     null,
   )?.id
-  const usesCurrentOnOlderSeason =
+  const usesCurrentScenario =
     form.seasonIds.length === 1 &&
-    form.seasonIds[0] !== latestHistoricalSeasonId &&
     (selectedPresetKeys.has('current') ||
       (selectedPresetKeys.has('custom') &&
         form.startingRatings.mode === 'current'))
+  const usesCurrentOnOlderSeason =
+    usesCurrentScenario && form.seasonIds[0] !== latestHistoricalSeasonId
+  const multiSeasonStartingPolicy =
+    options?.startingStatePolicies?.multiSeason?.label ??
+    'Fixed 42–50 · Alphabetical ordering'
 
   const updateField = (field, value) => {
     setForm((current) => ({ ...current, [field]: value }))
@@ -474,12 +478,19 @@ function BaseModelCalibration({
         </p>
       </div>
 
-      <div className="calibration-layout">
+      <div
+        className={`calibration-layout ${runs.length === 0 ? 'setup-wide' : ''}`}
+      >
         <aside className="rating-lab-controls-panel calibration-controls-panel">
           <div className="section-heading">
             <div>
               <p className="eyebrow">Phase 1 setup</p>
               <h2>Base Model Calibration</h2>
+              <p className="calibration-purpose">
+                Compare alternative starting-rating states and core
+                probability/rating-update parameters in production-isolated
+                historical replay.
+              </p>
             </div>
           </div>
 
@@ -494,7 +505,15 @@ function BaseModelCalibration({
           ) : null}
 
           {optionsStatus !== 'loading' ? (
-            <form className="rating-lab-form" onSubmit={handleSubmit}>
+            <form
+              className="rating-lab-form calibration-setup-form"
+              onSubmit={handleSubmit}
+            >
+              <CalibrationControlSection
+                className="calibration-dataset-section"
+                description="Prepared seasons and replay boundaries"
+                title="Dataset"
+              >
               <fieldset className="rating-lab-fieldset calibration-season-fieldset">
                 <legend>Historical seasons</legend>
                 <div className="calibration-season-actions">
@@ -623,18 +642,31 @@ function BaseModelCalibration({
                 Each selected season uses its exact regular-season boundaries and
                 starts from a fresh rating state. Custom ranges are single-season only.
               </p>
+              </CalibrationControlSection>
+
+              <CalibrationControlSection
+                className="calibration-starting-section"
+                description="Initial state for the custom comparison preset"
+                title="Starting Ratings"
+              >
               {usesCurrentOnOlderSeason ? (
                 <p className="form-status warning">
                   Current production ratings are an experimental, potentially
                   biased starting source for this older historical season.
                 </p>
               ) : null}
+              {usesCurrentScenario ? (
+                <p className="calibration-helper">
+                  Current-rating starting states are useful for scenario exploration
+                  but are not used for leakage-safe multi-season Model Calibration.
+                </p>
+              ) : null}
 
               <fieldset className="rating-lab-fieldset">
-                <legend>Custom starting ratings</legend>
+                <legend>Custom preset state</legend>
                 <div className="rating-lab-choice-grid">
                   {[
-                    ['current', 'Current production'],
+                    ['current', 'Current production (scenario)'],
                     ['fixed_spread', 'Centered fixed spread'],
                   ].map(([value, label]) => (
                     <label
@@ -663,8 +695,10 @@ function BaseModelCalibration({
                     <input
                       disabled={form.startingRatings.mode !== 'fixed_spread'}
                       id="calibration-center"
+                      max="1000"
+                      min="-1000"
                       type="number"
-                      step="0.5"
+                      step="0.01"
                       value={form.startingRatings.center}
                       onChange={(event) =>
                         updateStartingRatings('center', event.target.value)
@@ -679,7 +713,7 @@ function BaseModelCalibration({
                       min="0.01"
                       max="100"
                       type="number"
-                      step="0.5"
+                      step="0.01"
                       value={form.startingRatings.spread}
                       onChange={(event) =>
                         updateStartingRatings('spread', event.target.value)
@@ -688,14 +722,26 @@ function BaseModelCalibration({
                   </label>
                 </div>
                 <p className="calibration-helper">
-                  Current production ratings are unavailable for cross-season runs.
-                  Older fixed-spread seasons use the explicitly reported historical
-                  ordering fallback when no season snapshot exists.
+                  Center and Total spread define only the Custom ±X preset. They
+                  do not change the Base Model Parameters below.{' '}
+                  {isMultiSeason
+                    ? `${multiSeasonStartingPolicy}. Every selected season uses the same deterministic ordering.`
+                    : 'Single-season current-order starts remain available for advanced scenario testing and are labeled non-comparable.'}
                 </p>
               </fieldset>
+              </CalibrationControlSection>
 
+              <CalibrationControlSection
+                className="calibration-runs-section"
+                description="Choose two or more starting-state presets"
+                title="Runs to Compare"
+              >
               <fieldset className="rating-lab-fieldset">
-                <legend>Runs to compare</legend>
+                <legend>Starting-rating presets</legend>
+                <p className="calibration-helper">
+                  Select at least two starting-rating presets to replay with the
+                  selected model parameters.
+                </p>
                 <div className="calibration-preset-grid">
                   {comparisonPresets.map((preset) => (
                     <label
@@ -720,9 +766,19 @@ function BaseModelCalibration({
                   ))}
                 </div>
               </fieldset>
+              </CalibrationControlSection>
 
+              <CalibrationControlSection
+                className="calibration-parameters-section"
+                description="Probability mapping and rating-update behavior"
+                title="Base Model Parameters"
+              >
               <fieldset className="rating-lab-fieldset">
-                <legend>Base model parameters</legend>
+                <legend>Model parameter values</legend>
+                <p className="calibration-helper">
+                  These values control how rating differences become win
+                  probabilities and how completed results update ratings.
+                </p>
                 <div className="rating-lab-field-grid">
                   {CALIBRATION_NUMBER_FIELDS.map((field) => (
                     <label
@@ -752,16 +808,24 @@ function BaseModelCalibration({
                   ))}
                 </div>
               </fieldset>
+              </CalibrationControlSection>
 
-              <ProbabilityReference rows={probabilityRows} />
+              <CalibrationControlSection
+                className="calibration-method-section"
+                defaultOpen={false}
+                description="Live probabilities and Phase 1 formula scope"
+                title="Formula / Probability Reference"
+              >
+                <ProbabilityReference rows={probabilityRows} />
 
-              <div className="calibration-exclusion-note">
-                <strong>Phase 1 formula scope</strong>
-                <p>
-                  Home rating + home advantage − away rating. Goalie, injury,
-                  lineup, rest, travel, manual, and Analyzer adjustments are excluded.
-                </p>
-              </div>
+                <div className="calibration-exclusion-note">
+                  <strong>Phase 1 formula scope</strong>
+                  <p>
+                    Home rating + home advantage − away rating. Goalie, injury,
+                    lineup, rest, travel, manual, and Analyzer adjustments are excluded.
+                  </p>
+                </div>
+              </CalibrationControlSection>
 
               {options?.warning ? (
                 <p className="form-status warning">{options.warning}</p>
@@ -856,6 +920,30 @@ function BaseModelCalibration({
         </section>
       </div>
     </div>
+  )
+}
+
+function CalibrationControlSection({
+  children,
+  className = '',
+  defaultOpen = true,
+  description,
+  title,
+}) {
+  return (
+    <details
+      className={`calibration-control-section ${className}`.trim()}
+      open={defaultOpen}
+    >
+      <summary>
+        <span>
+          <strong>{title}</strong>
+          <small>{description}</small>
+        </span>
+        <ChevronDown aria-hidden="true" size={18} />
+      </summary>
+      <div className="calibration-control-section-body">{children}</div>
+    </details>
   )
 }
 
@@ -1293,7 +1381,13 @@ function CalibrationRunDetails({ run }) {
         <span>
           {run.filters?.seasonId ?? '--'} · {run.filters?.dateFrom ?? '--'} to{' '}
           {run.filters?.dateTo ?? '--'} ·{' '}
-          {run.parameters.startingRatings.orderingSource ?? '--'}
+          {run.parameters.startingRatings.label ??
+            run.parameters.startingRatings.orderingSource ??
+            '--'}
+        </span>
+        <span>
+          Starting-state policy {run.parameters.startingRatings.policy ?? '--'} ·{' '}
+          signature {run.parameters.startingRatings.startingStateSignature ?? '--'}
         </span>
       </section>
 

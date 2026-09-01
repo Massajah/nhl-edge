@@ -7,6 +7,35 @@ const router = express.Router()
 router.use(authenticate)
 
 router.get(
+  '/model-calibration/options',
+  powerRatingSimulationsController.getModelCalibrationOptions,
+)
+router.get(
+  '/model-calibration/promotions',
+  powerRatingSimulationsController.listModelCalibrationPromotions,
+)
+router.get(
+  '/model-calibration/promotions/:promotionId',
+  powerRatingSimulationsController.getModelCalibrationPromotion,
+)
+router.post(
+  '/model-calibration/run',
+  powerRatingSimulationsController.runModelCalibration,
+)
+router.post(
+  '/model-calibration/robustness',
+  powerRatingSimulationsController.runModelCalibrationRobustness,
+)
+router.post(
+  '/model-calibration/promotion/preview',
+  powerRatingSimulationsController.previewModelCalibrationPromotion,
+)
+router.post(
+  '/model-calibration/promotion/apply',
+  powerRatingSimulationsController.applyModelCalibrationPromotion,
+)
+
+router.get(
   '/calibration/options',
   powerRatingSimulationsController.getBaseModelCalibrationOptions,
 )

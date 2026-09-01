@@ -12,6 +12,72 @@ export const previewPowerRatingSimulation = async (payload) =>
     method: 'POST',
   })
 
+export const getModelCalibrationOptions = async () =>
+  requestPowerRatingSimulation(
+    '/api/power-rating-simulations/model-calibration/options',
+    { method: 'GET' },
+  )
+
+export const runModelCalibration = async (payload) =>
+  requestPowerRatingSimulation(
+    '/api/power-rating-simulations/model-calibration/run',
+    {
+      body: JSON.stringify(payload),
+      method: 'POST',
+    },
+  )
+
+export const runModelCalibrationRobustness = async (payload) =>
+  requestPowerRatingSimulation(
+    '/api/power-rating-simulations/model-calibration/robustness',
+    {
+      body: JSON.stringify(payload),
+      method: 'POST',
+    },
+  )
+
+export const previewModelCalibrationPromotion = async (payload) =>
+  requestPowerRatingSimulation(
+    '/api/power-rating-simulations/model-calibration/promotion/preview',
+    {
+      body: JSON.stringify(payload),
+      method: 'POST',
+    },
+  )
+
+export const applyModelCalibrationPromotion = async (promotionPreviewId) =>
+  requestPowerRatingSimulation(
+    '/api/power-rating-simulations/model-calibration/promotion/apply',
+    {
+      body: JSON.stringify({ promotionPreviewId }),
+      method: 'POST',
+    },
+  )
+
+export const getModelCalibrationPromotions = async ({
+  cursor,
+  limit = 20,
+} = {}) => {
+  const query = new URLSearchParams({ limit: String(limit) })
+
+  if (cursor) query.set('cursor', cursor)
+
+  return apiRequest(
+    `/api/power-rating-simulations/model-calibration/promotions?${query}`,
+    { method: 'GET' },
+    { fallbackMessage: 'Unable to load Promotion History.' },
+  )
+}
+
+export const getModelCalibrationPromotion = async (promotionId) =>
+  apiRequest(
+    `/api/power-rating-simulations/model-calibration/promotions/${encodeURIComponent(
+      promotionId,
+    )}`,
+    { method: 'GET' },
+    { fallbackMessage: 'Unable to load promotion details.' },
+  )
+
 export const getBaseModelCalibrationOptions = async () =>
   requestPowerRatingSimulation(
     '/api/power-rating-simulations/calibration/options',

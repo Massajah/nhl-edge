@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
+import { ChevronDown, ChevronUp, RefreshCw, X } from 'lucide-react'
 import { getTeamMetadata } from '../data/teamMetadata.js'
 import { NHL_TEAMS } from '../data/teams.js'
 import { DEFAULT_MAXIMUM_PLAYER_INJURY_PENALTY } from '../config/baseModel.js'
@@ -444,7 +452,13 @@ function InjuryManager({
             </select>
           </label>
 
-          <button type="button" onClick={loadInjuries}>
+          <button
+            className="injury-refresh-button"
+            type="button"
+            disabled={status === 'loading'}
+            onClick={loadInjuries}
+          >
+            <RefreshCw aria-hidden="true" size={15} />
             Refresh
           </button>
         </div>
@@ -546,18 +560,26 @@ export function TeamInjuryCard({
 }) {
   const [expanded, setExpanded] = useState(initialExpanded)
   const [showHistory, setShowHistory] = useState(initialShowHistory)
+  const detailsId = useId()
   const activeInjuries = team.injuries.filter(isCountingInjury)
   const historicalInjuries = team.injuries.filter((injury) => !isCountingInjury(injury))
   const hasHistory = historicalInjuries.length > 0
   const showingHistory = showHistory && hasHistory
   const displayedInjuries = showingHistory ? team.injuries : activeInjuries
+  const isHealthyTeam = team.totalImpact === 0 && team.activeInjuries === 0
 
   return (
-    <article className={`injury-team-card ${expanded ? 'expanded' : ''}`}>
+    <article
+      className={`injury-team-card ${
+        isHealthyTeam ? 'healthy' : 'has-active-injuries'
+      }${expanded ? ' expanded' : ''}`}
+    >
       <button
+        aria-controls={detailsId}
         className="injury-team-header"
         type="button"
         aria-expanded={expanded}
+        title={`${expanded ? 'Collapse' : 'Expand'} ${team.name} injury details`}
         onClick={() => setExpanded((currentExpanded) => !currentExpanded)}
       >
         <TeamLogo team={team} />
@@ -577,13 +599,17 @@ export function TeamInjuryCard({
             <strong>{team.activeInjuries}</strong>
           </div>
         </div>
-        <span className="injury-expand-control">
-          {expanded ? 'Collapse' : 'Expand'}
+        <span className="injury-expand-control" aria-hidden="true">
+          {expanded ? (
+            <ChevronUp className="injury-expand-chevron" size={18} />
+          ) : (
+            <ChevronDown className="injury-expand-chevron" size={18} />
+          )}
         </span>
       </button>
 
       {expanded ? (
-        <div className="injury-team-body">
+        <div className="injury-team-body" id={detailsId}>
           <div className="injury-team-actions">
             <button type="button" disabled={isSaving} onClick={onAdd}>
               Add injured player
@@ -708,6 +734,7 @@ function InjuryPlayerRow({ injury, onEdit, onMarkHealthy }) {
 export function InjuryEditorModal({
   actionStatus,
   initialComboboxOpen = false,
+  initialGuidanceExpanded = false,
   initialRoster = null,
   injury,
   maximumPlayerInjuryPenalty,
@@ -718,6 +745,9 @@ export function InjuryEditorModal({
   team,
 }) {
   const [draft, setDraft] = useState(() => getDraftFromInjury(injury))
+  const [guidanceExpanded, setGuidanceExpanded] = useState(
+    initialGuidanceExpanded,
+  )
   const [showNotes, setShowNotes] = useState(() => Boolean(injury?.notes?.trim()))
   const [errorMessage, setErrorMessage] = useState('')
   const [rosterSearch, setRosterSearch] = useState(() =>
@@ -1057,8 +1087,14 @@ export function InjuryEditorModal({
               <p className="eyebrow">{isEditing ? 'Edit Injury' : 'Add Injury'}</p>
               <h3 id="injury-editor-title">{team.name}</h3>
             </div>
-            <button type="button" onClick={onClose}>
-              Cancel
+            <button
+              aria-label="Close injury editor"
+              className="injury-modal-close"
+              type="button"
+              title="Close injury editor"
+              onClick={onClose}
+            >
+              <X aria-hidden="true" size={17} />
             </button>
           </div>
 
@@ -1299,28 +1335,45 @@ export function InjuryEditorModal({
             </div>
           ) : null}
 
-          <div className="injury-impact-guidance" aria-label="Injury adjustment guidance">
-            <div>
-              <strong>Guidance only</strong>
-              <span>These are judgment anchors, not mandatory player tiers.</span>
+          <details
+            className="injury-impact-guidance"
+            aria-label="Injury adjustment guidance"
+            open={guidanceExpanded}
+            onToggle={(event) =>
+              setGuidanceExpanded(event.currentTarget.open)
+            }
+          >
+            <summary>
+              <ChevronDown
+                aria-hidden="true"
+                className="injury-guidance-chevron"
+                size={17}
+              />
+              <span>
+                <strong>Injury adjustment guidance</strong>
+                <small>Guidance only · judgment anchors</small>
+              </span>
+            </summary>
+            <div className="injury-impact-guidance-content">
+              <p>These are judgment anchors, not mandatory player tiers.</p>
+              <dl>
+                {INJURY_IMPACT_GUIDANCE.map((item) => (
+                  <div key={item.impact}>
+                    <dt>{item.impact.toFixed(2)}</dt>
+                    <dd>{item.label}</dd>
+                  </div>
+                ))}
+              </dl>
+              <p>
+                Consider the replacement player and current team depth. The same
+                roster role can have different impact on different teams.
+              </p>
+              <p>
+                Use Game injury adjustment in Analyzer for cumulative lineup
+                effects not fully captured by individual player records.
+              </p>
             </div>
-            <dl>
-              {INJURY_IMPACT_GUIDANCE.map((item) => (
-                <div key={item.impact}>
-                  <dt>{item.impact.toFixed(2)}</dt>
-                  <dd>{item.label}</dd>
-                </div>
-              ))}
-            </dl>
-            <p>
-              Consider the replacement player and current team depth. The same
-              roster role can have different impact on different teams.
-            </p>
-            <p>
-              Use Game injury adjustment in Analyzer for cumulative lineup
-              effects not fully captured by individual player records.
-            </p>
-          </div>
+          </details>
 
           <div className="injury-note-control">
             <button
@@ -1345,8 +1398,9 @@ export function InjuryEditorModal({
           ) : null}
 
           <p className="injury-action-help">
-            Save updates the injury record. Mark healthy removes active impact
-            but keeps history. Delete permanently removes the record.
+            {isEditing
+              ? 'Save updates this record. Mark healthy removes active impact but keeps history; Delete permanently removes the record.'
+              : 'Save creates this injury record for the selected team.'}
           </p>
 
           {errorMessage ? (

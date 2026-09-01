@@ -23,15 +23,19 @@ const team = (abbreviation, name, score) => ({
 const createGame = ({
   away = team('TOR', 'Toronto Maple Leafs'),
   gameId,
+  gameOutcome,
   gameState = 'FUT',
   home = team('BOS', 'Boston Bruins'),
+  periodDescriptor,
   startTimeUTC = '2026-01-15T00:00:00.000Z',
   status = 'Scheduled',
-}) => ({
+} = {}) => ({
   awayTeam: away,
   gameId,
+  gameOutcome,
   gameState,
   homeTeam: home,
+  periodDescriptor,
   startTimeUTC,
   status,
 })
@@ -774,6 +778,86 @@ test('dashboard local-date helpers avoid UTC string slicing behavior', () => {
   assert.equal(dashboardUtils.parseLocalDateValue('2026-01-01').getHours(), 12)
 })
 
+test('Dashboard game-status labels use explicit NHL ending metadata and safe fallbacks', () => {
+  assert.equal(
+    dashboardUtils.getDashboardGameStatusLabel(
+      createGame({
+        gameOutcome: { lastPeriodType: 'REG' },
+        gameState: 'OFF',
+        status: 'Final',
+      }),
+    ),
+    'FINAL',
+  )
+  assert.equal(
+    dashboardUtils.getDashboardGameStatusLabel(
+      createGame({
+        gameOutcome: { lastPeriodType: 'OT' },
+        gameState: 'OFF',
+        status: 'Final',
+      }),
+    ),
+    'FINAL OT',
+  )
+  assert.equal(
+    dashboardUtils.getDashboardGameStatusLabel(
+      createGame({
+        gameState: 'OFF',
+        periodDescriptor: { periodType: 'SO' },
+        status: 'Final',
+      }),
+    ),
+    'FINAL SO',
+  )
+  assert.equal(
+    dashboardUtils.getDashboardGameStatusLabel(
+      createGame({ gameState: 'OFF', status: 'Final / OT' }),
+    ),
+    'FINAL',
+  )
+  assert.equal(
+    dashboardUtils.getDashboardGameStatusLabel(createGame()),
+    'Scheduled',
+  )
+  assert.equal(
+    dashboardUtils.getDashboardGameStatusLabel(
+      createGame({ gameState: 'LIVE', status: 'Live' }),
+    ),
+    'Live',
+  )
+})
+
+test('Dashboard date helpers use explicit English labels without changing local time semantics', () => {
+  const sameDayStart = new Date(2026, 2, 22, 19, 0)
+  const crossMidnightStart = new Date(2026, 2, 23, 1, 0)
+
+  assert.equal(
+    dashboardUtils.formatDashboardScheduleDate('2026-08-24'),
+    'Monday, August 24, 2026',
+  )
+  assert.equal(
+    dashboardUtils.formatDashboardStartTime(
+      sameDayStart.toISOString(),
+      '2026-03-22',
+    ),
+    '7:00 PM',
+  )
+  assert.equal(
+    dashboardUtils.formatDashboardStartTime(
+      crossMidnightStart.toISOString(),
+      '2026-03-22',
+    ),
+    'Mar 23 · 1:00 AM',
+  )
+  assert.doesNotMatch(
+    dashboardUtils.formatDashboardStartTime(
+      crossMidnightStart.toISOString(),
+      '2026-03-22',
+    ),
+    /klo|maanantaina|tiistaina|keskiviikkona|torstaina|perjantaina|lauantaina|sunnuntaina/i,
+  )
+})
+
 test('Dashboard renders bankroll in a separate labeled section', () => {
   const html = renderDashboard()
   const headerHtml =
@@ -887,8 +971,10 @@ test('Dashboard preseason-ready status is neutral and requires no action', () =>
     onOpenManualPowerRatingUpdate: () => {},
   })
 
-  assert.match(html, /Power Ratings ready for season start/)
+  assert.equal(countMatches(html, /Power Ratings ready for season start/g), 1)
+  assert.match(html, /✓ Power Ratings ready for season start/)
   assert.match(html, /automatic-rating-update-status neutral/)
+  assert.doesNotMatch(html, /Power Ratings are ready for season start./)
   assert.doesNotMatch(html, /initialization required/i)
   assert.doesNotMatch(html, /Manual Rating Update<\/button>/)
   assertNoInvalidNumbers(html)
@@ -932,7 +1018,7 @@ test('Dashboard automatic update trigger stays on initial load and Refresh', () 
   )
   assert.match(
     dashboardSource,
-    /const handleRefreshDashboard = \(\) => \{[\s\S]*triggerAutomaticPowerRatingUpdate\(\)/,
+    /const handleRefreshDashboard = \(\) => \{[\s\S]*?marketOddsRefreshDateRef\.current = displayDate[\s\S]*?handleRetry\(\)[\s\S]*?loadAccountData\(\)[\s\S]*?triggerAutomaticPowerRatingUpdate\(\)[\s\S]*?loadMarketOdds\(displayDate, \{ refresh: true \}\)[\s\S]*?\}/,
   )
   assert.doesNotMatch(dateChangeBlock, /triggerAutomaticPowerRatingUpdate/)
   assert.match(
@@ -1170,6 +1256,7 @@ test('completed selected-day games render one Final status and contextual action
   const completedGame = createGame({
     away: team('CAR', 'Carolina Hurricanes', 2),
     gameId: 'completed-saved',
+    gameOutcome: { lastPeriodType: 'REG' },
     gameState: 'FINAL',
     home: team('NYR', 'New York Rangers', 4),
     status: 'Final',
@@ -1190,15 +1277,21 @@ test('completed selected-day games render one Final status and contextual action
     },
   })
 
-  assert.equal(countMatches(html, />Final</g), 1)
+  assert.equal(countMatches(html, />FINAL</g), 1)
+  assert.match(html, /class="schedule-card final compact-final has-saved-bet"/)
   assert.match(html, /Bet Saved/)
+  assert.match(html, /Settlement pending/)
   assert.match(html, /View Analysis/)
   assert.match(html, /View Bet/)
+  assert.doesNotMatch(html, />Analyze Game</)
+  assert.doesNotMatch(html, /aria-label="Stored injury impact"/)
+  assert.doesNotMatch(html, /aria-label="Goalie selections"/)
+  assert.doesNotMatch(html, /aria-label="Schedule adjustments"/)
   assert.doesNotMatch(html, /<span class="dashboard-card-status final">Final/)
   assertNoInvalidNumbers(html)
 })
 
-test('Final overtime and shootout statuses are preserved without duplicate Final badges', () => {
+test('compact final cards use authoritative overtime and shootout status labels', () => {
   const overtimeHtml = renderDashboard({
     initialBets: [],
     initialPreviousSchedule: {
@@ -1211,9 +1304,11 @@ test('Final overtime and shootout statuses are preserved without duplicate Final
         createGame({
           away: team('CAR', 'Carolina Hurricanes', 2),
           gameId: 'final-ot',
-          gameState: 'FINAL',
+          gameOutcome: { lastPeriodType: 'OT' },
+          gameState: 'OFF',
           home: team('NYR', 'New York Rangers', 3),
-          status: 'Final / OT',
+          periodDescriptor: { periodType: 'OT' },
+          status: 'Final',
         }),
       ],
     },
@@ -1230,19 +1325,97 @@ test('Final overtime and shootout statuses are preserved without duplicate Final
         createGame({
           away: team('CAR', 'Carolina Hurricanes', 2),
           gameId: 'final-so',
-          gameState: 'FINAL',
+          gameOutcome: { lastPeriodType: 'SO' },
+          gameState: 'OFF',
           home: team('NYR', 'New York Rangers', 3),
-          status: 'Final / SO',
+          periodDescriptor: { periodType: 'SO' },
+          status: 'Final',
         }),
       ],
     },
   })
 
-  assert.equal(countMatches(overtimeHtml, /Final \/ OT/g), 1)
-  assert.equal(countMatches(shootoutHtml, /Final \/ SO/g), 1)
-  assert.match(overtimeHtml, /Analyze Game/)
-  assert.match(shootoutHtml, /Analyze Game/)
+  assert.equal(countMatches(overtimeHtml, />FINAL OT</g), 1)
+  assert.equal(countMatches(shootoutHtml, />FINAL SO</g), 1)
+  assert.match(overtimeHtml, /class="schedule-card final compact-final"/)
+  assert.match(overtimeHtml, /Carolina Hurricanes[\s\S]*2/)
+  assert.match(overtimeHtml, /New York Rangers[\s\S]*3/)
+  assert.match(overtimeHtml, /Winner <strong>New York Rangers<\/strong>/)
+  assert.doesNotMatch(overtimeHtml, /Analyze Game|View Analysis|View Bet/)
+  assert.doesNotMatch(shootoutHtml, /Analyze Game|View Analysis|View Bet/)
+  assert.doesNotMatch(
+    `${overtimeHtml}${shootoutHtml}`,
+    /Stored injury impact|Goalie selections|Schedule adjustments|Preliminary Analysis/,
+  )
   assertNoInvalidNumbers(`${overtimeHtml}${shootoutHtml}`)
+})
+
+test('Previous Day uses the same OT and SO final status labels', () => {
+  const html = renderDashboard({
+    initialBets: [],
+    initialPreviousSchedule: {
+      date: '2026-01-14',
+      games: [
+        createGame({
+          away: team('ANA', 'Anaheim Ducks', 4),
+          gameId: 'previous-ot',
+          gameOutcome: { lastPeriodType: 'OT' },
+          gameState: 'OFF',
+          home: team('WPG', 'Winnipeg Jets', 3),
+          periodDescriptor: { periodType: 'OT' },
+          status: 'Final',
+        }),
+        createGame({
+          away: team('MIN', 'Minnesota Wild', 4),
+          gameId: 'previous-so',
+          gameOutcome: { lastPeriodType: 'SO' },
+          gameState: 'OFF',
+          home: team('WSH', 'Washington Capitals', 3),
+          periodDescriptor: { periodType: 'SO' },
+          status: 'Final',
+        }),
+      ],
+    },
+  })
+  const previousDayHtml =
+    html.match(/<aside class="dashboard-last-night-column"[\s\S]*<\/aside>/)?.[0] ??
+    ''
+
+  assert.match(previousDayHtml, />FINAL OT</)
+  assert.match(previousDayHtml, />FINAL SO</)
+  assert.match(previousDayHtml, /Anaheim Ducks[\s\S]*4/)
+  assert.match(previousDayHtml, /Winnipeg Jets[\s\S]*3/)
+  assert.match(previousDayHtml, /Minnesota Wild[\s\S]*4/)
+  assert.match(previousDayHtml, /Washington Capitals[\s\S]*3/)
+  assertNoInvalidNumbers(previousDayHtml)
+})
+
+test('scheduled and live Dashboard status labels remain unchanged', () => {
+  const html = renderDashboard({
+    initialBets: [],
+    initialPreviousSchedule: {
+      date: '2026-01-14',
+      games: [],
+    },
+    initialSchedule: {
+      date: '2026-01-15',
+      games: [
+        createGame({ gameId: 'still-scheduled' }),
+        createGame({
+          away: team('CAR', 'Carolina Hurricanes', 1),
+          gameId: 'still-live',
+          gameState: 'LIVE',
+          home: team('NYR', 'New York Rangers', 2),
+          status: 'Live',
+        }),
+      ],
+    },
+  })
+
+  assert.match(html, />Scheduled</)
+  assert.match(html, />Live</)
+  assert.doesNotMatch(html, /compact-final|>FINAL(?: OT| SO)?</)
+  assertNoInvalidNumbers(html)
 })
 
 test('Last Night no-bet state still shows completed games', () => {
@@ -1279,15 +1452,28 @@ test('Dashboard renders empty states for no games and no last-night completions'
 
 test('selected historical date uses date-aware section labels', () => {
   const html = renderDashboard({
-    todayDateValue: '2026-07-29',
+    initialPreviousSchedule: {
+      date: '2026-03-21',
+      games: [],
+    },
+    initialSchedule: {
+      date: '2026-03-22',
+      games: [],
+    },
+    todayDateValue: '2026-08-24',
   })
 
   assert.match(html, /Selected Day/)
-  assert.match(html, /Games on/)
+  assert.match(html, /Games on Sunday, March 22, 2026/)
   assert.match(html, /Previous Day/)
+  assert.match(html, /Saturday, March 21, 2026/)
   assert.doesNotMatch(html, /Day before selected schedule date/)
   assert.doesNotMatch(html, /Today&#x27;s Games/)
   assert.doesNotMatch(html, /Last Night/)
+  assert.doesNotMatch(
+    html,
+    /maanantaina|tiistaina|keskiviikkona|torstaina|perjantaina|lauantaina|sunnuntaina|klo/i,
+  )
   assertNoInvalidNumbers(html)
 })
 
@@ -1632,6 +1818,9 @@ test('Dashboard uses concise schedule-adjustment labels and omits neutral contex
   })
 
   assert.match(adjustedHtml, /aria-label="Schedule adjustments"/)
+  assert.match(adjustedHtml, /aria-label="Stored injury impact"/)
+  assert.match(adjustedHtml, /aria-label="Goalie selections"/)
+  assert.match(adjustedHtml, />Analyze Game</)
   assert.match(adjustedHtml, /Away[\s\S]*B2B \+ Travel \+ Quick Rematch[\s\S]*-1\.00/)
   assert.match(adjustedHtml, /Home[\s\S]*B2B[\s\S]*-0\.75/)
   assert.doesNotMatch(adjustedHtml, /Away context|Home context/)
@@ -1780,8 +1969,14 @@ test('Dashboard explains when provider markets have not opened yet', () => {
     }),
   })
 
-  assert.match(html, /No markets available yet/)
-  assert.match(html, /Market odds have not opened yet\./)
+  assert.equal(
+    countMatches(
+      html,
+      /Market odds unavailable — markets have not opened yet\./g,
+    ),
+    1,
+  )
+  assert.doesNotMatch(html, /No markets available yet/)
   assert.match(html, /Preliminary/)
 })
 

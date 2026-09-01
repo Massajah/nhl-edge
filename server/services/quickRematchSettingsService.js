@@ -81,6 +81,11 @@ const buildDefaultQuickRematchSettings = () => ({
 const getSettingsModel = (options = {}) =>
   options.settingsModel ?? QuickRematchSettings
 
+const applySession = (query, session) =>
+  session && query && typeof query.session === 'function'
+    ? query.session(session)
+    : query
+
 const roundToStep = (value, step = QUICK_REMATCH_ADJUSTMENT_STEP) =>
   Number((Math.round(value / step) * step).toFixed(2))
 
@@ -398,7 +403,10 @@ const getQuickRematchSettings = async (userId, options = {}) => {
   }
 
   const settingsModel = getSettingsModel(options)
-  const settingsDocument = await settingsModel.findOne({ userId })
+  const settingsDocument = await applySession(
+    settingsModel.findOne({ userId }),
+    options.session,
+  )
 
   return {
     settings: normalizeSettingsDocument(settingsDocument),
@@ -419,7 +427,10 @@ const updateQuickRematchSettings = async (
   }
 
   const settingsModel = getSettingsModel(options)
-  const existingSettingsDocument = await settingsModel.findOne({ userId })
+  const existingSettingsDocument = await applySession(
+    settingsModel.findOne({ userId }),
+    options.session,
+  )
   const normalizedSettings = normalizeSettingsPayload(payload, {
     baseSettings: existingSettingsDocument ?? buildDefaultQuickRematchSettings(),
   })
@@ -434,6 +445,7 @@ const updateQuickRematchSettings = async (
       new: true,
       runValidators: true,
       setDefaultsOnInsert: true,
+      ...(options.session ? { session: options.session } : {}),
       upsert: true,
     },
   )

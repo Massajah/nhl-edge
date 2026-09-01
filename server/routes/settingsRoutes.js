@@ -6,6 +6,7 @@ const router = express.Router()
 
 router.use(authenticate)
 
+router.get('/storage', settingsController.getDatabaseStorage)
 router.post('/reset/settings', settingsController.resetSettingsToDefaults)
 router.post('/reset/new-season', settingsController.resetForNewSeason)
 router.post('/reset/factory', settingsController.factoryResetUserData)

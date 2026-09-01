@@ -10,6 +10,10 @@
     "lint": "node scripts/lintServer.js",
     "migrate:home-adjustments": "node scripts/migrateHomeAdjustments.js",
     "test": "node --test tests/*.test.js",
+    "verify:calibration-parity:base": "node --expose-gc scripts/verifyCalibrationParity.js --base-only",
+    "verify:calibration-combined": "node --expose-gc scripts/verifyCalibrationParity.js --combined-only",
+    "verify:calibration-robustness": "node --expose-gc scripts/verifyCalibrationRobustness.js",
+    "verify:calibration-parity": "node --expose-gc scripts/verifyCalibrationParity.js",
     "start": "node index.js"
   },
   "keywords": [],

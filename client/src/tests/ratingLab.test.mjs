@@ -95,6 +95,32 @@ const mockSimulation = {
   warnings: [],
 }
 
+const replayOptions = {
+  seasons: [
+    {
+      endDate: '2026-04-16',
+      historicalDataset: { status: 'ready' },
+      id: '20252026',
+      label: '2025–26',
+      startDate: '2025-10-07',
+    },
+    {
+      endDate: '2025-04-17',
+      historicalDataset: { status: 'partial' },
+      id: '20242025',
+      label: '2024–25',
+      startDate: '2024-10-04',
+    },
+    {
+      endDate: '2024-04-18',
+      historicalDataset: { status: 'ready' },
+      id: '20232024',
+      label: '2023–24',
+      startDate: '2023-10-10',
+    },
+  ],
+}
+
 before(async () => {
   vite = await createServer({
     appType: 'custom',
@@ -123,13 +149,83 @@ const renderRatingLab = (props = {}) =>
 test('Rating Lab renders controls', () => {
   const html = renderRatingLab()
 
+  assert.match(html, /Season/)
+  assert.match(html, /Custom date range/)
   assert.match(html, /Date From/)
   assert.match(html, /Date To/)
-  assert.match(html, /Equal ratings/)
+  assert.match(html, /Equal ratings \(50\.0\)/)
+  assert.match(html, /neutral rating of 50\.0/)
   assert.match(html, /Current Power Ratings/)
+  assert.match(html, /Scenario replay starting from current production ratings/)
   assert.match(html, /Regular season/)
+  assert.doesNotMatch(html, />Preseason</)
   assert.match(html, /Run Replay/)
   assert.match(html, /Reset Defaults/)
+})
+
+test('prepared replay seasons populate dynamically and default to the newest ready season', () => {
+  const seasons = ratingLabUtils.getPreparedReplaySeasons(replayOptions)
+  const html = renderRatingLab({ initialReplayOptions: replayOptions })
+
+  assert.deepEqual(
+    seasons.map((season) => season.id),
+    ['20252026', '20232024'],
+  )
+  assert.equal(
+    ratingLabUtils.getDefaultReplaySeasonId(replayOptions),
+    '20252026',
+  )
+  assert.match(html, /2025–26/)
+  assert.match(html, /2023–24/)
+  assert.doesNotMatch(html, /2024–25/)
+  assert.match(html, /Authoritative regular-season range/)
+  assert.match(html, /2025-10-07 to 2026-04-16/)
+  assert.doesNotMatch(html, /id="rating-lab-date-from"/)
+  assert.doesNotMatch(html, /id="rating-lab-date-to"/)
+})
+
+test('season presets and equivalent custom dates produce the identical replay request', () => {
+  const seasons = ratingLabUtils.getPreparedReplaySeasons(replayOptions)
+  const presetForm = ratingLabUtils.applyReplaySeasonPreset(
+    ratingLabUtils.createRatingLabDefaultForm(),
+    '20252026',
+    seasons,
+  )
+  const customForm = ratingLabUtils.createRatingLabDefaultForm()
+
+  customForm.dateFrom = '2025-10-07'
+  customForm.dateTo = '2026-04-16'
+
+  assert.equal(presetForm.dateFrom, '2025-10-07')
+  assert.equal(presetForm.dateTo, '2026-04-16')
+  assert.deepEqual(
+    ratingLabUtils.createSimulationPreviewPayload(presetForm),
+    ratingLabUtils.createSimulationPreviewPayload(customForm),
+  )
+})
+
+test('Custom date range restores editable controls and preserves replay modes', () => {
+  const form = ratingLabUtils.createRatingLabDefaultForm()
+
+  form.dateFrom = '2025-09-20'
+  form.dateTo = '2026-06-30'
+  form.startingMode = 'current'
+  form.gameTypes.playoffs = true
+  const html = renderRatingLab({
+    initialForm: form,
+    initialReplayOptions: replayOptions,
+    initialReplaySeasonId: ratingLabUtils.CUSTOM_REPLAY_SEASON_ID,
+  })
+  const payload = ratingLabUtils.createSimulationPreviewPayload(form)
+
+  assert.match(html, /id="rating-lab-date-from"[^>]*value="2025-09-20"/)
+  assert.match(html, /id="rating-lab-date-to"[^>]*value="2026-06-30"/)
+  assert.equal(payload.startingMode, 'current')
+  assert.deepEqual(payload.gameTypes, {
+    playoffs: true,
+    preseason: false,
+    regularSeason: true,
+  })
 })
 
 test('preview API sends the correct protected request payload', async () => {

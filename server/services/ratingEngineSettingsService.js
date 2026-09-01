@@ -174,6 +174,11 @@ const serializeProductionRatingEngineSettings = (settings) => ({
 const getSettingsModel = (options = {}) =>
   options.settingsModel ?? RatingEngineSettings
 
+const applySession = (query, session) =>
+  session && query && typeof query.session === 'function'
+    ? query.session(session)
+    : query
+
 const normalizeSettingsDocument = (document) =>
   serializeRatingEngineSettings(document ?? buildDefaultSettings())
 
@@ -189,7 +194,10 @@ const getRatingEngineSettings = async (userId, options = {}) => {
   }
 
   const settingsModel = getSettingsModel(options)
-  const settingsDocument = await settingsModel.findOne({ userId })
+  const settingsDocument = await applySession(
+    settingsModel.findOne({ userId }),
+    options.session,
+  )
   const settings = normalizeSettingsDocument(settingsDocument)
 
   return {
@@ -335,7 +343,10 @@ const updateRatingEngineSettings = async (userId, payload = {}, options = {}) =>
   }
 
   const settingsModel = getSettingsModel(options)
-  const existingDocument = await settingsModel.findOne({ userId })
+  const existingDocument = await applySession(
+    settingsModel.findOne({ userId }),
+    options.session,
+  )
   const normalizedSettings = normalizeSettingsPayload(
     payload,
     normalizeSettingsDocument(existingDocument),
@@ -350,6 +361,7 @@ const updateRatingEngineSettings = async (userId, payload = {}, options = {}) =>
       new: true,
       runValidators: true,
       setDefaultsOnInsert: true,
+      ...(options.session ? { session: options.session } : {}),
       upsert: true,
     },
   )
@@ -477,6 +489,7 @@ const updateScopedRatingEngineSettings = async (
       new: true,
       runValidators: true,
       setDefaultsOnInsert: true,
+      ...(options.session ? { session: options.session } : {}),
       upsert: true,
     },
   )
@@ -510,7 +523,10 @@ const updateRatingEngineModelAdjustments = async (
   }
 
   const settingsModel = getSettingsModel(options)
-  const existingDocument = await settingsModel.findOne({ userId })
+  const existingDocument = await applySession(
+    settingsModel.findOne({ userId }),
+    options.session,
+  )
   const fallbackSettings = normalizeSettingsDocument(existingDocument)
 
   if (
@@ -564,6 +580,25 @@ const updateRatingEngineModelAdjustments = async (
     options,
   )
 }
+
+const SPECIAL_TEAMS_SETTING_FIELDS = Object.freeze([
+  'specialTeamsAdjustment',
+  'specialTeamsAlertsEnabled',
+  'specialTeamsMode',
+  'specialTeamsRankThreshold',
+])
+
+const updateSpecialTeamsSettings = (
+  userId,
+  payload,
+  options = {},
+) => updateScopedRatingEngineSettings(
+  userId,
+  payload,
+  SPECIAL_TEAMS_SETTING_FIELDS,
+  'Special Teams',
+  options,
+)
 
 const normalizeResetScope = (scope) => {
   const normalizedScope = scope ?? RATING_ENGINE_RESET_SCOPES.ALL
@@ -660,6 +695,7 @@ module.exports = {
   RATING_ENGINE_SETTING_FIELDS,
   RATING_ENGINE_RESET_SCOPES,
   RATING_ENGINE_SETTINGS_LIMITS,
+  SPECIAL_TEAMS_SETTING_FIELDS,
   RatingEngineSettingsError,
   getRatingEngineSettings,
   getProductionRatingEngineSettings,
@@ -670,4 +706,5 @@ module.exports = {
   updateRatingEngineSettings,
   updateRatingEngineModelAdjustments,
   updateRatingEngineParameters,
+  updateSpecialTeamsSettings,
 }

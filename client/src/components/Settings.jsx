@@ -82,6 +82,7 @@ import {
   resetSettingsToDefaults,
 } from '../services/userDataResetApi.js'
 import { clearSeasonOperationalStorage } from '../utils/userDataReset.js'
+import DatabaseStoragePanel from './DatabaseStoragePanel.jsx'
 
 const SETTINGS_TABS = Object.freeze([
   { id: 'general', label: 'General' },
@@ -186,17 +187,6 @@ const REST_FATIGUE_RULES = Object.freeze([
   },
 ])
 
-// Current complete set of global automatic model point adjustments exposed here.
-const GLOBAL_AUTOMATIC_MODEL_ADJUSTMENTS = Object.freeze([
-  'Base Home Advantage',
-  'Well Rested',
-  '3 Games in 4 Days',
-  'Back-to-Back',
-  'Back-to-Back + Travel',
-  'Quick Rematch',
-  'Special Teams Matchup',
-])
-
 const formatSignedValue = (value) => {
   const numberValue = Number(
     typeof value === 'string' ? value.trim().replace(',', '.') : value,
@@ -210,6 +200,8 @@ const formatSignedValue = (value) => {
 }
 
 function Settings({
+  initialDatabaseStorage = null,
+  initialDatabaseStorageError = '',
   initialBookmakerPreferences = null,
   initialFactoryConfirmation = '',
   initialMarketOddsStatus = null,
@@ -1200,7 +1192,7 @@ function Settings({
     if (
       !dataResetDialog ||
       dataResetStatus === 'saving' ||
-      (dataResetDialog === 'factory' && factoryConfirmation !== 'RESET')
+      (dataResetDialog === 'factory' && factoryConfirmation !== 'DELETE')
     ) {
       return
     }
@@ -1319,7 +1311,7 @@ function Settings({
         <input
           id={`engine-setting-${field.key}`}
           form={formId}
-          type="text"
+          type="number"
           min={field.min}
           max={field.max}
           step={field.step}
@@ -1366,7 +1358,7 @@ function Settings({
         </span>
         <input
           id={inputId}
-          type="text"
+          type="number"
           min={min}
           max={max}
           step="0.05"
@@ -1435,11 +1427,12 @@ function Settings({
         id="settings-tab-panel-general"
         role="tabpanel"
       >
-        <div className="panel-header">
+        <div className="section-heading">
           <div>
             <p className="eyebrow">Profile</p>
             <h2>Account</h2>
           </div>
+          <span>Read-only</span>
         </div>
 
         <div className="profile-summary">
@@ -1457,28 +1450,29 @@ function Settings({
               strokeWidth={1.8}
             />
           )}
-          <div>
-            <strong>{user?.name || user?.email || 'NHL Edge user'}</strong>
-            <span>{user?.email || 'Email unavailable'}</span>
-          </div>
-        </div>
-
-        <div className="profile-grid">
-          <div className="profile-field">
-            <UserCircle aria-hidden="true" size={19} strokeWidth={2} />
-            <span>Name</span>
-            <strong>{user?.name || 'Not provided'}</strong>
-          </div>
-          <div className="profile-field">
-            <Mail aria-hidden="true" size={19} strokeWidth={2} />
-            <span>Email</span>
-            <strong>{user?.email || 'Not provided'}</strong>
-          </div>
-          <div className="profile-field">
-            <KeyRound aria-hidden="true" size={19} strokeWidth={2} />
-            <span>Authentication provider</span>
-            <strong>{getProviderLabel(user?.authProvider)}</strong>
-          </div>
+          <dl className="profile-account-details">
+            <div>
+              <dt>
+                <UserCircle aria-hidden="true" size={17} strokeWidth={2} />
+                Name
+              </dt>
+              <dd>{user?.name || 'Not provided'}</dd>
+            </div>
+            <div>
+              <dt>
+                <Mail aria-hidden="true" size={17} strokeWidth={2} />
+                Email
+              </dt>
+              <dd>{user?.email || 'Not provided'}</dd>
+            </div>
+            <div>
+              <dt>
+                <KeyRound aria-hidden="true" size={17} strokeWidth={2} />
+                Authentication provider
+              </dt>
+              <dd>{getProviderLabel(user?.authProvider)}</dd>
+            </div>
+          </dl>
         </div>
       </div>
 
@@ -1720,9 +1714,9 @@ function Settings({
                     <input
                       id="betting-setting-custom-kelly"
                       type="number"
-                      min="0.01"
+                      min="0"
                       max="1"
-                      step="0.01"
+                      step="any"
                       value={draftBettingSettings.customKellyFraction}
                       inputMode="decimal"
                       aria-invalid={Boolean(
@@ -1755,9 +1749,9 @@ function Settings({
                 <input
                   id="betting-setting-max-stake"
                   type="number"
-                  min="0.1"
+                  min="0"
                   max="100"
-                  step="0.1"
+                  step="any"
                   value={draftBettingSettings.maximumStakePercent}
                   inputMode="decimal"
                   aria-invalid={Boolean(bettingFieldErrors.maximumStakePercent)}
@@ -1791,7 +1785,7 @@ function Settings({
                   type="number"
                   min="0"
                   max="100"
-                  step="0.1"
+                  step="any"
                   value={draftBettingSettings.minimumEdgePercent}
                   inputMode="decimal"
                   aria-invalid={Boolean(bettingFieldErrors.minimumEdgePercent)}
@@ -1881,8 +1875,8 @@ function Settings({
                   </small>
                 ) : (
                   <small>
-                    Available bankroll excludes pending stakes. Current bankroll
-                    includes them.
+                    Choose which bankroll balance future stake sizing uses.
+                    Available excludes pending stakes; Current includes them.
                   </small>
                 )}
               </label>
@@ -1890,7 +1884,6 @@ function Settings({
 
             <div className="settings-subsection-heading">
               <h3>Bankroll Reference</h3>
-              <p>Choose which bankroll balance future stake sizing references.</p>
             </div>
 
             <div className="settings-bankroll-status">
@@ -2053,16 +2046,10 @@ function Settings({
         <div className="settings-info-note">
           <Gauge aria-hidden="true" size={20} strokeWidth={2} />
           <p>
-            Configure global automatic rating adjustments used by Dashboard and
-            Game Analyzer. Team-specific and game-specific values are maintained
-            elsewhere.
+            {activeTab === 'game-context'
+              ? 'Configure automatic schedule and matchup context applied before a game. Team-specific and game-specific values are maintained elsewhere.'
+              : 'Configure pre-game global model adjustments and safety guardrails. The Power Rating Engine below separately controls how completed games update team ratings.'}
           </p>
-        </div>
-
-        <div className="settings-adjustment-catalog" aria-label="Global automatic model point adjustments">
-          {GLOBAL_AUTOMATIC_MODEL_ADJUSTMENTS.map((adjustment) => (
-            <span key={adjustment}>{adjustment}</span>
-          ))}
         </div>
 
         {settingsStatus === 'loading' ? (
@@ -2109,9 +2096,9 @@ function Settings({
             <div className="settings-rule-card-heading">
               <div>
                 <h3>Home Advantage</h3>
-                <p>Global base points before team-specific adjustment.</p>
+                <p>Pre-game global model adjustment.</p>
               </div>
-              <span>Rating Engine setting</span>
+              <span>Global</span>
             </div>
 
             {HOME_ADVANTAGE_FIELD && showRatingEngineForm ? (
@@ -2119,22 +2106,14 @@ function Settings({
                 className: 'field settings-compact-number-field',
                 formId: modelAdjustmentsFormId,
                 helper:
-                  'Added to the home team before team-specific Home Adjustment is applied.',
+                  'Global home advantage applied before the team-specific Home Adjustment.',
               })
             ) : null}
 
             <div className="settings-formula-note">
-              <strong>Effective home advantage =</strong>
-              <span>Base Home Advantage + Team Home Adjustment</span>
+              <strong>Effective Home Advantage</strong>
+              <span>= Base Home Advantage + Team Home Adjustment</span>
             </div>
-            <p className="settings-card-note">
-              Base Home Advantage is global. Team Home Adjustment remains on the
-              Power Ratings page and is intentionally absent from Settings.
-            </p>
-            <p className="settings-card-save-note">
-              Save ownership: Base Home Advantage is saved with Model
-              Adjustments.
-            </p>
           </article>
 
           {showModelAdjustmentForm ? (
@@ -2239,18 +2218,6 @@ function Settings({
                 </span>
               </div>
 
-              <details className="settings-compact-details">
-                <summary>Back-to-Back meanings</summary>
-                <p>
-                  Back-to-Back: Consecutive-day games where both games are home
-                  games, or both games are away against the same home team.
-                </p>
-                <p>
-                  Back-to-Back + Travel: All other known consecutive-day
-                  transitions, including home to away, away to home, and away
-                  to away against different home teams.
-                </p>
-              </details>
             </article>
 
             <article
@@ -2265,22 +2232,22 @@ function Settings({
                 <span>Additive</span>
               </div>
 
-              <div className="settings-quick-fields">
-                <label className="toggle-field settings-master-toggle">
-                  <input
-                    type="checkbox"
-                    checked={draftQuickRematchSettings.quickRematchEnabled}
-                    disabled={isQuickRematchPending}
-                    onChange={(event) =>
-                      handleQuickRematchSettingsChange(
-                        'quickRematchEnabled',
-                        event.target.checked,
-                      )
-                    }
-                  />
-                  <span>Enable Quick Rematch</span>
-                </label>
+              <label className="toggle-field settings-master-toggle">
+                <input
+                  type="checkbox"
+                  checked={draftQuickRematchSettings.quickRematchEnabled}
+                  disabled={isQuickRematchPending}
+                  onChange={(event) =>
+                    handleQuickRematchSettingsChange(
+                      'quickRematchEnabled',
+                      event.target.checked,
+                    )
+                  }
+                />
+                <span>Enable Quick Rematch</span>
+              </label>
 
+              <div className="settings-quick-fields">
                 <label
                   className="field settings-compact-number-field"
                   htmlFor="quick-rematch-maximum-days"
@@ -2288,7 +2255,7 @@ function Settings({
                   <span>Maximum Days</span>
                   <input
                     id="quick-rematch-maximum-days"
-                    type="text"
+                    type="number"
                     min="1"
                     max="14"
                     step="1"
@@ -2373,20 +2340,19 @@ function Settings({
                       className: 'field settings-compact-number-field',
                       formId: modelAdjustmentsFormId,
                       helper:
-                        "Goalie adjustments represent the downgrade from the team's normal starting goalie. 0.00 is the team baseline. The maximum penalty limits how large a goalie downgrade can be. The team Power Rating is assumed to already reflect its normal #1 goalie.",
+                        "Sets the largest allowed downgrade from the team's normal starter. 0.00 is the baseline, and positive goalie adjustments are not used.",
                     },
                   )
                 : null}
 
-              <p className="settings-card-note">
-                Saved team goalie defaults and game-specific unlisted goalies
-                must stay between this value and 0.00. Positive goalie
-                adjustments are not used.
-              </p>
-              <p className="settings-card-save-note">
-                Save ownership: Maximum Goalie Penalty is saved with Model
-                Adjustments.
-              </p>
+              <details className="settings-compact-details">
+                <summary>How this works</summary>
+                <p>
+                  The team Power Rating already reflects its normal #1 goalie.
+                  Saved team defaults and game-specific unlisted goalies must
+                  stay between this value and 0.00.
+                </p>
+              </details>
             </article>
 
             <article
@@ -2408,24 +2374,19 @@ function Settings({
                       className: 'field settings-compact-number-field',
                       formId: modelAdjustmentsFormId,
                       helper:
-                        "Player injury adjustment represents the downgrade caused by the player's absence for this team, not the player's absolute value.",
+                        "Sets the largest downgrade for one absent skater. 0.00 means the player is adequately replaceable.",
                     },
                   )
                 : null}
 
-              <p className="settings-card-note">
-                Use 0.00 when the player is adequately replaceable. Larger
-                penalties should be reserved for difficult-to-replace impact
-                players.
-              </p>
-              <p className="settings-card-note">
-                Maximum Player Injury Penalty limits a single skater injury.
-                Multiple active injuries may sum beyond this value.
-              </p>
-              <p className="settings-card-save-note">
-                Save ownership: Maximum Player Injury Penalty is saved with
-                Model Adjustments.
-              </p>
+              <details className="settings-compact-details">
+                <summary>How this works</summary>
+                <p>
+                  The adjustment measures the impact of this player’s absence
+                  for this team, not the player’s absolute value. Multiple active
+                  injuries may sum beyond the one-player maximum.
+                </p>
+              </details>
             </article>
 
             <article
@@ -2662,7 +2623,7 @@ function Settings({
       >
         <div className="section-heading">
           <div>
-            <p className="eyebrow">Live model</p>
+            <p className="eyebrow">Post-game rating updates</p>
             <h2>Power Rating Engine</h2>
             <div className="settings-calibrated-model" aria-label="Calibrated Base Model v1 defaults">
               <span>Calibrated Base Model v1</span>
@@ -2850,6 +2811,12 @@ function Settings({
           and provider caches are never deleted by these actions.
         </p>
 
+        <DatabaseStoragePanel
+          active={activeTab === 'data-reset'}
+          initialError={initialDatabaseStorageError}
+          initialStorage={initialDatabaseStorage}
+        />
+
         {dataResetMessage ? (
           <p className={`form-status ${dataResetStatus}`} role="status">
             {dataResetMessage}
@@ -2891,13 +2858,14 @@ function Settings({
               </div>
             </div>
             <p>
-              Clear current-season hockey state while preserving betting history
-              and reusable settings.
+              Clear current-season hockey state while preserving reusable
+              configuration, betting history, and bankroll history.
             </p>
             <ul>
               <li>Ratings return to the configured starting-scale center.</li>
               <li>The current scale is preserved and unlocked for preseason.</li>
-              <li>Bets, bankroll, settings, and Rating Lab data stay intact.</li>
+              <li>Reusable settings, bet history, and bankroll history stay intact.</li>
+              <li>Shared historical datasets and provider caches stay intact.</li>
             </ul>
             <button
               className="settings-reset-action settings-reset-action-medium"
@@ -2917,13 +2885,13 @@ function Settings({
               </div>
             </div>
             <p>
-              Delete all user-owned NHL Edge data and restore a fresh-account
-              configuration.
+              Delete all user-owned NHL Edge data except the account itself, then
+              restore fresh-account defaults.
             </p>
             <ul>
-              <li>Deletes bets, bankroll, ratings history, injuries, and game inputs.</li>
-              <li>Restores settings and the 42–50 Starting Rating Scale.</li>
-              <li>Shared NHL history and provider caches stay intact.</li>
+              <li>Deletes bets, bankroll, ratings history, injuries, game inputs, lineups, goalie data, and Rating Lab promotion audits.</li>
+              <li>Deletes custom settings and bookmaker preferences, then restores defaults and the 42–50 Starting Rating Scale.</li>
+              <li>Your account, shared NHL history, and provider caches stay intact.</li>
             </ul>
             <button
               className="settings-reset-action settings-reset-action-high"
@@ -2937,7 +2905,14 @@ function Settings({
       </div>
 
       {dataResetDialog ? (
-        <div className="settings-reset-modal-backdrop">
+        <div
+          className="settings-reset-modal-backdrop"
+          onKeyDown={(event) => {
+            if (event.key === 'Escape') {
+              closeDataResetDialog()
+            }
+          }}
+        >
           <div
             aria-describedby="settings-reset-dialog-description"
             aria-labelledby="settings-reset-dialog-title"
@@ -2959,23 +2934,27 @@ function Settings({
             <div id="settings-reset-dialog-description">
               {dataResetDialog === 'settings' ? (
                 <p>
-                  This restores NHL Edge model, context, and betting settings to
-                  their default values. Your bets, bankroll, Power Ratings,
-                  injuries, and historical data will not be deleted.
+                  This restores NHL Edge model, context, betting, bookmaker, and
+                  Starting Rating Scale settings to their defaults. Your bets,
+                  bankroll, Power Ratings, injuries, game data, and shared
+                  historical datasets will not be deleted.
                 </p>
               ) : dataResetDialog === 'new-season' ? (
                 <p>
-                  This clears current-season Power Ratings history, injuries,
-                  saved game inputs, and season-specific analysis state. Your bet
-                  history, bankroll history, settings, and Rating Lab historical
-                  datasets will be preserved.
+                  This clears current-season Power Ratings and processed-game
+                  history, injuries, saved game inputs, and season-specific
+                  analysis state. Reusable settings, bet history, bankroll history,
+                  shared historical datasets, and provider caches will be
+                  preserved.
                 </p>
               ) : (
                 <p>
-                  This permanently deletes your bets, bankroll history, Power
-                  Ratings history, injuries, saved analyses, game inputs, and
-                  custom settings. Shared NHL historical datasets and provider
-                  caches are not deleted. This action cannot be undone.
+                  This permanently deletes your bets and bankroll history, Power
+                  Ratings and processed-game history, injuries, saved game inputs,
+                  lineup and goalie data, Rating Lab promotion audits, custom
+                  settings, and bookmaker preferences. Your account, shared NHL
+                  historical datasets, and provider caches remain. Defaults are
+                  restored. This action cannot be undone.
                 </p>
               )}
             </div>
@@ -2983,7 +2962,7 @@ function Settings({
             {dataResetDialog === 'factory' ? (
               <label className="settings-reset-confirmation-field">
                 <span>
-                  Type <strong>RESET</strong> to continue
+                  Type <strong>DELETE</strong> to continue
                 </span>
                 <input
                   autoComplete="off"
@@ -3021,7 +3000,7 @@ function Settings({
                 disabled={
                   dataResetStatus === 'saving' ||
                   (dataResetDialog === 'factory' &&
-                    factoryConfirmation !== 'RESET')
+                    factoryConfirmation !== 'DELETE')
                 }
                 onClick={handleDataResetConfirm}
                 type="button"

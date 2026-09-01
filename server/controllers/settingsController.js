@@ -4,6 +4,19 @@ const quickRematchSettingsService = require('../services/quickRematchSettingsSer
 const bookmakerPreferencesService = require('../services/bookmakerPreferencesService')
 const { marketOddsService } = require('../services/marketOddsService')
 const userDataResetService = require('../services/userDataResetService')
+const databaseStorageService = require('../services/databaseStorageService')
+
+const getDatabaseStorage = async (request, response, next) => {
+  try {
+    const result = await databaseStorageService.getDatabaseStorageStatus({
+      refresh: request.query.refresh === 'true',
+    })
+
+    response.json(result)
+  } catch (error) {
+    next(error)
+  }
+}
 
 const resetSettingsToDefaults = async (request, response, next) => {
   try {
@@ -210,6 +223,7 @@ module.exports = {
   factoryResetUserData,
   getBettingSettings,
   getBookmakerPreferences,
+  getDatabaseStorage,
   getQuickRematchSettings,
   getRatingEngineSettings,
   resetBettingSettings,

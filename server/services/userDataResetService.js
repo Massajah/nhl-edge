@@ -12,6 +12,7 @@ const PowerRatingSettings = require('../models/PowerRatingSettings')
 const ProcessedRatingGame = require('../models/ProcessedRatingGame')
 const QuickRematchSettings = require('../models/QuickRematchSettings')
 const RatingEngineSettings = require('../models/RatingEngineSettings')
+const RatingLabPromotionAudit = require('../models/RatingLabPromotionAudit')
 const TeamGoalies = require('../models/TeamGoalies')
 const TeamLineup = require('../models/TeamLineup')
 const nhlSeasonService = require('./nhlSeasonService')
@@ -28,7 +29,7 @@ const {
   normalizeStartingRatingScale,
 } = require('./startingRatingScaleService')
 
-const FACTORY_RESET_CONFIRMATION = 'RESET'
+const FACTORY_RESET_CONFIRMATION = 'DELETE'
 
 class UserDataResetError extends Error {
   constructor(message, statusCode = 500, details = undefined) {
@@ -60,6 +61,8 @@ const getModels = (options = {}) => ({
     options.models?.QuickRematchSettings ?? QuickRematchSettings,
   RatingEngineSettings:
     options.models?.RatingEngineSettings ?? RatingEngineSettings,
+  RatingLabPromotionAudit:
+    options.models?.RatingLabPromotionAudit ?? RatingLabPromotionAudit,
   TeamGoalies: options.models?.TeamGoalies ?? TeamGoalies,
   TeamLineup: options.models?.TeamLineup ?? TeamLineup,
 })
@@ -292,6 +295,11 @@ const factoryResetUserData = async (userId, payload = {}, options = {}) => {
       ),
       powerRatings: await deleteManyForUser(
         models.PowerRating,
+        userId,
+        session,
+      ),
+      ratingLabPromotionAudits: await deleteManyForUser(
+        models.RatingLabPromotionAudit,
         userId,
         session,
       ),

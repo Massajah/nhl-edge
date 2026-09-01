@@ -370,6 +370,98 @@ const updateStartingPowerRating = async (
   return updatePowerRating(userId, teamId, payload, options)
 }
 
+const updateHomeAdjustments = async (
+  userId,
+  adjustments,
+  options = {},
+) => {
+  if (!userId) {
+    throw new PowerRatingsError('Authenticated userId is required.', 401)
+  }
+  if (!Array.isArray(adjustments)) {
+    throw new PowerRatingsError(
+      'Team Home Advantage settings must be an array.',
+      400,
+    )
+  }
+
+  const normalized = adjustments.map((row, index) => {
+    const teamId = normalizeIdentifier(row?.teamId)
+    const adjustment = Number(row?.adjustment)
+
+    if (!teamId || !Number.isFinite(adjustment)) {
+      throw new PowerRatingsError(
+        'Each Team Home Advantage setting requires a teamId and finite adjustment.',
+        400,
+        { index },
+      )
+    }
+    if (
+      adjustment < HOME_ADJUSTMENT_LIMITS.min ||
+      adjustment > HOME_ADJUSTMENT_LIMITS.max
+    ) {
+      throw new PowerRatingsError(
+        `homeAdjustment must be between ${HOME_ADJUSTMENT_LIMITS.min} and ${HOME_ADJUSTMENT_LIMITS.max}.`,
+        400,
+        { index, teamId },
+      )
+    }
+
+    return { adjustment, teamId }
+  })
+  const teamIds = normalized.map((row) => row.teamId)
+
+  if (new Set(teamIds).size !== teamIds.length) {
+    throw new PowerRatingsError(
+      'Team Home Advantage settings require unique team IDs.',
+      400,
+    )
+  }
+
+  const existing = await getRatingsForUser(userId, options)
+  const existingIds = existing.map((rating) => normalizeIdentifier(rating.teamId))
+  const missingTeamIds = existingIds.filter((teamId) => !teamIds.includes(teamId))
+  const unknownTeamIds = teamIds.filter((teamId) => !existingIds.includes(teamId))
+
+  if (missingTeamIds.length > 0 || unknownTeamIds.length > 0) {
+    throw new PowerRatingsError(
+      'Team Home Advantage settings must cover the current production team set exactly.',
+      409,
+      { missingTeamIds, unknownTeamIds },
+    )
+  }
+
+  if (normalized.length === 0) {
+    return { modifiedCount: 0, settings: [] }
+  }
+
+  const powerRatingModel = getPowerRatingModel(options)
+  const result = await powerRatingModel.bulkWrite(
+    normalized.map(({ adjustment, teamId }) => ({
+      updateOne: {
+        filter: { teamId, userId },
+        update: { $set: { homeAdvantage: adjustment } },
+      },
+    })),
+    {
+      ordered: true,
+      ...(options.session ? { session: options.session } : {}),
+    },
+  )
+
+  if ((result.matchedCount ?? normalized.length) !== normalized.length) {
+    throw new PowerRatingsError(
+      'Team Home Advantage settings changed concurrently.',
+      409,
+    )
+  }
+
+  return {
+    modifiedCount: result.modifiedCount ?? 0,
+    settings: normalized,
+  }
+}
+
 const getStartingRatingScaleLifecycle = async (userId, options = {}) => {
   const processedRatingGameModel =
     options.processedRatingGameModel ?? ProcessedRatingGame
@@ -571,6 +663,7 @@ module.exports = {
   PowerRatingsError,
   captureSeasonStartingRatings,
   getPowerRatings,
+  getRatingsForUser,
   getSeedTeams,
   getStartingRatingScaleConfiguration,
   getStartingRatingScaleLifecycle,
@@ -580,4 +673,5 @@ module.exports = {
   updateStartingRatingScaleConfiguration,
   updateStartingPowerRating,
   updatePowerRating,
+  updateHomeAdjustments,
 }

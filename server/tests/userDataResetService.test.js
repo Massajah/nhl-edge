@@ -51,6 +51,7 @@ const createModels = (calls, deletedCount = 1) => {
     'ProcessedRatingGame',
     'QuickRematchSettings',
     'RatingEngineSettings',
+    'RatingLabPromotionAudit',
     'TeamGoalies',
     'TeamLineup',
   ]
@@ -86,7 +87,7 @@ test('all reset lifecycle endpoints require authentication', async () => {
   const statuses = await Promise.all(
     paths.map((path) =>
       request(path, {
-        body: JSON.stringify({ confirmation: 'RESET' }),
+        body: JSON.stringify({ confirmation: 'DELETE' }),
         headers: { 'Content-Type': 'application/json' },
         method: 'POST',
       }),
@@ -201,14 +202,18 @@ test('factory reset deletes every user-owned store without touching shared histo
   const calls = []
   const result = await factoryResetUserData(
     USER_ID,
-    { confirmation: 'RESET', userId: 'another-user' },
+    { confirmation: 'DELETE', userId: 'another-user' },
     createOptions(createModels(calls)),
   )
 
   assert.equal(result.success, true)
   assert.equal(result.defaults.startingRatingScale.min, 42)
   assert.equal(result.defaults.startingRatingScale.max, 50)
-  assert.equal(calls.length, 15)
+  assert.equal(calls.length, 16)
+  assert.equal(
+    calls.some(({ name }) => name === 'RatingLabPromotionAudit'),
+    true,
+  )
   assert.equal(
     calls.every(
       ({ filter, options }) =>
@@ -235,7 +240,7 @@ test('factory reset is idempotent when the user is already fresh', async () => {
   const calls = []
   const result = await factoryResetUserData(
     USER_ID,
-    { confirmation: 'RESET' },
+    { confirmation: 'DELETE' },
     createOptions(createModels(calls, 0)),
   )
 

@@ -44,6 +44,7 @@ Protected user-specific routes:
 - `POST /api/power-ratings/update`
 - `/api/settings/betting`
 - `/api/settings/rating-engine`
+- `GET /api/settings/storage`
 - `GET /api/settings/bookmakers`
 - `PUT /api/settings/bookmakers`
 - `GET /api/market-odds/nhl?date=YYYY-MM-DD&refresh=true|false`
@@ -52,6 +53,16 @@ Protected user-specific routes:
 - `PUT /api/teams/:teamId/goalie-adjustments/:nhlPlayerId`
 - `DELETE /api/teams/:teamId/goalie-adjustments/:nhlPlayerId`
 - `PATCH /api/game-context/:gameId/goalies`
+
+## Database storage monitoring
+
+`GET /api/settings/storage` is an authenticated, read-only monitor. It measures
+cluster-wide uncompressed BSON data plus indexes with Atlas `atlasSize`; it does
+not scan documents or modify storage. The capacity is separate deployment
+configuration: `MONGODB_STORAGE_LIMIT_BYTES` defaults to 512 MiB for the
+intended Atlas Free cluster. Results are cached in memory for three minutes by
+default (`MONGODB_STORAGE_CACHE_TTL_MS`), while `?refresh=true` refreshes the
+measurement. The monitor never performs cleanup or retention work.
 
 Shared read-only NHL provider routes include `GET /api/standings` and
 `GET /api/standings?season=YYYYyyyy`, plus
@@ -784,11 +795,13 @@ Ratings and settings with the authenticated `userId`. It requires a complete,
 finite set of current Power Ratings when the selected start source requires it.
 Current starting values use production `baseRating` and are rejected for
 cross-season calibration because they can leak present-day strength into older
-seasons. For the latest historical season, centered fixed-spread starts can use
-current `baseRating` ordering. Older seasons use an explicit,
-franchise-normalized alphabetical fallback when no historical preseason rating
-snapshot exists; that source is returned per season and never presented as a
-historical rating estimate.
+seasons. Every fixed-spread multi-season run uses the deterministic
+`FIXED_SPREAD_ALPHABETICAL` policy for every evaluated season, including the
+latest completed season. The result exposes the policy, human-readable label,
+ordering source, and deterministic starting-state signature. Single-season
+Advanced Lab runs retain current-rating values and current-ordered fixed spreads
+for scenario exploration, but label those modes non-comparable to the
+leakage-safe multi-season reference.
 
 Historical calibration data is shared infrastructure, not user-owned data.
 `HistoricalNhlGame` stores one completed regular-season game per globally unique
@@ -1129,8 +1142,75 @@ goalie configuration, settings, and all Rating Lab history remain unchanged.
 
 Factory reset removes the user's settings, bets, bankroll profiles and
 transactions, Power Ratings and processed history, injuries, game contexts,
-goalie adjustments, team goalie lists, and team lineups. It does not delete the
+goalie adjustments, team goalie lists, team lineups, and Rating Lab promotion
+audit records. It does not delete the
 `User` account. It also deliberately never references the global
 `HistoricalNhlGame`, `HistoricalSeasonDataset`, or
 `HistoricalSpecialTeamsSeason` models, so shared NHL data and provider caches
 survive every user reset. Supplying any client `userId` has no effect on scope.
+
+## Rating Lab controlled production promotion
+
+Completed Model Calibration runs that use `CURRENT_PRODUCTION` keep a trusted,
+user-scoped in-memory analysis context for 30 minutes. A reviewed, completed,
+directly comparable Team Home Advantage, Rest & Fatigue, Quick Rematch, Special
+Teams, or supported `COMBINED` candidate can enter the separate promotion
+command path:
+
+- `POST /api/power-rating-simulations/model-calibration/promotion/preview`
+  accepts only `runId` and `candidateId` and performs no writes.
+- `POST /api/power-rating-simulations/model-calibration/promotion/apply`
+  accepts only the server-issued `promotionPreviewId`.
+
+Base Model parameters, starting ratings, injuries, goalies, motivation, and
+manual Analyzer values are not promotable. Metrics, ranking, shortlist state,
+and robustness results never grant eligibility. When robustness exists, the
+preview carries only its concise completed summary; it is not rerun.
+
+The stale-state identity is the frozen replay-relevant baseline: Base Model
+version/parameters plus Team Home Advantage, Rest & Fatigue, Quick Rematch,
+and Special Teams. Goalie and injury guardrails and other unrelated user data
+are excluded. This is narrower than the diagnostic full production snapshot
+ID, so an unrelated guardrail edit does not invalidate promotion. Every
+preview binds the authenticated user, frozen identities, candidate signature,
+current relevant-state identity, and exact diff. Previews expire after 10
+minutes and are single-use.
+
+Apply opens a MongoDB transaction, re-reads and revalidates the relevant state,
+uses the existing settings/rating services with the transaction session,
+reads the affected families back, and creates one immutable
+`RatingLabPromotionAudit` record before commit. Multi-family writes therefore
+commit together or roll back together. No-op previews, ordinary validation
+failures, stale attempts, and transaction failures do not create audit records.
+Settings reads are not cached, so Dashboard, Analyzer, Settings, and later
+calibration snapshots resolve the committed values directly without a separate
+Rating Lab cache.
+
+## Rating Lab promotion history and final workflow
+
+Rating Lab now follows one completed workflow: Historical Replay remains a
+separate replay tool; Model Calibration proceeds through Calibration →
+Shortlist → Robustness Analysis → Controlled Promotion; Promotion History is
+the durable read-only audit view; and Advanced Labs retain specialist research
+and diagnostic workflows.
+
+Promotion history reads the immutable `RatingLabPromotionAudit` collection:
+
+- `GET /api/power-rating-simulations/model-calibration/promotions` returns the
+  authenticated user's newest records first, with a default limit of 20, a
+  maximum of 50, and an opaque load-more cursor.
+- `GET /api/power-rating-simulations/model-calibration/promotions/:promotionId`
+  returns one user-scoped historical diff and its concise provenance and
+  robustness summary.
+
+These endpoints return deliberate DTOs, never expose MongoDB or user metadata,
+and perform no production or audit writes. Historical before/after values come
+only from the audit record; production settings repositories remain the source
+of truth for current configuration. Factory Reset removes these user-owned
+audits as part of the established reset lifecycle.
+
+Production promotion remains explicit, and Base Model promotion is unsupported.
+Calibration contexts, robustness results, and promotion previews remain
+single-process in-memory state and do not survive server restart; durable
+promotion history does. Rating Lab includes no optimizer, automatic tuning,
+automatic candidate selection, or automatic promotion.

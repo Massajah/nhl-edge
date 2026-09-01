@@ -122,6 +122,10 @@ test('Add Injury renders roster selector details, search and Other / Unlisted', 
   assert.doesNotMatch(markup, /Manual player name/)
   assert.match(markup, /Guidance only/)
   assert.match(markup, /replacement player and current team depth/)
+  assert.match(markup, /Save creates this injury record for the selected team/)
+  assert.doesNotMatch(markup, /Mark healthy removes active impact/)
+  assert.doesNotMatch(markup, /Delete permanently removes the record/)
+  assert.doesNotMatch(markup, /<details[^>]*open=""/)
 })
 
 test('player combobox keeps Other available during loading and empty roster states', () => {
@@ -214,6 +218,117 @@ test('impact choices respect the configured individual maximum and half-point sc
   assert.equal(injuryUtils.isStandardInjuryImpact(-2, -1.5), false)
   assert.equal(injuryUtils.isStandardInjuryImpact(-0.75, -2.5), false)
   assert.equal(injuryUtils.isStandardInjuryImpact(0.5, -2.5), false)
+})
+
+test('team accordion uses the full accessible row and compact state chevrons', async () => {
+  const team = {
+    abbreviation: 'BOS',
+    activeInjuries: 1,
+    division: 'Atlantic',
+    id: 'BOS',
+    injuries: [],
+    name: 'Boston Bruins',
+    totalImpact: -1.5,
+  }
+  const props = {
+    onAdd() {},
+    onClearHistory() {},
+    onEdit() {},
+    onMarkHealthy() {},
+    team,
+  }
+  const collapsedMarkup = renderToStaticMarkup(
+    React.createElement(InjuryManagerModule.TeamInjuryCard, props),
+  )
+  const expandedMarkup = renderToStaticMarkup(
+    React.createElement(InjuryManagerModule.TeamInjuryCard, {
+      ...props,
+      initialExpanded: true,
+    }),
+  )
+  const source = await readFile(
+    new URL('../components/InjuryManager.jsx', import.meta.url),
+    'utf8',
+  )
+
+  assert.match(
+    collapsedMarkup,
+    /<button[^>]*class="injury-team-header"[^>]*type="button"[^>]*aria-expanded="false"/,
+  )
+  assert.match(collapsedMarkup, /lucide-chevron-down/)
+  assert.doesNotMatch(collapsedMarkup, /class="injury-team-body"/)
+  assert.match(expandedMarkup, /aria-expanded="true"/)
+  assert.match(expandedMarkup, /lucide-chevron-up/)
+  assert.match(expandedMarkup, /class="injury-team-body"[^>]*id=/)
+  assert.match(expandedMarkup, /<\/button><div class="injury-team-body"/)
+  assert.match(source, /aria-controls=\{detailsId\}/)
+  assert.match(source, /onClick=\{\(\) => setExpanded/)
+})
+
+test('healthy teams remain clickable, expandable, and able to add injuries', () => {
+  const markup = renderToStaticMarkup(
+    React.createElement(InjuryManagerModule.TeamInjuryCard, {
+      initialExpanded: true,
+      onAdd() {},
+      onClearHistory() {},
+      onEdit() {},
+      onMarkHealthy() {},
+      team: {
+        abbreviation: 'ANA',
+        activeInjuries: 0,
+        division: 'Pacific',
+        id: 'ANA',
+        injuries: [],
+        name: 'Anaheim Ducks',
+        totalImpact: 0,
+      },
+    }),
+  )
+
+  assert.match(markup, /injury-team-card healthy expanded/)
+  assert.match(markup, /class="injury-team-header"/)
+  assert.match(markup, /Impact/)
+  assert.match(markup, /Active/)
+  assert.match(markup, />Add injured player<\/button>/)
+})
+
+test('injury guidance is natively collapsible without changing form values', () => {
+  const injury = {
+    active: true,
+    durationType: 'long-term',
+    expectedReturn: 'January',
+    impact: -1.5,
+    injuryType: 'Lower body',
+    isGoalie: false,
+    notes: 'Re-evaluate next week',
+    playerName: 'Legacy Player',
+    position: '',
+    providerPlayerId: null,
+    status: 'out',
+  }
+  const renderEditor = (initialGuidanceExpanded) =>
+    renderToStaticMarkup(
+      React.createElement(InjuryManagerModule.InjuryEditorModal, {
+        ...modalProps,
+        initialGuidanceExpanded,
+        injury,
+        mode: 'edit',
+      }),
+    )
+  const collapsedMarkup = renderEditor(false)
+  const expandedMarkup = renderEditor(true)
+
+  assert.doesNotMatch(collapsedMarkup, /<details[^>]*open=""/)
+  assert.match(expandedMarkup, /<details[^>]*open=""/)
+
+  for (const markup of [collapsedMarkup, expandedMarkup]) {
+    assert.match(markup, /<summary>[\s\S]*Injury adjustment guidance/)
+    assert.match(markup, /value="-1.5" selected="">-1.50/)
+    assert.match(markup, /Legacy Player/)
+    assert.match(markup, /replacement player and current team depth/)
+    assert.match(markup, /Game injury adjustment in Analyzer/)
+    assert.match(markup, /Mark healthy removes active impact but keeps history/)
+  }
 })
 
 test('summary normalization keeps zero-impact skaters visible and forces goalies to zero', () => {

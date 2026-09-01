@@ -78,6 +78,43 @@ export const parseLocalDateValue = (dateValue) => {
   return Number.isNaN(parsedDate.getTime()) ? new Date() : parsedDate
 }
 
+export const formatDashboardScheduleDate = (dateValue) => {
+  if (!dateValue) {
+    return 'Select a date'
+  }
+
+  return new Intl.DateTimeFormat('en-US', {
+    day: 'numeric',
+    month: 'long',
+    weekday: 'long',
+    year: 'numeric',
+  }).format(parseLocalDateValue(dateValue))
+}
+
+export const formatDashboardStartTime = (startTimeUTC, scheduleDate) => {
+  const startTime = new Date(startTimeUTC)
+
+  if (Number.isNaN(startTime.getTime())) {
+    return 'Time TBD'
+  }
+
+  const timeLabel = new Intl.DateTimeFormat('en-US', {
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(startTime)
+
+  if (toLocalDateValue(startTime) === scheduleDate) {
+    return timeLabel
+  }
+
+  const dateLabel = new Intl.DateTimeFormat('en-US', {
+    day: 'numeric',
+    month: 'short',
+  }).format(startTime)
+
+  return `${dateLabel} · ${timeLabel}`
+}
+
 export const shiftLocalDateValue = (dateValue, dayCount) => {
   const nextDate = parseLocalDateValue(dateValue)
   nextDate.setDate(nextDate.getDate() + dayCount)
@@ -114,6 +151,33 @@ export const isGameFinal = (game = {}) =>
   String(game.gameState ?? '').toUpperCase() === 'FINAL' ||
   String(game.gameState ?? '').toUpperCase() === 'OFF' ||
   String(game.status ?? '').toLowerCase().includes('final')
+
+const getProviderPeriodType = (game = {}) => {
+  const periodType =
+    game.gameOutcome?.lastPeriodType ?? game.periodDescriptor?.periodType
+  const localizedPeriodType =
+    typeof periodType === 'string' ? periodType : periodType?.default
+
+  return String(localizedPeriodType ?? '').trim().toUpperCase()
+}
+
+export const getDashboardGameStatusLabel = (game = {}) => {
+  if (!isGameFinal(game)) {
+    return game.status ?? ''
+  }
+
+  const periodType = getProviderPeriodType(game)
+
+  if (['OT', 'OVERTIME'].includes(periodType)) {
+    return 'FINAL OT'
+  }
+
+  if (['SO', 'SHOOTOUT'].includes(periodType)) {
+    return 'FINAL SO'
+  }
+
+  return 'FINAL'
+}
 
 export const isGameStarted = (game = {}) => {
   const gameState = String(game.gameState ?? '').toUpperCase()

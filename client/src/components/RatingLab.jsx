@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowDownUp,
   LoaderCircle,
@@ -10,9 +10,17 @@ import BaseModelCalibration from './BaseModelCalibration.jsx'
 import TeamHomeAdvantageCalibration from './TeamHomeAdvantageCalibration.jsx'
 import ScheduleContextCalibration from './ScheduleContextCalibration.jsx'
 import SpecialTeamsCalibration from './SpecialTeamsCalibration.jsx'
-import { previewPowerRatingSimulation } from '../services/powerRatingSimulationsApi.js'
+import ModelCalibration from './ModelCalibration.jsx'
+import PromotionHistory from './PromotionHistory.jsx'
 import {
+  getBaseModelCalibrationOptions,
+  previewPowerRatingSimulation,
+} from '../services/powerRatingSimulationsApi.js'
+import {
+  CUSTOM_REPLAY_SEASON_ID,
+  EQUAL_REPLAY_STARTING_RATING,
   RATING_LAB_CONFIGURATION_FIELDS,
+  applyReplaySeasonPreset,
   createRatingLabDefaultForm,
   createSimulationPreviewPayload,
   deriveRatingLabResults,
@@ -23,15 +31,20 @@ import {
   formatSkipReasonLabel,
   getChangeLabel,
   getChangeTone,
+  getDefaultReplaySeasonId,
+  getPreparedReplaySeasons,
   validateRatingLabForm,
 } from '../utils/ratingLab.js'
 
 const startingModeOptions = [
   {
-    label: 'Equal ratings',
+    description:
+      'All teams start at the neutral rating of 50.0. Replay results create the relative rating differences.',
+    label: `Equal ratings (${EQUAL_REPLAY_STARTING_RATING.toFixed(1)})`,
     value: 'equal',
   },
   {
+    description: 'Scenario replay starting from current production ratings.',
     label: 'Current Power Ratings',
     value: 'current',
   },
@@ -45,10 +58,6 @@ const gameTypeOptions = [
   {
     key: 'playoffs',
     label: 'Playoffs',
-  },
-  {
-    key: 'preseason',
-    label: 'Preseason',
   },
 ]
 
@@ -105,6 +114,13 @@ const formatSimulationError = (error) => {
   return message
 }
 
+const advancedLabModes = new Set([
+  'calibration',
+  'home-advantage',
+  'schedule-context',
+  'special-teams',
+])
+
 function RatingLab({
   initialCalibrationOptions = null,
   initialCalibrationRuns = [],
@@ -122,12 +138,53 @@ function RatingLab({
   initialErrorMessage = '',
   initialForm,
   initialMode = 'replay',
+  initialModelCalibrationCompletedRequest = null,
+  initialModelCalibrationErrorMessage = '',
+  initialModelCalibrationOptions = null,
+  initialModelCalibrationResult = null,
+  initialModelCalibrationStatus = 'idle',
+  initialPromotionHistoryDetails = {},
+  initialPromotionHistoryErrorMessage = '',
+  initialPromotionHistoryExpandedIds = [],
+  initialPromotionHistoryPagination = null,
+  initialPromotionHistoryPromotions = null,
+  initialPromotionHistoryStatus = 'idle',
+  initialReplayOptions = null,
+  initialReplaySeasonId,
   initialResult = null,
   initialStatus = 'idle',
+  loadReplayOptions = getBaseModelCalibrationOptions,
   previewSimulation = previewPowerRatingSimulation,
 } = {}) {
-  const [mode, setMode] = useState(initialMode)
-  const [form, setForm] = useState(() => initialForm ?? createRatingLabDefaultForm())
+  const replayOptionsSeed = initialReplayOptions ?? initialCalibrationOptions
+  const initialPreparedReplaySeasons = getPreparedReplaySeasons(
+    replayOptionsSeed ?? {},
+  )
+  const resolvedInitialReplaySeasonId =
+    initialReplaySeasonId ??
+    (initialForm
+      ? CUSTOM_REPLAY_SEASON_ID
+      : getDefaultReplaySeasonId(replayOptionsSeed ?? {}))
+  const [mode, setMode] = useState(
+    advancedLabModes.has(initialMode) ? 'advanced' : initialMode,
+  )
+  const [advancedLab, setAdvancedLab] = useState(
+    advancedLabModes.has(initialMode) ? initialMode : 'calibration',
+  )
+  const [form, setForm] = useState(() =>
+    applyReplaySeasonPreset(
+      initialForm ?? createRatingLabDefaultForm(),
+      resolvedInitialReplaySeasonId,
+      initialPreparedReplaySeasons,
+    ),
+  )
+  const [replayOptions, setReplayOptions] = useState(replayOptionsSeed)
+  const [replayOptionsStatus, setReplayOptionsStatus] = useState(
+    replayOptionsSeed ? 'success' : 'loading',
+  )
+  const [selectedReplaySeasonId, setSelectedReplaySeasonId] = useState(
+    resolvedInitialReplaySeasonId,
+  )
   const [result, setResult] = useState(initialResult)
   const [status, setStatus] = useState(initialResult ? 'success' : initialStatus)
   const [errorMessage, setErrorMessage] = useState(initialErrorMessage)
@@ -135,17 +192,95 @@ function RatingLab({
     direction: 'desc',
     key: 'finalRating',
   })
+  const replaySeasonSelectionTouched = useRef(false)
   const isRunning = status === 'loading'
+  const preparedReplaySeasons = useMemo(
+    () => getPreparedReplaySeasons(replayOptions ?? {}),
+    [replayOptions],
+  )
+  const selectedReplaySeason = preparedReplaySeasons.find(
+    (season) => season.id === selectedReplaySeasonId,
+  )
   const derivedResults = useMemo(
     () => (result ? deriveRatingLabResults(result, sortState) : null),
     [result, sortState],
   )
+
+  useEffect(() => {
+    if (replayOptionsSeed || mode !== 'replay') {
+      return undefined
+    }
+
+    let active = true
+
+    loadReplayOptions()
+      .then((loadedOptions) => {
+        if (!active) {
+          return
+        }
+
+        const loadedSeasons = getPreparedReplaySeasons(loadedOptions)
+
+        setReplayOptions(loadedOptions)
+        setReplayOptionsStatus('success')
+
+        if (!initialForm && !replaySeasonSelectionTouched.current) {
+          const defaultSeasonId = loadedSeasons.some(
+            (season) => season.id === initialReplaySeasonId,
+          )
+            ? initialReplaySeasonId
+            : getDefaultReplaySeasonId(loadedOptions)
+
+          setSelectedReplaySeasonId(defaultSeasonId)
+          setForm((currentForm) =>
+            applyReplaySeasonPreset(
+              currentForm,
+              defaultSeasonId,
+              loadedSeasons,
+            ),
+          )
+        }
+      })
+      .catch(() => {
+        if (active) {
+          setReplayOptionsStatus('error')
+        }
+      })
+
+    return () => {
+      active = false
+    }
+  }, [
+    initialForm,
+    initialReplaySeasonId,
+    loadReplayOptions,
+    mode,
+    replayOptionsSeed,
+  ])
 
   const updateField = (field, value) => {
     setForm((currentForm) => ({
       ...currentForm,
       [field]: value,
     }))
+    setErrorMessage('')
+  }
+
+  const updateReplayDate = (field, value) => {
+    replaySeasonSelectionTouched.current = true
+    updateField(field, value)
+  }
+
+  const handleReplaySeasonChange = (seasonId) => {
+    replaySeasonSelectionTouched.current = true
+    setSelectedReplaySeasonId(seasonId)
+    setForm((currentForm) =>
+      applyReplaySeasonPreset(
+        currentForm,
+        seasonId,
+        preparedReplaySeasons,
+      ),
+    )
     setErrorMessage('')
   }
 
@@ -172,7 +307,17 @@ function RatingLab({
   }
 
   const handleReset = () => {
-    setForm(createRatingLabDefaultForm())
+    const defaultSeasonId = getDefaultReplaySeasonId(replayOptions ?? {})
+
+    replaySeasonSelectionTouched.current = false
+    setSelectedReplaySeasonId(defaultSeasonId)
+    setForm(
+      applyReplaySeasonPreset(
+        createRatingLabDefaultForm(),
+        defaultSeasonId,
+        preparedReplaySeasons,
+      ),
+    )
     setErrorMessage('')
   }
 
@@ -221,6 +366,11 @@ function RatingLab({
     })
   }
 
+  const openAdvancedLabs = (lab = 'calibration') => {
+    setAdvancedLab(advancedLabModes.has(lab) ? lab : 'calibration')
+    setMode('advanced')
+  }
+
   return (
     <section className="rating-lab-page" aria-label="Rating Lab">
       <div className="rating-lab-mode-switcher" role="tablist" aria-label="Rating Lab mode">
@@ -234,68 +384,91 @@ function RatingLab({
           Historical Replay
         </button>
         <button
-          aria-selected={mode === 'calibration'}
-          className={mode === 'calibration' ? 'active' : ''}
+          aria-selected={mode === 'model-calibration'}
+          className={mode === 'model-calibration' ? 'active' : ''}
           role="tab"
           type="button"
-          onClick={() => setMode('calibration')}
+          onClick={() => setMode('model-calibration')}
         >
-          Base Model Calibration
+          Model Calibration
         </button>
         <button
-          aria-selected={mode === 'home-advantage'}
-          className={mode === 'home-advantage' ? 'active' : ''}
+          aria-selected={mode === 'promotion-history'}
+          className={mode === 'promotion-history' ? 'active' : ''}
           role="tab"
           type="button"
-          onClick={() => setMode('home-advantage')}
+          onClick={() => setMode('promotion-history')}
         >
-          Team Home Advantage
+          Promotion History
         </button>
         <button
-          aria-selected={mode === 'schedule-context'}
-          className={mode === 'schedule-context' ? 'active' : ''}
+          aria-selected={mode === 'advanced'}
+          className={mode === 'advanced' ? 'active' : ''}
           role="tab"
           type="button"
-          onClick={() => setMode('schedule-context')}
+          onClick={() => setMode('advanced')}
         >
-          Schedule &amp; Context
-        </button>
-        <button
-          aria-selected={mode === 'special-teams'}
-          className={mode === 'special-teams' ? 'active' : ''}
-          role="tab"
-          type="button"
-          onClick={() => setMode('special-teams')}
-        >
-          Special Teams
+          Advanced Labs
         </button>
       </div>
 
-      {mode === 'special-teams' ? (
-        <SpecialTeamsCalibration
-          initialErrorMessage={initialSpecialTeamsErrorMessage}
-          initialOptions={initialSpecialTeamsOptions}
-          initialResult={initialSpecialTeamsResult}
+      {mode === 'model-calibration' ? (
+        <ModelCalibration
+          initialCompletedRequest={initialModelCalibrationCompletedRequest}
+          initialErrorMessage={initialModelCalibrationErrorMessage}
+          initialOptions={initialModelCalibrationOptions}
+          initialResult={initialModelCalibrationResult}
+          initialStatus={initialModelCalibrationStatus}
+          onOpenAdvancedLabs={openAdvancedLabs}
         />
-      ) : mode === 'schedule-context' ? (
-        <ScheduleContextCalibration
-          initialErrorMessage={initialScheduleContextErrorMessage}
-          initialOptions={initialScheduleContextOptions}
-          initialResult={initialScheduleContextResult}
+      ) : mode === 'promotion-history' ? (
+        <PromotionHistory
+          initialDetails={initialPromotionHistoryDetails}
+          initialErrorMessage={initialPromotionHistoryErrorMessage}
+          initialExpandedPromotionIds={initialPromotionHistoryExpandedIds}
+          initialPagination={initialPromotionHistoryPagination}
+          initialPromotions={initialPromotionHistoryPromotions}
+          initialStatus={initialPromotionHistoryStatus}
         />
-      ) : mode === 'home-advantage' ? (
-        <TeamHomeAdvantageCalibration
-          initialErrorMessage={initialHomeAdvantageErrorMessage}
-          initialOptions={initialHomeAdvantageOptions}
-          initialResult={initialHomeAdvantageResult}
-        />
-      ) : mode === 'calibration' ? (
-        <BaseModelCalibration
-          initialErrorMessage={initialCalibrationErrorMessage}
-          initialOptions={initialCalibrationOptions}
-          initialRuns={initialCalibrationRuns}
-          initialRunStatus={initialCalibrationStatus}
-        />
+      ) : mode === 'advanced' ? (
+        <div className="rating-lab-advanced">
+          <div className="rating-lab-advanced-heading">
+            <div><p className="eyebrow">Research and diagnostics</p><h2>Advanced Labs</h2></div>
+            <p>Specialist research and diagnostic tools.</p>
+          </div>
+          <div className="rating-lab-advanced-switcher" role="tablist" aria-label="Advanced Labs">
+            <button aria-selected={advancedLab === 'calibration'} className={advancedLab === 'calibration' ? 'active' : ''} role="tab" type="button" onClick={() => setAdvancedLab('calibration')}>Base Model</button>
+            <button aria-selected={advancedLab === 'home-advantage'} className={advancedLab === 'home-advantage' ? 'active' : ''} role="tab" type="button" onClick={() => setAdvancedLab('home-advantage')}>Team Home Advantage</button>
+            <button aria-selected={advancedLab === 'schedule-context'} className={advancedLab === 'schedule-context' ? 'active' : ''} role="tab" type="button" onClick={() => setAdvancedLab('schedule-context')}>Schedule &amp; Context</button>
+            <button aria-selected={advancedLab === 'special-teams'} className={advancedLab === 'special-teams' ? 'active' : ''} role="tab" type="button" onClick={() => setAdvancedLab('special-teams')}>Special Teams</button>
+          </div>
+          {advancedLab === 'special-teams' ? (
+            <SpecialTeamsCalibration
+              initialErrorMessage={initialSpecialTeamsErrorMessage}
+              initialOptions={initialSpecialTeamsOptions}
+              initialResult={initialSpecialTeamsResult}
+            />
+          ) : advancedLab === 'schedule-context' ? (
+            <ScheduleContextCalibration
+              initialErrorMessage={initialScheduleContextErrorMessage}
+              initialOptions={initialScheduleContextOptions}
+              initialResult={initialScheduleContextResult}
+            />
+          ) : advancedLab === 'home-advantage' ? (
+            <TeamHomeAdvantageCalibration
+              initialErrorMessage={initialHomeAdvantageErrorMessage}
+              initialOptions={initialHomeAdvantageOptions}
+              initialResult={initialHomeAdvantageResult}
+            />
+          ) : (
+            <BaseModelCalibration
+              initialErrorMessage={initialCalibrationErrorMessage}
+              initialOptions={initialCalibrationOptions}
+              initialRuns={initialCalibrationRuns}
+              initialRunStatus={initialCalibrationStatus}
+            />
+          )}
+        </div>
       ) : (
       <div className="rating-lab-layout">
         <aside className="rating-lab-controls-panel" aria-label="Simulation controls">
@@ -307,27 +480,75 @@ function RatingLab({
           </div>
 
           <form className="rating-lab-form" onSubmit={handleSubmit}>
-            <div className="rating-lab-field-grid">
-              <label className="field" htmlFor="rating-lab-date-from">
-                <span>Date From</span>
-                <input
-                  id="rating-lab-date-from"
-                  type="date"
-                  value={form.dateFrom}
-                  onChange={(event) => updateField('dateFrom', event.target.value)}
-                />
-              </label>
+            <label className="field" htmlFor="rating-lab-season">
+              <span>Season</span>
+              <select
+                id="rating-lab-season"
+                value={selectedReplaySeasonId}
+                onChange={(event) => handleReplaySeasonChange(event.target.value)}
+              >
+                {preparedReplaySeasons.map((season) => (
+                  <option key={season.id} value={season.id}>
+                    {season.label}
+                  </option>
+                ))}
+                <option value={CUSTOM_REPLAY_SEASON_ID}>Custom date range</option>
+              </select>
+            </label>
 
-              <label className="field" htmlFor="rating-lab-date-to">
-                <span>Date To</span>
-                <input
-                  id="rating-lab-date-to"
-                  type="date"
-                  value={form.dateTo}
-                  onChange={(event) => updateField('dateTo', event.target.value)}
-                />
-              </label>
-            </div>
+            {selectedReplaySeasonId === CUSTOM_REPLAY_SEASON_ID ? (
+              <div className="rating-lab-field-grid">
+                <label className="field" htmlFor="rating-lab-date-from">
+                  <span>Date From</span>
+                  <input
+                    id="rating-lab-date-from"
+                    type="date"
+                    value={form.dateFrom}
+                    onChange={(event) =>
+                      updateReplayDate('dateFrom', event.target.value)
+                    }
+                  />
+                </label>
+
+                <label className="field" htmlFor="rating-lab-date-to">
+                  <span>Date To</span>
+                  <input
+                    id="rating-lab-date-to"
+                    type="date"
+                    value={form.dateTo}
+                    onChange={(event) =>
+                      updateReplayDate('dateTo', event.target.value)
+                    }
+                  />
+                </label>
+              </div>
+            ) : selectedReplaySeason ? (
+              <div className="rating-lab-resolved-range" role="note">
+                <span>Authoritative regular-season range</span>
+                <strong>
+                  {selectedReplaySeason.startDate} to {selectedReplaySeason.endDate}
+                </strong>
+              </div>
+            ) : null}
+
+            {replayOptionsStatus === 'loading' ? (
+              <p className="rating-lab-season-status" role="status">
+                Loading prepared season presets…
+              </p>
+            ) : replayOptionsStatus === 'error' ? (
+              <p className="rating-lab-season-status">
+                Season presets are unavailable. Custom dates remain available.
+              </p>
+            ) : preparedReplaySeasons.length === 0 ? (
+              <p className="rating-lab-season-status">
+                No fully prepared seasons are available. Use a custom date range.
+              </p>
+            ) : (
+              <p className="rating-lab-season-status">
+                Presets use prepared historical metadata. Use Custom date range for
+                playoff-inclusive or other replay windows.
+              </p>
+            )}
 
             <fieldset className="rating-lab-fieldset">
               <legend id="rating-lab-starting-mode">Starting ratings</legend>
@@ -353,7 +574,10 @@ function RatingLab({
                           updateField('startingMode', event.target.value)
                         }
                       />
-                      <span>{option.label}</span>
+                      <span className="rating-lab-choice-copy">
+                        <strong>{option.label}</strong>
+                        <small>{option.description}</small>
+                      </span>
                     </label>
                   )
                 })}
@@ -362,7 +586,7 @@ function RatingLab({
 
             <fieldset className="rating-lab-fieldset">
               <legend>Game types</legend>
-              <div className="rating-lab-choice-grid three">
+              <div className="rating-lab-choice-grid two">
                 {gameTypeOptions.map((option) => {
                   const isSelected = form.gameTypes[option.key]
 

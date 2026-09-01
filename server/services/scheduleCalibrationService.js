@@ -451,7 +451,13 @@ const addMatchedConditions = (counts, detectedConditions, condition) => {
   })
 }
 
-const replaySeason = ({ configuration, factsByGameId, games, teams }) => {
+/**
+ * Resolves the exact schedule/context adjustments used by replaySeason for one
+ * game. Keeping this pure seam here lets calibration orchestration compose the
+ * existing schedule rules with other isolated feature families without
+ * reimplementing their priority or Quick Rematch eligibility semantics.
+ */
+const getScheduleReplayAdjustments = ({ configuration, facts }) => {
   const restFatigueConfiguration =
     normalizeRestFatigueReplayConfiguration(configuration)
   const quickRematchConfiguration = {
@@ -461,6 +467,59 @@ const replaySeason = ({ configuration, factsByGameId, games, teams }) => {
     ),
     maximumDays: Number(configuration?.quickRematch?.maximumDays ?? 0),
   }
+  const homeCondition = RULE_BY_ID.has(facts?.homeCondition)
+    ? facts.homeCondition
+    : 'normal'
+  const awayCondition = RULE_BY_ID.has(facts?.awayCondition)
+    ? facts.awayCondition
+    : 'normal'
+  const homeAppliedCondition = getAppliedCondition(
+    homeCondition,
+    restFatigueConfiguration.includeWellRested,
+  )
+  const awayAppliedCondition = getAppliedCondition(
+    awayCondition,
+    restFatigueConfiguration.includeWellRested,
+  )
+  const quickFacts = quickRematchConfiguration.enabled
+    ? facts?.quickRematchByWindow?.[quickRematchConfiguration.maximumDays]
+    : null
+  const homeQuickRematchEligible = Boolean(quickFacts?.homeEligible)
+  const awayQuickRematchEligible = Boolean(quickFacts?.awayEligible)
+  const homeRestFatigueAdjustment = getAdjustment(
+    homeAppliedCondition,
+    restFatigueConfiguration.adjustments,
+  )
+  const awayRestFatigueAdjustment = getAdjustment(
+    awayAppliedCondition,
+    restFatigueConfiguration.adjustments,
+  )
+  const homeQuickRematchAdjustment = homeQuickRematchEligible
+    ? quickRematchConfiguration.loserAdjustment
+    : 0
+  const awayQuickRematchAdjustment = awayQuickRematchEligible
+    ? quickRematchConfiguration.loserAdjustment
+    : 0
+
+  return {
+    awayAdjustment:
+      awayRestFatigueAdjustment + awayQuickRematchAdjustment,
+    awayAppliedCondition,
+    awayCondition,
+    awayQuickRematchAdjustment,
+    awayQuickRematchEligible,
+    awayRestFatigueAdjustment,
+    homeAdjustment:
+      homeRestFatigueAdjustment + homeQuickRematchAdjustment,
+    homeAppliedCondition,
+    homeCondition,
+    homeQuickRematchAdjustment,
+    homeQuickRematchEligible,
+    homeRestFatigueAdjustment,
+  }
+}
+
+const replaySeason = ({ configuration, factsByGameId, games, teams }) => {
   const ratingState = buildStartingRatingState(teams)
   const engineConfiguration = createRatingEngineConfiguration({
     kFactor: BASE_MODEL_V1.kFactor,
@@ -482,43 +541,20 @@ const replaySeason = ({ configuration, factsByGameId, games, teams }) => {
     const home = ratingState.get(game.homeTeamId)
     const away = ratingState.get(game.awayTeamId)
     const facts = factsByGameId.get(game.gameId)
-    const homeCondition = RULE_BY_ID.has(facts?.homeCondition)
-      ? facts.homeCondition
-      : 'normal'
-    const awayCondition = RULE_BY_ID.has(facts?.awayCondition)
-      ? facts.awayCondition
-      : 'normal'
-    const homeAppliedCondition = getAppliedCondition(
-      homeCondition,
-      restFatigueConfiguration.includeWellRested,
-    )
-    const awayAppliedCondition = getAppliedCondition(
-      awayCondition,
-      restFatigueConfiguration.includeWellRested,
-    )
-    const quickFacts = quickRematchConfiguration.enabled
-      ? facts?.quickRematchByWindow?.[quickRematchConfiguration.maximumDays]
-      : null
-    const homeQuickRematchEligible = Boolean(quickFacts?.homeEligible)
-    const awayQuickRematchEligible = Boolean(quickFacts?.awayEligible)
-    const homeRestFatigueAdjustment = getAdjustment(
-      homeAppliedCondition,
-      restFatigueConfiguration.adjustments,
-    )
-    const awayRestFatigueAdjustment = getAdjustment(
+    const {
+      awayAdjustment,
       awayAppliedCondition,
-      restFatigueConfiguration.adjustments,
-    )
-    const homeQuickRematchAdjustment = homeQuickRematchEligible
-      ? quickRematchConfiguration.loserAdjustment
-      : 0
-    const awayQuickRematchAdjustment = awayQuickRematchEligible
-      ? quickRematchConfiguration.loserAdjustment
-      : 0
-    const homeAdjustment =
-      homeRestFatigueAdjustment + homeQuickRematchAdjustment
-    const awayAdjustment =
-      awayRestFatigueAdjustment + awayQuickRematchAdjustment
+      awayCondition,
+      awayQuickRematchAdjustment,
+      awayQuickRematchEligible,
+      awayRestFatigueAdjustment,
+      homeAdjustment,
+      homeAppliedCondition,
+      homeCondition,
+      homeQuickRematchAdjustment,
+      homeQuickRematchEligible,
+      homeRestFatigueAdjustment,
+    } = getScheduleReplayAdjustments({ configuration, facts })
 
     ;[
       {
@@ -1507,6 +1543,7 @@ module.exports = {
   compareRule,
   compareQuickRematchGrid,
   getScheduleCalibrationOptions,
+  getScheduleReplayAdjustments,
   normalizeRunPayload,
   preparePhase3ReplayGames,
   prepareScheduleCalibrationSeason,

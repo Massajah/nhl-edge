@@ -4,6 +4,105 @@ const historicalNhlDataService = require('../services/historicalNhlDataService')
 const homeAdvantageCalibrationService = require('../services/homeAdvantageCalibrationService')
 const scheduleCalibrationService = require('../services/scheduleCalibrationService')
 const specialTeamsCalibrationService = require('../services/specialTeamsCalibrationService')
+const calibrationOrchestrator = require('../calibration/calibrationOrchestrator')
+const calibrationOrchestrationOptions = require('../calibration/calibrationOrchestrationOptions')
+const calibrationRobustnessService = require('../calibration/calibrationRobustnessService')
+const calibrationPromotionService = require('../calibration/calibrationPromotionService')
+const calibrationPromotionHistoryService = require('../calibration/calibrationPromotionHistoryService')
+
+const listModelCalibrationPromotions = async (request, response, next) => {
+  try {
+    const result =
+      await calibrationPromotionHistoryService.listCalibrationPromotions(
+        request.user.id,
+        request.query,
+      )
+
+    response.json(result)
+  } catch (error) {
+    next(error)
+  }
+}
+
+const getModelCalibrationPromotion = async (request, response, next) => {
+  try {
+    const result =
+      await calibrationPromotionHistoryService.getCalibrationPromotion(
+        request.user.id,
+        request.params.promotionId,
+      )
+
+    response.json(result)
+  } catch (error) {
+    next(error)
+  }
+}
+
+const getModelCalibrationOptions = async (request, response, next) => {
+  try {
+    const options =
+      await calibrationOrchestrationOptions.getCalibrationOrchestrationOptions(
+        request.user.id,
+      )
+
+    response.json(options)
+  } catch (error) {
+    next(error)
+  }
+}
+
+const runModelCalibration = async (request, response, next) => {
+  try {
+    const result = await calibrationOrchestrator.runCalibrationOrchestration(
+      request.user.id,
+      request.body,
+    )
+
+    response.json(result)
+  } catch (error) {
+    next(error)
+  }
+}
+
+const runModelCalibrationRobustness = async (request, response, next) => {
+  try {
+    const result = calibrationRobustnessService.runCalibrationRobustness(
+      request.user.id,
+      request.body,
+    )
+
+    response.json(result)
+  } catch (error) {
+    next(error)
+  }
+}
+
+const previewModelCalibrationPromotion = async (request, response, next) => {
+  try {
+    const result =
+      await calibrationPromotionService.createCalibrationPromotionPreview(
+        request.user.id,
+        request.body,
+      )
+
+    response.json(result)
+  } catch (error) {
+    next(error)
+  }
+}
+
+const applyModelCalibrationPromotion = async (request, response, next) => {
+  try {
+    const result = await calibrationPromotionService.applyCalibrationPromotion(
+      request.user.id,
+      request.body,
+    )
+
+    response.json(result)
+  } catch (error) {
+    next(error)
+  }
+}
 
 const getSpecialTeamsCalibrationOptions = async (request, response, next) => {
   try {
@@ -206,7 +305,10 @@ const previewPowerRatingSimulation = async (request, response, next) => {
 }
 
 module.exports = {
+  applyModelCalibrationPromotion,
   getBaseModelCalibrationOptions,
+  getModelCalibrationPromotion,
+  getModelCalibrationOptions,
   getHomeAdvantageCalibrationOptions,
   getScheduleCalibrationOptions,
   getSpecialTeamsCalibrationOptions,
@@ -215,9 +317,13 @@ module.exports = {
   prepareScheduleCalibrationSeason,
   prepareSpecialTeamsCalibrationGameSeason,
   prepareSpecialTeamsReferenceSeason,
+  listModelCalibrationPromotions,
   previewPowerRatingSimulation,
+  previewModelCalibrationPromotion,
   runBaseModelCalibration,
   runHomeAdvantageCalibration,
+  runModelCalibration,
+  runModelCalibrationRobustness,
   runScheduleCalibration,
   runSpecialTeamsCalibration,
 }

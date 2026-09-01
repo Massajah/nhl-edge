@@ -652,6 +652,9 @@ const buildReplayStartingState = (teams) =>
     teams,
   })
 
+const getTierHomeAdvantageAdjustment = (tier, adjustment) =>
+  (TIER_ADJUSTMENT_SIGN[tier] ?? 0) * adjustment
+
 const replaySeasonWithTierAdjustment = ({ adjustment, games, snapshot, teams }) => {
   const ratingState = buildReplayStartingState(teams)
   const replayGames = buildReplayGames({
@@ -673,7 +676,7 @@ const replaySeasonWithTierAdjustment = ({ adjustment, games, snapshot, teams }) 
     const tier = snapshot.tiers[game.homeTeamId]
     const effectiveHomeAdvantage =
       BASE_MODEL_V1.baseHomeAdvantage +
-      (TIER_ADJUSTMENT_SIGN[tier] ?? 0) * adjustment
+      getTierHomeAdvantageAdjustment(tier, adjustment)
     const probability = calculatePregameProbability({
       automaticAdjustments: {},
       awayRating: away.finalRating,
@@ -1132,6 +1135,7 @@ module.exports = {
   getHomeAdvantageCalibrationOptions,
   getMinimumTierSize,
   getPriorSeasonIds,
+  getTierHomeAdvantageAdjustment,
   getRequiredSeasonDefinitions,
   normalizeAdjustmentPayload,
   normalizeHistoricalGame,

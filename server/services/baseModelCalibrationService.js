@@ -24,6 +24,10 @@ const {
   getGameStartTimestamp,
 } = require('./nhlGameEligibility')
 const { normalizeSeasonId } = require('./nhlSeasonIdentity')
+const {
+  STARTING_STATE_POLICIES,
+  createStartingStateIdentity,
+} = require('../calibration/calibrationIdentity')
 
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/
 const SEASON_PATTERN = /^\d{8}$/
@@ -33,6 +37,15 @@ const LOG_LOSS_EPSILON = 1e-15
 const STARTING_MODES = Object.freeze({
   CURRENT: 'current',
   FIXED_SPREAD: 'fixed_spread',
+})
+const STARTING_ORDERING_MODES = Object.freeze({
+  ALPHABETICAL: 'historical_fallback',
+  CURRENT_RATINGS: 'current_ratings',
+})
+const STARTING_ORDERING_SOURCES = Object.freeze({
+  ALPHABETICAL: 'seed_team_name_alphabetical',
+  CURRENT_RATING_ORDER: 'current production baseRating descending',
+  CURRENT_RATING_VALUES: 'current production baseRating values',
 })
 const DEFAULT_FIXED_CENTER = BASE_MODEL_V1.startingRatings.center
 const DEFAULT_FIXED_SPREAD = BASE_MODEL_V1.startingRatings.spread
@@ -641,10 +654,62 @@ const normalizeCurrentRatings = (documents) => {
   return ratingsByIdentifier
 }
 
+const formatStartingRating = (value) =>
+  Number.isInteger(value) ? String(value) : String(round(value, 2))
+
+const getFixedSpreadLabel = (startingRatings, orderingLabel) => {
+  const minimum = startingRatings.center - startingRatings.spread / 2
+  const maximum = startingRatings.center + startingRatings.spread / 2
+
+  return `Fixed ${formatStartingRating(minimum)}–${formatStartingRating(
+    maximum,
+  )} · ${orderingLabel}`
+}
+
+const resolveStartingStatePolicy = ({
+  isLatestHistoricalSeason,
+  isMultiSeason,
+  startingRatings,
+}) => {
+  if (startingRatings.mode === STARTING_MODES.CURRENT) {
+    return {
+      comparableToUnifiedMultiSeason: false,
+      label: 'Current production ratings · Scenario only (non-comparable)',
+      orderingMode: STARTING_ORDERING_MODES.CURRENT_RATINGS,
+      orderingSource: STARTING_ORDERING_SOURCES.CURRENT_RATING_VALUES,
+      policy: STARTING_STATE_POLICIES.CURRENT_PRODUCTION_ORDER,
+      usesHistoricalOrderingFallback: false,
+    }
+  }
+
+  if (isMultiSeason || !isLatestHistoricalSeason) {
+    return {
+      comparableToUnifiedMultiSeason: true,
+      label: getFixedSpreadLabel(startingRatings, 'Alphabetical ordering'),
+      orderingMode: STARTING_ORDERING_MODES.ALPHABETICAL,
+      orderingSource: STARTING_ORDERING_SOURCES.ALPHABETICAL,
+      policy: STARTING_STATE_POLICIES.FIXED_SPREAD_ALPHABETICAL,
+      usesHistoricalOrderingFallback: !isMultiSeason,
+    }
+  }
+
+  return {
+    comparableToUnifiedMultiSeason: false,
+    label: getFixedSpreadLabel(
+      startingRatings,
+      'Current production ordering · Scenario only (non-comparable)',
+    ),
+    orderingMode: STARTING_ORDERING_MODES.CURRENT_RATINGS,
+    orderingSource: STARTING_ORDERING_SOURCES.CURRENT_RATING_ORDER,
+    policy: STARTING_STATE_POLICIES.CURRENT_PRODUCTION_ORDER,
+    usesHistoricalOrderingFallback: false,
+  }
+}
+
 const buildStartingState = ({
   currentRatings,
   input,
-  orderingMode = 'current_ratings',
+  orderingMode = STARTING_ORDERING_MODES.CURRENT_RATINGS,
   teams,
 }) => {
   const ratingsByIdentifier = normalizeCurrentRatings(currentRatings)
@@ -667,7 +732,7 @@ const buildStartingState = ({
       }
     })
     .sort((left, right) => {
-      if (orderingMode === 'historical_fallback') {
+      if (orderingMode === STARTING_ORDERING_MODES.ALPHABETICAL) {
         return (
           left.teamName.localeCompare(right.teamName) ||
           left.teamId.localeCompare(right.teamId)
@@ -685,7 +750,7 @@ const buildStartingState = ({
     invalidTeamIds.length > 0 &&
     !(
       input.startingRatings.mode === STARTING_MODES.FIXED_SPREAD &&
-      orderingMode === 'historical_fallback'
+      orderingMode === STARTING_ORDERING_MODES.ALPHABETICAL
     )
   ) {
     throw new BaseModelCalibrationError(
@@ -1286,6 +1351,19 @@ const getCalibrationOptions = async (userId, options = {}) => {
         spread: DEFAULT_FIXED_SPREAD,
       },
     },
+    startingStatePolicies: {
+      multiSeason: {
+        description:
+          'Every evaluated season uses the same deterministic seed-team alphabetical order.',
+        label: 'Fixed 42–50 · Alphabetical ordering',
+        policy: STARTING_STATE_POLICIES.FIXED_SPREAD_ALPHABETICAL,
+      },
+      singleSeasonScenarios: {
+        currentProductionAvailable: true,
+        description:
+          'Current-rating starting states are useful for scenario exploration but are not used for leakage-safe multi-season Model Calibration.',
+      },
+    },
     isolation: {
       automaticAdjustmentsIncluded: false,
       historicalInputs: 'shared_persistent_read_only',
@@ -1325,6 +1403,7 @@ const runBaseModelCalibration = async (userId, payload, options = {}) => {
   )
   const requestId = (options.requestIdProvider ?? randomUUID)()
   const diagnosticLogger = options.logger ?? console
+  const isMultiSeasonCalibration = selectedSeasons.length > 1
 
   logCalibrationDiagnostic(diagnosticLogger, 'request received', {
     requestId,
@@ -1400,18 +1479,16 @@ const runBaseModelCalibration = async (userId, payload, options = {}) => {
         seasonId: season.id,
       }
       const isOlderSeason = season.id !== latestHistoricalSeason?.id
-      const usesHistoricalOrderingFallback =
-        input.startingRatings.mode === STARTING_MODES.FIXED_SPREAD &&
-        isOlderSeason
-      const orderingMode = usesHistoricalOrderingFallback
-        ? 'historical_fallback'
-        : 'current_ratings'
-      const orderingSource =
-        input.startingRatings.mode === STARTING_MODES.CURRENT
-          ? 'current production baseRating values'
-          : usesHistoricalOrderingFallback
-            ? 'historical franchise-normalized alphabetical fallback (season snapshot unavailable)'
-            : 'current production baseRating descending'
+      const startingStatePolicy = resolveStartingStatePolicy({
+        isLatestHistoricalSeason: !isOlderSeason,
+        isMultiSeason: isMultiSeasonCalibration,
+        startingRatings: input.startingRatings,
+      })
+      const {
+        orderingMode,
+        orderingSource,
+        usesHistoricalOrderingFallback,
+      } = startingStatePolicy
       const gameLoad = gamesProvider
         ? await gamesProvider(input.dateFrom, input.dateTo, {
             allowStale: true,
@@ -1516,19 +1593,31 @@ const runBaseModelCalibration = async (userId, payload, options = {}) => {
       }
 
       if (
-        input.startingRatings.mode === STARTING_MODES.CURRENT &&
-        isOlderSeason
+        input.startingRatings.mode === STARTING_MODES.CURRENT
       ) {
         warnings.push({
-          code: 'CURRENT_RATINGS_HISTORICAL_BIAS',
+          code: 'CURRENT_RATINGS_SCENARIO_NON_COMPARABLE',
           message:
-            'Current production ratings are an experimental, potentially biased starting source for this historical season.',
+            'Current-rating starting states are useful for scenario exploration but are not used for leakage-safe multi-season Model Calibration.',
+        })
+      }
+
+      if (
+        input.startingRatings.mode === STARTING_MODES.FIXED_SPREAD &&
+        startingStatePolicy.policy ===
+          STARTING_STATE_POLICIES.CURRENT_PRODUCTION_ORDER
+      ) {
+        warnings.push({
+          code: 'CURRENT_ORDER_FIXED_SPREAD_SCENARIO_NON_COMPARABLE',
+          message:
+            'This single-season fixed spread uses current production ordering for scenario exploration and is not comparable to the leakage-safe multi-season reference.',
         })
       }
 
       return {
         _dataset: dataset,
         _predictions: replay.predictions,
+        _startingState: startingState,
         baselineComparison,
         calibrationBuckets: metrics.calibrationBuckets,
         confidenceBuckets: metrics.confidenceBuckets,
@@ -1567,6 +1656,13 @@ const runBaseModelCalibration = async (userId, payload, options = {}) => {
         sanityBaselines,
         seasonId: season.id,
         status: 'completed',
+        startingState: {
+          comparableToUnifiedMultiSeason:
+            startingStatePolicy.comparableToUnifiedMultiSeason,
+          label: startingStatePolicy.label,
+          orderingSource,
+          policy: startingStatePolicy.policy,
+        },
         teamResults,
         userMessage: null,
         warnings,
@@ -1663,6 +1759,21 @@ const runBaseModelCalibration = async (userId, payload, options = {}) => {
   }
 
   const allPredictions = seasonResults.flatMap((result) => result._predictions)
+  const startingStatePolicies = [
+    ...new Set(seasonResults.map((result) => result.startingState.policy)),
+  ]
+  const startingStateIdentity = createStartingStateIdentity({
+    policy:
+      startingStatePolicies.length === 1
+        ? startingStatePolicies[0]
+        : STARTING_STATE_POLICIES.UNKNOWN,
+    seasonStartingStates: seasonResults.map((result) => ({
+      orderingSource: result.startingState.orderingSource,
+      policy: result.startingState.policy,
+      seasonId: result.seasonId,
+      teams: result._startingState,
+    })),
+  })
   const metrics = calculateMetrics(allPredictions)
   const sanityBaselines = calculateSanityBaselines(allPredictions)
   const baselineComparison = buildBaselineComparison(metrics, sanityBaselines)
@@ -1760,7 +1871,7 @@ const runBaseModelCalibration = async (userId, payload, options = {}) => {
   }
 
   const publicSeasonResults = seasonResults.map(
-    ({ _dataset, _predictions, ...result }) => result,
+    ({ _dataset, _predictions, _startingState, ...result }) => result,
   )
   const singleSeasonResult =
     selectedSeasons.length === 1 && seasonFailures.length === 0
@@ -1842,6 +1953,7 @@ const runBaseModelCalibration = async (userId, payload, options = {}) => {
       providerRequestStrategy:
         'Weekly date-range batches, at most two active schedule requests per season; seasons run sequentially.',
       ratingResetBetweenSeasons: true,
+      startingStateSignature: startingStateIdentity.startingStateSignature,
       skippedGames: seasonResults.flatMap(
         (result) => result._dataset.skippedGames.map((game) => ({
           ...game,
@@ -1877,9 +1989,28 @@ const runBaseModelCalibration = async (userId, payload, options = {}) => {
       probabilityScale: commonInput.probabilityScale,
       startingRatings: {
         ...commonInput.startingRatings,
+        comparableToUnifiedMultiSeason:
+          publicSeasonResults.every(
+            (result) =>
+              result.startingState.comparableToUnifiedMultiSeason === true,
+          ),
+        label:
+          singleSeasonResult?.startingState.label ??
+          (startingStateIdentity.policy ===
+          STARTING_STATE_POLICIES.FIXED_SPREAD_ALPHABETICAL
+            ? getFixedSpreadLabel(
+                commonInput.startingRatings,
+                'Alphabetical ordering',
+              )
+            : 'Mixed starting-state policies'),
         orderingSource:
           singleSeasonResult?.orderingSource ??
-          'See each season result; historical fallback is explicit.',
+          (startingStateIdentity.policy ===
+          STARTING_STATE_POLICIES.FIXED_SPREAD_ALPHABETICAL
+            ? STARTING_ORDERING_SOURCES.ALPHABETICAL
+            : 'See each season result.'),
+        policy: startingStateIdentity.policy,
+        startingStateSignature: startingStateIdentity.startingStateSignature,
       },
     },
     sanityBaselines,
@@ -1901,6 +2032,8 @@ module.exports = {
   MAX_CALIBRATION_DATE_RANGE_DAYS,
   MINIMUM_FULL_SEASON_GAMES,
   STARTING_MODES,
+  STARTING_ORDERING_MODES,
+  STARTING_ORDERING_SOURCES,
   buildStartingState,
   buildBaselineComparison,
   buildWarnings,
@@ -1914,6 +2047,7 @@ module.exports = {
   normalizeSeasonSelections,
   prepareDataset,
   replayDataset,
+  resolveStartingStatePolicy,
   runBaseModelCalibration,
   validateSelectedSeason,
 }

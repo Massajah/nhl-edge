@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { RefreshCw } from 'lucide-react'
 import {
   fetchGamesForDate,
   fetchTodaysGames,
@@ -38,7 +39,10 @@ import {
   buildLastNightBettingSummary,
   buildOpenBetSummary,
   buildTodayActivitySummary,
+  formatDashboardScheduleDate,
+  formatDashboardStartTime,
   getDashboardDateContextLabels,
+  getDashboardGameStatusLabel,
   getBetProfit,
   getBetsForGames,
   getDashboardCurrency,
@@ -50,7 +54,6 @@ import {
   isGameStarted,
   shiftLocalDateValue,
   toLocalDateValue,
-  parseLocalDateValue,
 } from '../utils/dashboard.js'
 import { normalizeBets } from '../utils/savedAnalyses.js'
 import {
@@ -71,40 +74,6 @@ import {
   normalizeSpecialTeamsMode,
 } from '../utils/specialTeamsMatchups.js'
 import MarketOddsDetails from './MarketOddsDetails.jsx'
-
-const formatScheduleDate = (date) => {
-  if (!date) {
-    return 'Select a date'
-  }
-
-  const scheduleDate = parseLocalDateValue(date)
-
-  return new Intl.DateTimeFormat(undefined, {
-    day: 'numeric',
-    month: 'long',
-    weekday: 'long',
-    year: 'numeric',
-  }).format(scheduleDate)
-}
-
-const formatStartTime = (startTimeUTC, scheduleDate) => {
-  const startTime = new Date(startTimeUTC)
-
-  if (Number.isNaN(startTime.getTime())) {
-    return 'Time TBD'
-  }
-
-  const localDate = toLocalDateValue(startTime)
-  const includeLocalDate = localDate !== scheduleDate
-
-  return new Intl.DateTimeFormat(undefined, {
-    day: includeLocalDate ? 'numeric' : undefined,
-    hour: '2-digit',
-    minute: '2-digit',
-    month: includeLocalDate ? 'short' : undefined,
-    weekday: includeLocalDate ? 'short' : undefined,
-  }).format(startTime)
-}
 
 const getStatusTone = (status = '') => {
   const normalizedStatus = status.toLowerCase()
@@ -763,7 +732,7 @@ function Dashboard({
       }),
     [displayDate, todayDateValue],
   )
-  const gamesSectionTitle = `${dateContextLabels.gamesTitlePrefix}${formatScheduleDate(
+  const gamesSectionTitle = `${dateContextLabels.gamesTitlePrefix}${formatDashboardScheduleDate(
     displayDate,
   )}`
 
@@ -987,7 +956,7 @@ function Dashboard({
                 </span>
               ) : null}
             </div>
-            <h2>{formatScheduleDate(displayDate)}</h2>
+            <h2>{formatDashboardScheduleDate(displayDate)}</h2>
           </div>
           {headerStatusSummary ? <span>{headerStatusSummary}</span> : null}
         </div>
@@ -1003,7 +972,11 @@ function Dashboard({
         />
 
         <div className="schedule-toolbar" aria-label="Schedule date controls">
-          <button type="button" onClick={() => handleShiftDate(-1)}>
+          <button
+            className="schedule-nav-button"
+            type="button"
+            onClick={() => handleShiftDate(-1)}
+          >
             Previous day
           </button>
 
@@ -1017,15 +990,28 @@ function Dashboard({
             />
           </label>
 
-          <button type="button" onClick={() => handleShiftDate(1)}>
+          <button
+            className="schedule-nav-button"
+            type="button"
+            onClick={() => handleShiftDate(1)}
+          >
             Next day
           </button>
 
-          <button type="button" onClick={loadTodaySchedule}>
+          <button
+            className="schedule-today-button"
+            type="button"
+            onClick={loadTodaySchedule}
+          >
             Today
           </button>
 
-          <button type="button" onClick={handleRefreshDashboard}>
+          <button
+            className="schedule-refresh-button"
+            type="button"
+            onClick={handleRefreshDashboard}
+          >
+            <RefreshCw aria-hidden="true" size={14} />
             Refresh
           </button>
         </div>
@@ -1100,7 +1086,7 @@ function Dashboard({
 
             {status === 'success' && schedule.games.length === 0 ? (
               <p className="empty-state">
-                No NHL games scheduled for {formatScheduleDate(displayDate)}.
+                No NHL games scheduled for {formatDashboardScheduleDate(displayDate)}.
               </p>
             ) : null}
 
@@ -1214,7 +1200,7 @@ const getAutomaticRatingUpdatePresentation = ({
     return {
       detail: latestGame,
       status: result.status,
-      title: 'Power Ratings up to date',
+      title: '✓ Power Ratings up to date',
       tone: 'neutral',
     }
   }
@@ -1224,9 +1210,9 @@ const getAutomaticRatingUpdatePresentation = ({
     AUTOMATIC_POWER_RATING_UPDATE_STATUSES.PRESEASON_READY
   ) {
     return {
-      detail: result.message,
+      detail: '',
       status: result.status,
-      title: 'Power Ratings ready for season start',
+      title: '✓ Power Ratings ready for season start',
       tone: 'neutral',
     }
   }
@@ -1471,8 +1457,8 @@ const formatMarketOddsTime = (value) => {
     return ''
   }
 
-  return new Intl.DateTimeFormat(undefined, {
-    hour: '2-digit',
+  return new Intl.DateTimeFormat('en-US', {
+    hour: 'numeric',
     minute: '2-digit',
   }).format(date)
 }
@@ -1493,11 +1479,14 @@ function MarketOddsStatus({ requestStatus, result }) {
   const status = result?.status ?? 'unavailable'
   const updatedAt = formatMarketOddsTime(result?.fetchedAt)
   const statusLabel = getMarketOddsStatusLabel(status, requestStatus)
-  const primaryMessage = `${statusLabel}${
-    updatedAt && ['cached', 'ready'].includes(status)
-      ? ` · updated ${updatedAt}`
-      : ''
-  }`
+  const primaryMessage =
+    status === 'no_events'
+      ? 'Market odds unavailable — markets have not opened yet.'
+      : `${statusLabel}${
+          updatedAt && ['cached', 'ready'].includes(status)
+            ? ` · updated ${updatedAt}`
+            : ''
+        }`
   const remaining = result?.quota?.remaining
   const showLowQuota = result?.lowQuota && Number.isFinite(remaining)
 
@@ -1513,9 +1502,6 @@ function MarketOddsStatus({ requestStatus, result }) {
       role="status"
     >
       <span>{primaryMessage}</span>
-      {status === 'no_events' ? (
-        <span>Market odds have not opened yet.</span>
-      ) : null}
       {showLowQuota ? <span>Low API credits: {remaining} remaining</span> : null}
     </div>
   )
@@ -1553,6 +1539,99 @@ function GameMarketOdds({ marketOdds }) {
   )
 }
 
+function FinalGameCard({
+  canAnalyze,
+  currency,
+  dashboardStatus,
+  game,
+  gameContext,
+  marketOdds,
+  onAnalyzeGame,
+  onViewBets,
+  savedBets,
+  scheduleDate,
+  specialTeamsContext,
+}) {
+  const showScore = hasGameScore(game)
+  const statusLabel = getDashboardGameStatusLabel(game)
+  const statusTone = getStatusTone(statusLabel)
+  const winner = getWinner(game)
+  const cardClassName = [
+    'schedule-card',
+    'final',
+    'compact-final',
+    savedBets.length > 0 ? 'has-saved-bet' : '',
+  ]
+    .filter(Boolean)
+    .join(' ')
+
+  return (
+    <article className={cardClassName}>
+      <div className="game-card-top">
+        <span className={`status-pill game-status ${statusTone}`}>
+          {statusLabel}
+        </span>
+        <time dateTime={game.startTimeUTC}>
+          {formatDashboardStartTime(game.startTimeUTC, scheduleDate)}
+        </time>
+      </div>
+
+      <div className={`schedule-matchup ${showScore ? 'has-score' : ''}`}>
+        <TeamLine
+          isWinner={winner?.abbreviation === game.awayTeam.abbreviation}
+          showScore={showScore}
+          team={game.awayTeam}
+        />
+        <div className="matchup-divider">at</div>
+        <TeamLine
+          isWinner={winner?.abbreviation === game.homeTeam.abbreviation}
+          showScore={showScore}
+          team={game.homeTeam}
+        />
+      </div>
+
+      <p className="final-game-winner">
+        Winner <strong>{winner?.name ?? 'Unavailable'}</strong>
+      </p>
+
+      {savedBets.length > 0 ? (
+        <SavedBetSummary
+          currency={currency}
+          savedBetSummary={dashboardStatus.savedBetSummary}
+          showPendingResult
+        />
+      ) : null}
+
+      {savedBets.length > 0 ? (
+        <div className="game-card-actions with-secondary">
+          <button
+            className="analyze-game-button historical"
+            type="button"
+            disabled={!canAnalyze}
+            onClick={() =>
+              onAnalyzeGame(
+                game,
+                marketOdds,
+                gameContext,
+                specialTeamsContext,
+              )
+            }
+          >
+            View Analysis
+          </button>
+          <button
+            className="view-bet-button"
+            type="button"
+            onClick={onViewBets}
+          >
+            View Bet
+          </button>
+        </div>
+      ) : null}
+    </article>
+  )
+}
+
 function GameCard({
   currency,
   dashboardGame,
@@ -1579,17 +1658,35 @@ function GameCard({
     label: '',
     tone: 'neutral',
   }
-  const statusTone = getStatusTone(game.status)
+  const statusLabel = getDashboardGameStatusLabel(game)
+  const statusTone = getStatusTone(statusLabel)
   const showScore = hasGameScore(game)
   const canUseInjurySummaries = injurySummaryStatus === 'success'
   const isCompletedGame =
     dashboardStatus?.status === DASHBOARD_GAME_STATUSES.FINAL ||
     isGameFinal(game)
+
+  if (isCompletedGame) {
+    return (
+      <FinalGameCard
+        canAnalyze={canAnalyze}
+        currency={currency}
+        dashboardStatus={dashboardStatus}
+        game={game}
+        gameContext={gameContext}
+        marketOdds={marketOdds}
+        onAnalyzeGame={onAnalyzeGame}
+        onViewBets={onViewBets}
+        savedBets={savedBets}
+        scheduleDate={scheduleDate}
+        specialTeamsContext={specialTeamsContext}
+      />
+    )
+  }
+
   const showDashboardStatus =
     Boolean(statusPresentation.label) &&
     dashboardStatus?.status !== DASHBOARD_GAME_STATUSES.FINAL
-  const actionLabel =
-    isCompletedGame && savedBets.length > 0 ? 'View Analysis' : 'Analyze Game'
   const awayInjurySummary = getTeamInjurySummary(
     injurySummaries,
     game.awayTeam.abbreviation,
@@ -1611,7 +1708,7 @@ function GameCard({
       <div className="game-card-top">
         <div className="game-card-status-stack">
           <span className={`status-pill game-status ${statusTone}`}>
-            {game.status}
+            {statusLabel}
           </span>
           {showDashboardStatus ? (
             <span className={`dashboard-card-status ${statusPresentation.tone}`}>
@@ -1620,7 +1717,7 @@ function GameCard({
           ) : null}
         </div>
         <time dateTime={game.startTimeUTC}>
-          {formatStartTime(game.startTimeUTC, scheduleDate)}
+          {formatDashboardStartTime(game.startTimeUTC, scheduleDate)}
         </time>
       </div>
 
@@ -1668,7 +1765,7 @@ function GameCard({
         specialTeamsContext={specialTeamsContext}
       />
 
-      {!isCompletedGame ? <GameMarketOdds marketOdds={marketOdds} /> : null}
+      <GameMarketOdds marketOdds={marketOdds} />
 
       {preliminaryAnalysis?.available ? (
         <PreliminaryAnalysis
@@ -1688,7 +1785,7 @@ function GameCard({
         }`}
       >
         <button
-          className={`analyze-game-button ${isCompletedGame ? 'historical' : ''}`}
+          className="analyze-game-button"
           type="button"
           disabled={!canAnalyze}
           onClick={() =>
@@ -1700,7 +1797,7 @@ function GameCard({
             )
           }
         >
-          {actionLabel}
+          Analyze Game
         </button>
         {savedBets.length > 0 ? (
           <button
@@ -1892,7 +1989,11 @@ function GameContextSummary({
   )
 }
 
-function SavedBetSummary({ currency, savedBetSummary }) {
+function SavedBetSummary({
+  currency,
+  savedBetSummary,
+  showPendingResult = false,
+}) {
   if (!savedBetSummary?.hasBets) {
     return null
   }
@@ -1910,7 +2011,7 @@ function SavedBetSummary({ currency, savedBetSummary }) {
   }
 
   const resultPresentation = getBetResultPresentation(firstBet.result)
-  const showResult = firstBet.result !== 'pending'
+  const showResult = showPendingResult || firstBet.result !== 'pending'
 
   return (
     <div className="saved-bet-summary">
@@ -2040,7 +2141,9 @@ function LastNightSection({
       <div className="dashboard-section-heading">
         <div>
           <p className="eyebrow">{eyebrow}</p>
-          <h3 id="dashboard-previous-heading">{formatScheduleDate(date)}</h3>
+          <h3 id="dashboard-previous-heading">
+            {formatDashboardScheduleDate(date)}
+          </h3>
         </div>
       </div>
 
@@ -2148,7 +2251,8 @@ function LastNightBettingSummary({
 
 function LastNightGameCard({ bets, currency, game, onViewBets }) {
   const showScore = hasGameScore(game)
-  const statusTone = getStatusTone(game.status)
+  const statusLabel = getDashboardGameStatusLabel(game)
+  const statusTone = getStatusTone(statusLabel)
   const winner = getWinner(game)
   const visibleBets = bets.slice(0, 3)
   const remainingBetCount = Math.max(0, bets.length - visibleBets.length)
@@ -2159,7 +2263,7 @@ function LastNightGameCard({ bets, currency, game, onViewBets }) {
     >
       <div className="last-night-result-meta">
         <span className={`status-pill game-status ${statusTone}`}>
-          {game.status}
+          {statusLabel}
         </span>
         <span className="last-night-winner">
           Winner <strong>{winner?.name ?? 'Unavailable'}</strong>
@@ -2455,9 +2559,9 @@ function PreliminaryDetailSide({ finalRating, label, market, team }) {
   )
 }
 
-function TeamLine({ showScore, team = {} }) {
+function TeamLine({ isWinner = false, showScore, team = {} }) {
   return (
-    <div className="schedule-team">
+    <div className={`schedule-team ${isWinner ? 'winner' : ''}`}>
       <div className="team-logo-shell">
         {team.logo ? (
           <img src={team.logo} alt={`${team.name} logo`} loading="lazy" />

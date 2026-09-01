@@ -63,7 +63,7 @@ test('Settings page renders Power Rating Engine section', () => {
     html,
     /id="engine-setting-maximumPlayerInjuryPenalty"[^>]*value="-2\.50"/,
   )
-  assert.match(html, /Goalie adjustments represent the downgrade/)
+  assert.match(html, /largest allowed downgrade from the team&#x27;s normal starter/)
   assert.match(html, /normal #1 goalie/)
   assert.doesNotMatch(html, /<details class="settings-advanced-model" open/)
   assert.match(html, /Loading engine settings/)

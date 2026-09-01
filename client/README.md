@@ -334,11 +334,12 @@ Ready old seasons are reused locally without automatic time-based refresh.
 
 Starting-rating comparisons include Current production values and fixed-spread
 presets `37–55`, `40–52`, and `42–50`, plus a configurable centered spread. A
-fixed spread uses current ordering only for the latest historical season. Older
-seasons explicitly report the franchise-normalized fallback ordering when a
-historical preseason snapshot is unavailable. Current production starts are
-disabled for cross-season runs and warned as potentially biased for older
-single-season runs. At least two runs must be selected.
+multi-season fixed spread uses deterministic alphabetical ordering for every
+evaluated season; `Fixed 42–50 · Alphabetical ordering` is the unified reference.
+Current production starts are disabled for cross-season runs. Single-season
+current-rating and current-ordered fixed-spread modes remain available for
+scenario exploration and are explicitly labeled non-comparable. Results expose
+the starting-state policy and signature. At least two runs must be selected.
 
 Every selected season is replayed independently with a fresh starting state.
 Results include pooled metrics calculated from every prediction, unweighted
@@ -722,6 +723,59 @@ production Special Teams mode, threshold, or magnitude, Dashboard or Analyzer
 probabilities, fair odds, Power Ratings, or saved Settings. Production uses its
 independently persisted configuration, with Alert only remaining the default.
 
+## Model Calibration production review
+
+Controlled promotion is available only from Shortlist Comparison after a
+completed Model Calibration run against `CURRENT_PRODUCTION`. Raw results do
+not expose deployment buttons. Eligible feature-layer candidates use `Review
+for Production`, which requests a server-authoritative, read-only preview and
+opens a focused confirmation dialog.
+
+The dialog groups exact changed and unchanged values by feature family, shows
+the calibration and season result, includes the completed robustness summary
+when available, and keeps hashes under expandable identity details. Missing
+robustness is explicit and does not block deliberate review. Base Model rows
+state that their promotion is unsupported.
+
+The final action is explicitly labeled `Apply to Production`. A second server
+revalidation occurs at apply time; stale, expired, no-op, and consumed previews
+cannot write, and there is no force option. Success shows the affected feature
+families, timestamp, and promotion/audit ID while preserving the completed run
+as frozen historical evidence. A clear confirmation dialog was chosen instead
+of typed confirmation because the workflow already requires shortlist review,
+preview generation, exact-diff inspection, and a separately labeled final
+action.
+
+## Promotion History and final Rating Lab workflow
+
+Rating Lab navigation is organized as:
+
+1. `Historical Replay` — separate historical rating replay.
+2. `Model Calibration` — Calibration → Shortlist → Robustness Analysis →
+   Controlled Promotion.
+3. `Promotion History` — durable, read-only audit records for production
+   changes previously applied through Rating Lab.
+4. `Advanced Labs` — specialist research and diagnostic tools.
+
+Promotion History loads independently of calibration. It uses a bounded
+newest-first list with `Load More`; each row opens its immutable historical
+before/after diff, recorded robustness summary when available, and expandable
+technical identities. The view has no apply, reapply, restore, rollback, edit,
+or delete controls. It explicitly distinguishes the audit trail from current
+production settings, which may have changed since an older promotion.
+
+The primary calibration screen presents the non-forced order Configure
+Calibration → Run Calibration → Review Results → Shortlist Candidates → Compare
+Shortlist → Run Robustness Analysis → Review for Production. Current Production
+and Canonical Base Model remain distinct baseline choices, and the selected
+baseline is the reference for candidate deltas. Production promotion remains
+explicit, Base Model promotion remains unsupported, and there is no optimizer,
+automatic tuning, or automatic promotion.
+
+Promotion audits survive page refresh and server restart. Calibration,
+robustness, and promotion-preview contexts remain single-server in-memory state
+and therefore do not survive restart or span server processes.
+
 ## Settings tabs and reset lifecycle
 
 Settings is organized into five keyboard-accessible tabs. The selected tab is
@@ -759,7 +813,8 @@ Rating Lab datasets, and provider caches are preserved.
 `Factory Reset / Delete All Data` requires the exact typed confirmation
 `RESET`. It deletes all authenticated user-owned settings, bets, bankroll data,
 Power Ratings/history, injuries, team goalie/lineup data, game contexts, and
-browser-local analysis state. The signed-in account and authentication token
+Rating Lab promotion audit records, plus browser-local analysis state. The
+signed-in account and authentication token
 remain valid. Starting Rating Scale returns to `42–50`; ratings are initialized
 from the resulting fresh state when reloaded. Shared `HistoricalNhlGame`,
 `HistoricalSeasonDataset`, `HistoricalSpecialTeamsSeason`, and provider caches

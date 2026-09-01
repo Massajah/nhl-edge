@@ -31,6 +31,15 @@ const options = {
   },
   modelVersion: 'power-rating-v1',
   seasonMetadataSource: 'fallback',
+  startingStatePolicies: {
+    multiSeason: {
+      label: 'Fixed 42–50 · Alphabetical ordering',
+      policy: 'FIXED_SPREAD_ALPHABETICAL',
+    },
+    singleSeasonScenarios: {
+      currentProductionAvailable: true,
+    },
+  },
   seasons: [
     {
       endDate: '2025-04-17',
@@ -180,10 +189,20 @@ const makeRun = ({ brierScore, ece = 0.021, label }) => ({
     homeAdvantage: 4,
     probabilityScale: 6,
     startingRatings: {
+      comparableToUnifiedMultiSeason: label !== 'Current',
       center: label === 'Current' ? 46 : 46,
+      label:
+        label === 'Current'
+          ? 'Current production ratings · Scenario only (non-comparable)'
+          : 'Fixed 37–55 · Alphabetical ordering',
       mode: label === 'Current' ? 'current' : 'fixed_spread',
       orderingSource: 'current production baseRating descending',
+      policy:
+        label === 'Current'
+          ? 'CURRENT_PRODUCTION_ORDER'
+          : 'FIXED_SPREAD_ALPHABETICAL',
       spread: 18,
+      startingStateSignature: 'sha256:starting-state-signature',
     },
   },
   sanityBaselines: {
@@ -303,6 +322,10 @@ test('Base Model Calibration mode exposes isolation, controls and live formula r
   )
 
   assert.match(html, /Base Model Calibration/)
+  assert.match(
+    html,
+    /Compare alternative starting-rating states and core probability\/rating-update parameters/,
+  )
   assert.match(html, /Experimental/)
   assert.match(html, /Production-isolated calibration/)
   assert.match(html, /Historical season/)
@@ -315,7 +338,12 @@ test('Base Model Calibration mode exposes isolation, controls and live formula r
   assert.match(html, /2 historical seasons|2023/)
   assert.match(html, /Season dates loaded from tested fallback metadata/)
   assert.match(html, /Centered fixed spread/)
+  assert.match(html, /Current production \(scenario\)/)
+  assert.match(html, /scenario exploration/)
   assert.match(html, /37–55/)
+  assert.match(html, /Select at least two starting-rating presets/)
+  assert.match(html, /Center and Total spread define only the Custom ±X preset/)
+  assert.match(html, /rating differences become win probabilities/)
   assert.match(html, /Live probability reference/)
   assert.match(html, /Goalie, injury/)
   assert.match(html, /Run comparison \(2\)/)
@@ -326,6 +354,30 @@ test('Base Model Calibration mode exposes isolation, controls and live formula r
   assert.match(
     html,
     /id="calibration-kFactor"[^>]*min="0\.01"[^>]*step="0\.01"[^>]*value="1\.20"/,
+  )
+  assert.match(
+    html,
+    /id="calibration-spread"[^>]*min="0\.01"[^>]*max="100"[^>]*step="0\.01"[^>]*value="18"/,
+  )
+  assert.match(
+    html,
+    /<details class="calibration-control-section calibration-dataset-section" open="">/,
+  )
+  assert.match(
+    html,
+    /<details class="calibration-control-section calibration-starting-section" open="">/,
+  )
+  assert.match(
+    html,
+    /<details class="calibration-control-section calibration-runs-section" open="">/,
+  )
+  assert.match(
+    html,
+    /<details class="calibration-control-section calibration-parameters-section" open="">/,
+  )
+  assert.match(
+    html,
+    /<details class="calibration-control-section calibration-method-section">/,
   )
 })
 
@@ -508,6 +560,17 @@ test('frontend numeric validation agrees with backend ranges without step artifa
   })
 
   form.configuration.kFactor = '1.20'
+  form.startingRatings.mode = 'fixed_spread'
+  ;['7.99', '8', '8.0', '8.00', '8.01'].forEach((spread) => {
+    form.startingRatings.spread = spread
+    assert.equal(
+      calibrationUtils.validateCalibrationForm(form, selectedRuns),
+      '',
+      `Total Spread ${spread} should be valid`,
+    )
+  })
+
+  form.startingRatings.spread = '8.00'
   form.homeAdvantage = '4.25'
   form.configuration.regulationMultiplier = '1'
   form.configuration.overtimeMultiplier = '0.75'
@@ -516,6 +579,17 @@ test('frontend numeric validation agrees with backend ranges without step artifa
     calibrationUtils.validateCalibrationForm(form, selectedRuns),
     '',
   )
+
+  const customPayload = calibrationUtils.createCalibrationPayload(form, {
+    center: Number(form.startingRatings.center),
+    key: 'custom',
+    label: 'Custom ±4.0',
+    mode: 'fixed_spread',
+    spread: Number(form.startingRatings.spread),
+  })
+
+  assert.equal(customPayload.startingRatings.spread, 8)
+  assert.equal(typeof customPayload.startingRatings.spread, 'number')
 
   ;['0', '-0.01', ''].forEach((probabilityScale) => {
     form.probabilityScale = probabilityScale
@@ -598,6 +672,8 @@ test('calibration comparison sorts by Brier and renders metrics and diagnostics'
     /This configuration does not outperform a constant home-win-rate prediction/,
   )
   assert.match(html, /Center invariant/)
+  assert.match(html, /Starting-state policy FIXED_SPREAD_ALPHABETICAL/)
+  assert.match(html, /sha256:starting-state-signature/)
   assert.match(html, /has the lowest pooled Brier score/)
   assert.doesNotMatch(html, /\b(?:undefined|NaN|Infinity)\b/)
 })

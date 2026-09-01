@@ -33,6 +33,8 @@ export const RATING_LAB_CONFIGURATION_FIELDS = Object.freeze([
 ]);
 
 export const MAX_REPLAY_DATE_RANGE_DAYS = 370;
+export const CUSTOM_REPLAY_SEASON_ID = "custom";
+export const EQUAL_REPLAY_STARTING_RATING = 50;
 
 export const RATING_LAB_DEFAULT_FORM = Object.freeze({
   configuration: Object.freeze({
@@ -65,6 +67,36 @@ export const createRatingLabDefaultForm = () => ({
   gameTypes: { ...RATING_LAB_DEFAULT_FORM.gameTypes },
   startingMode: RATING_LAB_DEFAULT_FORM.startingMode,
 });
+
+export const getPreparedReplaySeasons = (options = {}) =>
+  (Array.isArray(options.seasons) ? options.seasons : [])
+    .filter(
+      (season) =>
+        season?.historicalDataset?.status === "ready" &&
+        typeof season.id === "string" &&
+        typeof season.startDate === "string" &&
+        typeof season.endDate === "string",
+    )
+    .sort((left, right) => right.endDate.localeCompare(left.endDate));
+
+export const getDefaultReplaySeasonId = (options = {}) =>
+  getPreparedReplaySeasons(options)[0]?.id ?? CUSTOM_REPLAY_SEASON_ID;
+
+export const applyReplaySeasonPreset = (form, seasonId, seasons = []) => {
+  if (seasonId === CUSTOM_REPLAY_SEASON_ID) {
+    return { ...form };
+  }
+
+  const season = seasons.find((candidate) => candidate.id === seasonId);
+
+  return season
+    ? {
+        ...form,
+        dateFrom: season.startDate,
+        dateTo: season.endDate,
+      }
+    : { ...form };
+};
 
 export const createSimulationPreviewPayload = (form) => ({
   configuration: {

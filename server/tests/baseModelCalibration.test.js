@@ -22,6 +22,7 @@ const { extractScheduleGamesForDateRange } = require('../services/nhlApiService'
 const { getNhlTeamIdentity } = require('../services/nhlTeamIdentity')
 const {
   STARTING_MODES,
+  STARTING_ORDERING_SOURCES,
   buildWarnings,
   buildStartingState,
   calculateSanityBaselines,
@@ -783,12 +784,146 @@ test('multi-season calibration uses exact boundaries, resets ratings and pools p
   assert.equal(result.aggregate.worstSeason.seasonId, '20242025')
   assert.equal(result.aggregate.brierStandardDeviation, 0)
   assert.equal(result.seasonResults[1].metadataSource, 'fallback')
-  assert.match(
-    result.seasonResults[1].orderingSource,
-    /historical franchise-normalized alphabetical fallback/,
+  assert.equal(
+    result.seasonResults.every(
+      (season) =>
+        season.orderingSource === STARTING_ORDERING_SOURCES.ALPHABETICAL,
+    ),
+    true,
+  )
+  assert.equal(
+    result.parameters.startingRatings.policy,
+    'FIXED_SPREAD_ALPHABETICAL',
+  )
+  assert.equal(
+    result.parameters.startingRatings.label,
+    'Fixed 37–55 · Alphabetical ordering',
+  )
+  assert.equal(result.parameters.startingRatings.comparableToUnifiedMultiSeason, true)
+  assert.equal(
+    result.parameters.startingRatings.startingStateSignature,
+    result.diagnostics.startingStateSignature,
   )
   assert.equal(result.finalRatingSummary, null)
   assert.equal(result.stability.seasonsEvaluated, 2)
+})
+
+test('multi-season fixed spread stays alphabetical for the latest season and has a stable signature', async () => {
+  const makeRunOptions = (ratings) => ({
+    currentRatingsProvider: async () => ratings,
+    gamesProvider: async (dateFrom, _dateTo, requestOptions) => [
+      makeGame({
+        id: requestOptions.seasonId,
+        startTimeUTC: `${dateFrom.slice(0, 4)}-12-01T00:00:00Z`,
+      }),
+    ],
+    seasonsProvider: threeSeasonsProvider,
+    settingsProvider: async () => productionSettings,
+    teamsProvider: async () => teams,
+    todayProvider: () => '2026-08-06',
+  })
+  const payload = makeMultiPayload({
+    seasonIds: ['20252026', '20242025', '20232024'],
+    startingRatings: {
+      center: 46,
+      mode: STARTING_MODES.FIXED_SPREAD,
+      spread: 8,
+    },
+  })
+  const currentOrder = [
+    { abbreviation: 'BOS', baseRating: 40, teamId: 'BOS' },
+    { abbreviation: 'TOR', baseRating: 60, teamId: 'TOR' },
+  ]
+  const reversedOrder = [
+    { abbreviation: 'BOS', baseRating: 60, teamId: 'BOS' },
+    { abbreviation: 'TOR', baseRating: 40, teamId: 'TOR' },
+  ]
+  const first = await runBaseModelCalibration(
+    'user-a',
+    payload,
+    makeRunOptions(currentOrder),
+  )
+  const second = await runBaseModelCalibration(
+    'user-a',
+    payload,
+    makeRunOptions(reversedOrder),
+  )
+  const withoutProductionRatings = await runBaseModelCalibration(
+    'user-a',
+    payload,
+    makeRunOptions([]),
+  )
+
+  assert.equal(
+    first.seasonResults.every(
+      (season) =>
+        season.orderingSource === STARTING_ORDERING_SOURCES.ALPHABETICAL &&
+        season.startingState.policy === 'FIXED_SPREAD_ALPHABETICAL',
+    ),
+    true,
+  )
+  assert.equal(first.seasonResults[0].seasonId, '20252026')
+  assert.equal(
+    first.seasonResults[0].orderingSource,
+    STARTING_ORDERING_SOURCES.ALPHABETICAL,
+  )
+  assert.equal(
+    first.diagnostics.startingStateSignature,
+    second.diagnostics.startingStateSignature,
+  )
+  assert.equal(
+    first.diagnostics.startingStateSignature,
+    withoutProductionRatings.diagnostics.startingStateSignature,
+  )
+  assert.deepEqual(first.metrics, second.metrics)
+  assert.deepEqual(first.metrics, withoutProductionRatings.metrics)
+})
+
+test('single-season latest fixed spread preserves the current-order scenario mode', async () => {
+  const scenarioRatings = [
+    { abbreviation: 'BOS', baseRating: 40, teamId: 'BOS' },
+    { abbreviation: 'TOR', baseRating: 60, teamId: 'TOR' },
+  ]
+  const result = await runBaseModelCalibration(
+    'user-a',
+    makeMultiPayload({
+      seasonIds: ['20252026'],
+      startingRatings: {
+        center: 46,
+        mode: STARTING_MODES.FIXED_SPREAD,
+        spread: 8,
+      },
+    }),
+    {
+      currentRatingsProvider: async () => scenarioRatings,
+      gamesProvider: async () => [
+        makeGame({ id: 1, startTimeUTC: '2025-12-01T00:00:00Z' }),
+      ],
+      seasonsProvider: threeSeasonsProvider,
+      settingsProvider: async () => productionSettings,
+      teamsProvider: async () => teams,
+      todayProvider: () => '2026-08-06',
+    },
+  )
+
+  assert.equal(
+    result.parameters.startingRatings.orderingSource,
+    STARTING_ORDERING_SOURCES.CURRENT_RATING_ORDER,
+  )
+  assert.equal(
+    result.parameters.startingRatings.policy,
+    'CURRENT_PRODUCTION_ORDER',
+  )
+  assert.equal(result.parameters.startingRatings.comparableToUnifiedMultiSeason, false)
+  assert.match(result.parameters.startingRatings.label, /Scenario only/)
+  assert.equal(
+    result.teamResults.find((team) => team.teamId === 'TOR').startingRating,
+    50,
+  )
+  assert.equal(
+    result.teamResults.find((team) => team.teamId === 'BOS').startingRating,
+    42,
+  )
 })
 
 test('single selected season uses its exact metadata range and season-only baselines', async () => {
@@ -1041,6 +1176,16 @@ test('calibration options expose completed historical seasons with metadata sour
     mode: STARTING_MODES.CURRENT,
     spread: 8,
   })
+  assert.deepEqual(result.startingStatePolicies.multiSeason, {
+    description:
+      'Every evaluated season uses the same deterministic seed-team alphabetical order.',
+    label: 'Fixed 42–50 · Alphabetical ordering',
+    policy: 'FIXED_SPREAD_ALPHABETICAL',
+  })
+  assert.equal(
+    result.startingStatePolicies.singleSeasonScenarios.currentProductionAvailable,
+    true,
+  )
   assert.equal(
     result.warning,
     'Season dates loaded from tested fallback metadata.',
@@ -1091,6 +1236,11 @@ test('calibration never calls production model write methods', async () => {
     })
 
     assert.equal(result.diagnostics.productionWrites, false)
+    assert.equal(
+      result.parameters.startingRatings.policy,
+      'CURRENT_PRODUCTION_ORDER',
+    )
+    assert.match(result.parameters.startingRatings.label, /Scenario only/)
   })
 })
 
