@@ -5,12 +5,13 @@ const connectDB = require('./config/db')
 const { assertJwtConfig } = require('./config/auth')
 
 const PORT = process.env.PORT || 5000
+const HOST = '0.0.0.0'
 
 async function startServer() {
   assertJwtConfig()
   await connectDB()
 
-  app.listen(PORT, () => {
+  app.listen(PORT, HOST, () => {
     console.log(`NHL Edge server running on port ${PORT}`)
   })
 }
