@@ -151,14 +151,16 @@ export const markOddsAsManual = (_metadata, value) => ({
 })
 
 export const MARKET_ODDS_STATUS_LABELS = Object.freeze({
+  authentication_failed: 'Authentication failed',
   cached: 'Cached',
-  invalid_response: 'Provider unavailable',
-  no_events: 'No markets available yet',
-  not_configured: 'Provider unavailable',
+  invalid_response: 'Temporarily unavailable',
+  no_events: 'No NHL odds currently available',
+  not_checked: 'Not checked yet',
+  not_configured: 'Not configured',
   quota_exhausted: 'Quota exhausted',
-  rate_limited: 'Rate limited',
+  rate_limited: 'Temporarily unavailable (rate limited)',
   ready: 'Ready',
-  unavailable: 'Provider unavailable',
+  unavailable: 'Temporarily unavailable',
 })
 
 export const getMarketOddsStatusLabel = (status, requestStatus = 'success') => {

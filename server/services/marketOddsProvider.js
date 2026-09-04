@@ -2,6 +2,7 @@ const { getMarketOddsConfig } = require('../config/marketOdds')
 const { getNhlTeamIdentity } = require('./nhlTeamIdentity')
 
 const VALID_STATUS_VALUES = new Set([
+  'authentication_failed',
   'invalid_response',
   'not_configured',
   'quota_exhausted',
@@ -36,7 +37,61 @@ const toQuotaNumber = (value) => {
 
   const numberValue = Number(value)
 
-  return Number.isFinite(numberValue) ? numberValue : null
+  return Number.isFinite(numberValue) && numberValue >= 0 ? numberValue : null
+}
+
+const getQuotaRemainingLevel = (remaining, remainingPercent) => {
+  if (!Number.isFinite(remaining) || !Number.isFinite(remainingPercent)) {
+    return 'unknown'
+  }
+
+  if (remaining === 0) {
+    return 'exhausted'
+  }
+
+  if (remainingPercent <= 10) {
+    return 'high'
+  }
+
+  if (remainingPercent <= 30) {
+    return 'warning'
+  }
+
+  return 'healthy'
+}
+
+const normalizeQuotaMetadata = (quota, observedAt = null) => {
+  if (!quota || typeof quota !== 'object') {
+    return null
+  }
+
+  const lastCost = toQuotaNumber(quota.lastCost)
+  const remaining = toQuotaNumber(quota.remaining)
+  const used = toQuotaNumber(quota.used)
+  const total =
+    Number.isFinite(remaining) && Number.isFinite(used)
+      ? remaining + used
+      : null
+  const remainingPercent =
+    Number.isFinite(total) && total > 0
+      ? Math.min(100, Math.max(0, (remaining / total) * 100))
+      : total === 0 && remaining === 0
+        ? 0
+        : null
+
+  if (lastCost === null && remaining === null && used === null) {
+    return null
+  }
+
+  return {
+    lastCost,
+    observedAt: quota.observedAt ?? observedAt,
+    remaining,
+    remainingLevel: getQuotaRemainingLevel(remaining, remainingPercent),
+    remainingPercent,
+    total,
+    used,
+  }
 }
 
 const normalizeQuotaHeaders = (headers, observedAt = new Date().toISOString()) => {
@@ -47,9 +102,7 @@ const normalizeQuotaHeaders = (headers, observedAt = new Date().toISOString()) =
     used: toQuotaNumber(getHeaderValue(headers, 'x-requests-used')),
   }
 
-  return Object.values(quota).some((value, index) => index < 3 && value !== null)
-    ? quota
-    : null
+  return normalizeQuotaMetadata(quota, observedAt)
 }
 
 const isValidDecimalOdds = (value) => {
@@ -58,8 +111,30 @@ const isValidDecimalOdds = (value) => {
   return Number.isFinite(numberValue) && numberValue > 1
 }
 
-const normalizeBookmaker = (bookmaker, eventIdentities) => {
+const reportNormalizationWarning = (onWarning, code, details = {}) => {
+  if (typeof onWarning === 'function') {
+    onWarning({ code, ...details })
+  }
+}
+
+const normalizeBookmaker = (
+  bookmaker,
+  eventIdentities,
+  { onWarning, providerEventId } = {},
+) => {
   if (!bookmaker || typeof bookmaker !== 'object') {
+    reportNormalizationWarning(onWarning, 'invalid_bookmaker', {
+      providerEventId,
+    })
+    return null
+  }
+
+  const bookmakerKey = String(bookmaker.key ?? '').trim()
+
+  if (!bookmakerKey) {
+    reportNormalizationWarning(onWarning, 'missing_bookmaker_key', {
+      providerEventId,
+    })
     return null
   }
 
@@ -68,19 +143,38 @@ const normalizeBookmaker = (bookmaker, eventIdentities) => {
     : null
 
   if (!market || !Array.isArray(market.outcomes)) {
+    reportNormalizationWarning(onWarning, 'missing_h2h_market', {
+      bookmakerKey,
+      providerEventId,
+    })
     return null
   }
 
   const prices = {}
 
   market.outcomes.forEach((outcome) => {
-    const identity = getNhlTeamIdentity(outcome?.name)
+    const teamName = String(outcome?.name ?? '').trim()
+    const identity = getNhlTeamIdentity(teamName)
 
-    if (
-      identity &&
-      eventIdentities.has(identity) &&
-      isValidDecimalOdds(outcome?.price)
-    ) {
+    if (!identity) {
+      reportNormalizationWarning(onWarning, 'unknown_team', {
+        bookmakerKey,
+        providerEventId,
+        teamName,
+      })
+      return
+    }
+
+    if (!eventIdentities.allowed.has(identity)) {
+      reportNormalizationWarning(onWarning, 'unexpected_h2h_outcome', {
+        bookmakerKey,
+        providerEventId,
+        teamName,
+      })
+      return
+    }
+
+    if (isValidDecimalOdds(outcome?.price)) {
       prices[identity] = Number(outcome.price)
     }
   })
@@ -89,76 +183,156 @@ const normalizeBookmaker = (bookmaker, eventIdentities) => {
   const awayOdds = prices[eventIdentities.away]
 
   if (!isValidDecimalOdds(homeOdds) || !isValidDecimalOdds(awayOdds)) {
+    reportNormalizationWarning(onWarning, 'incomplete_h2h_market', {
+      bookmakerKey,
+      providerEventId,
+    })
     return null
   }
 
+  const bookmakerTitle = String(bookmaker.title ?? bookmakerKey).trim()
+  const lastUpdate = bookmaker.last_update ?? market.last_update ?? null
+
   return {
     awayOdds,
-    bookmakerKey: String(bookmaker.key ?? '').trim(),
-    bookmakerTitle: String(bookmaker.title ?? bookmaker.key ?? '').trim(),
+    bookmakerKey,
+    bookmakerTitle,
     homeOdds,
-    lastUpdate: market.last_update ?? bookmaker.last_update ?? null,
+    key: bookmakerKey,
+    lastUpdate,
+    title: bookmakerTitle,
   }
 }
 
 const selectBestOdds = (bookmakers, side) => {
   const oddsKey = side === 'home' ? 'homeOdds' : 'awayOdds'
-  const best = bookmakers.reduce((currentBest, bookmaker) => {
-    if (!currentBest || bookmaker[oddsKey] > currentBest[oddsKey]) {
-      return bookmaker
-    }
+  const best = (Array.isArray(bookmakers) ? bookmakers : []).reduce(
+    (currentBest, bookmaker) => {
+      if (
+        !isValidDecimalOdds(bookmaker?.awayOdds) ||
+        !isValidDecimalOdds(bookmaker?.homeOdds)
+      ) {
+        return currentBest
+      }
 
-    return currentBest
-  }, null)
+      if (
+        !currentBest ||
+        Number(bookmaker[oddsKey]) > Number(currentBest[oddsKey])
+      ) {
+        return bookmaker
+      }
+
+      if (Number(bookmaker[oddsKey]) === Number(currentBest[oddsKey])) {
+        const bookmakerIdentity = `${bookmaker.bookmakerKey ?? ''}|${bookmaker.bookmakerTitle ?? ''}`
+        const currentIdentity = `${currentBest.bookmakerKey ?? ''}|${currentBest.bookmakerTitle ?? ''}`
+
+        return bookmakerIdentity < currentIdentity ? bookmaker : currentBest
+      }
+
+      return currentBest
+    },
+    null,
+  )
 
   return best
     ? {
         bookmakerKey: best.bookmakerKey,
         bookmakerTitle: best.bookmakerTitle,
         lastUpdate: best.lastUpdate,
-        odds: best[oddsKey],
+        odds: Number(best[oddsKey]),
       }
     : null
 }
 
-const normalizeProviderEvent = (event, providerFetchedAt) => {
+const normalizeProviderEvent = (
+  event,
+  providerFetchedAt,
+  { onWarning } = {},
+) => {
   if (!event || typeof event !== 'object') {
+    reportNormalizationWarning(onWarning, 'invalid_event')
     return null
   }
 
+  const providerEventId = String(event.id ?? '').trim()
   const homeIdentity = getNhlTeamIdentity(event.home_team)
   const awayIdentity = getNhlTeamIdentity(event.away_team)
   const commenceTimeMs = Date.parse(event.commence_time)
+  const sportKey = String(event.sport_key ?? 'icehockey_nhl')
 
-  if (!homeIdentity || !awayIdentity || !Number.isFinite(commenceTimeMs)) {
+  if (
+    !providerEventId ||
+    !homeIdentity ||
+    !awayIdentity ||
+    homeIdentity === awayIdentity ||
+    !Number.isFinite(commenceTimeMs) ||
+    sportKey !== 'icehockey_nhl'
+  ) {
+    if (!homeIdentity) {
+      reportNormalizationWarning(onWarning, 'unknown_team', {
+        providerEventId,
+        side: 'home',
+        teamName: String(event.home_team ?? '').trim(),
+      })
+    }
+
+    if (!awayIdentity) {
+      reportNormalizationWarning(onWarning, 'unknown_team', {
+        providerEventId,
+        side: 'away',
+        teamName: String(event.away_team ?? '').trim(),
+      })
+    }
+
+    reportNormalizationWarning(onWarning, 'invalid_event', {
+      providerEventId,
+    })
     return null
   }
 
-  const eventIdentities = new Set([homeIdentity, awayIdentity])
-  eventIdentities.home = homeIdentity
-  eventIdentities.away = awayIdentity
+  const eventIdentities = {
+    allowed: new Set([homeIdentity, awayIdentity]),
+    away: awayIdentity,
+    home: homeIdentity,
+  }
   const bookmakers = (Array.isArray(event.bookmakers) ? event.bookmakers : [])
-    .map((bookmaker) => normalizeBookmaker(bookmaker, eventIdentities))
+    .map((bookmaker) =>
+      normalizeBookmaker(bookmaker, eventIdentities, {
+        onWarning,
+        providerEventId,
+      }),
+    )
     .filter(Boolean)
 
+  if (bookmakers.length === 0) {
+    reportNormalizationWarning(onWarning, 'no_usable_bookmakers', {
+      providerEventId,
+    })
+  }
+
+  const awayTeamName = String(event.away_team)
+  const homeTeamName = String(event.home_team)
+
   return {
+    awayTeam: awayTeamName,
     awayTeamIdentity: awayIdentity,
-    awayTeamName: String(event.away_team),
+    awayTeamName,
     bestAvailable: {
       away: selectBestOdds(bookmakers, 'away'),
       home: selectBestOdds(bookmakers, 'home'),
     },
     bookmakers,
     commenceTime: new Date(commenceTimeMs).toISOString(),
+    homeTeam: homeTeamName,
     homeTeamIdentity: homeIdentity,
-    homeTeamName: String(event.home_team),
-    providerEventId: String(event.id ?? '').trim(),
+    homeTeamName,
+    providerEventId,
     providerFetchedAt,
-    sportKey: String(event.sport_key ?? 'icehockey_nhl'),
+    sportKey,
   }
 }
 
-const normalizeProviderEvents = (body, providerFetchedAt) => {
+const normalizeProviderEvents = (body, providerFetchedAt, options = {}) => {
   if (!Array.isArray(body)) {
     throw new MarketOddsProviderError(
       'invalid_response',
@@ -167,8 +341,22 @@ const normalizeProviderEvents = (body, providerFetchedAt) => {
   }
 
   return body
-    .map((event) => normalizeProviderEvent(event, providerFetchedAt))
+    .map((event) => normalizeProviderEvent(event, providerFetchedAt, options))
     .filter(Boolean)
+}
+
+const normalizeProviderResponse = (body, providerFetchedAt) => {
+  const normalizationWarnings = []
+  const onWarning = (warning) => {
+    if (normalizationWarnings.length < 50) {
+      normalizationWarnings.push(warning)
+    }
+  }
+
+  return {
+    events: normalizeProviderEvents(body, providerFetchedAt, { onWarning }),
+    normalizationWarnings,
+  }
 }
 
 const parseResponseBody = async (response) => {
@@ -204,8 +392,12 @@ const getProviderFailureStatus = (response, body) => {
     return 'rate_limited'
   }
 
-  if (response.status === 401 || response.status === 403) {
-    return 'not_configured'
+  if (
+    response.status === 401 ||
+    response.status === 403 ||
+    ['DEACTIVATED_KEY', 'INVALID_KEY', 'MISSING_KEY'].includes(errorCode)
+  ) {
+    return 'authentication_failed'
   }
 
   return 'unavailable'
@@ -215,8 +407,11 @@ const createMarketOddsProvider = ({
   fetchImpl = fetch,
   getConfig = getMarketOddsConfig,
   now = () => new Date(),
-} = {}) => ({
-  async fetchNhlOdds({ commenceTimeFrom, commenceTimeTo }) {
+} = {}) => {
+  const fetchNhlMoneylineOdds = async ({
+    commenceTimeFrom,
+    commenceTimeTo,
+  } = {}) => {
     const config = getConfig()
 
     if (!config.apiKey) {
@@ -233,12 +428,21 @@ const createMarketOddsProvider = ({
       config.baseUrl,
     )
     url.searchParams.set('apiKey', config.apiKey)
-    url.searchParams.set('regions', config.region)
+    url.searchParams.set(
+      'bookmakers',
+      config.bookmakers.map(({ key }) => key).join(','),
+    )
     url.searchParams.set('markets', config.market)
     url.searchParams.set('oddsFormat', config.oddsFormat)
     url.searchParams.set('dateFormat', config.dateFormat)
-    url.searchParams.set('commenceTimeFrom', commenceTimeFrom)
-    url.searchParams.set('commenceTimeTo', commenceTimeTo)
+
+    if (commenceTimeFrom) {
+      url.searchParams.set('commenceTimeFrom', commenceTimeFrom)
+    }
+
+    if (commenceTimeTo) {
+      url.searchParams.set('commenceTimeTo', commenceTimeTo)
+    }
 
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), config.requestTimeoutMs)
@@ -275,17 +479,20 @@ const createMarketOddsProvider = ({
         )
       }
 
-      let events
+      let normalized
 
       try {
-        events = normalizeProviderEvents(body, providerFetchedAt)
+        normalized = normalizeProviderResponse(body, providerFetchedAt)
       } catch (error) {
         error.quota = quota
         throw error
       }
 
       return {
-        events,
+        diagnostics: {
+          normalizationWarnings: normalized.normalizationWarnings,
+        },
+        events: normalized.events,
         providerFetchedAt,
         quota,
         status: 'ready',
@@ -304,8 +511,13 @@ const createMarketOddsProvider = ({
     } finally {
       clearTimeout(timeout)
     }
-  },
-})
+  }
+
+  return {
+    fetchNhlMoneylineOdds,
+    fetchNhlOdds: fetchNhlMoneylineOdds,
+  }
+}
 
 module.exports = {
   MarketOddsProviderError,
@@ -313,6 +525,8 @@ module.exports = {
   isValidDecimalOdds,
   normalizeProviderEvent,
   normalizeProviderEvents,
+  normalizeProviderResponse,
   normalizeQuotaHeaders,
+  normalizeQuotaMetadata,
   selectBestOdds,
 }

@@ -1,4 +1,5 @@
 const BookmakerPreferences = require('../models/BookmakerPreferences')
+const { getMarketOddsConfig } = require('../config/marketOdds')
 
 const ALL_DISABLED_WARNING =
   'At least one bookmaker must be enabled. All bookmakers have been enabled automatically.'
@@ -30,12 +31,36 @@ const normalizeAvailableBookmakers = (bookmakers = []) => {
       bookmakerTitle: String(
         bookmaker?.bookmakerTitle ?? bookmakerKey,
       ).trim(),
+      lastUpdate: bookmaker?.lastUpdate ?? null,
     })
   })
 
   return [...indexed.values()].sort((left, right) =>
     left.bookmakerTitle.localeCompare(right.bookmakerTitle),
   )
+}
+
+const normalizeSupportedBookmakers = (bookmakers = []) => {
+  const indexed = new Map()
+
+  ;(Array.isArray(bookmakers) ? bookmakers : []).forEach((bookmaker) => {
+    const bookmakerKey = normalizeBookmakerKey(
+      bookmaker?.key ?? bookmaker?.bookmakerKey,
+    )
+
+    if (!bookmakerKey || indexed.has(bookmakerKey)) {
+      return
+    }
+
+    indexed.set(bookmakerKey, {
+      bookmakerKey,
+      bookmakerTitle: String(
+        bookmaker?.title ?? bookmaker?.bookmakerTitle ?? bookmakerKey,
+      ).trim(),
+    })
+  })
+
+  return [...indexed.values()]
 }
 
 const normalizeDisabledKeys = (values = []) =>
@@ -47,24 +72,38 @@ const buildPreferencesResponse = ({
   availableBookmakers,
   disabledBookmakerKeys = [],
   fallbackApplied = false,
+  supportedBookmakers = getMarketOddsConfig().bookmakers,
   usingDefaults = false,
 }) => {
   const normalizedAvailable = normalizeAvailableBookmakers(availableBookmakers)
-  const availableKeySet = new Set(
-    normalizedAvailable.map(({ bookmakerKey }) => bookmakerKey),
+  const normalizedSupported = normalizeSupportedBookmakers(supportedBookmakers)
+  const supportedKeySet = new Set(
+    normalizedSupported.map(({ bookmakerKey }) => bookmakerKey),
+  )
+  const supportedAvailable = normalizedAvailable.filter(({ bookmakerKey }) =>
+    supportedKeySet.has(bookmakerKey),
+  )
+  const availableByKey = new Map(
+    supportedAvailable.map((bookmaker) => [bookmaker.bookmakerKey, bookmaker]),
   )
   const normalizedDisabled = normalizeDisabledKeys(disabledBookmakerKeys).filter(
-    (bookmakerKey) => availableKeySet.has(bookmakerKey),
+    (bookmakerKey) => supportedKeySet.has(bookmakerKey),
   )
   const disabledSet = new Set(normalizedDisabled)
 
   return {
-    availableBookmakers: normalizedAvailable,
+    availableBookmakers: supportedAvailable,
     disabledBookmakerKeys: normalizedDisabled,
-    enabledBookmakerKeys: normalizedAvailable
+    enabledBookmakerKeys: normalizedSupported
       .map(({ bookmakerKey }) => bookmakerKey)
       .filter((bookmakerKey) => !disabledSet.has(bookmakerKey)),
     fallbackApplied,
+    supportedBookmakers: normalizedSupported.map((bookmaker) => ({
+      ...bookmaker,
+      available: availableByKey.has(bookmaker.bookmakerKey),
+      lastUpdate:
+        availableByKey.get(bookmaker.bookmakerKey)?.lastUpdate ?? null,
+    })),
     usingDefaults,
     warning: fallbackApplied ? ALL_DISABLED_WARNING : null,
   }
@@ -72,6 +111,9 @@ const buildPreferencesResponse = ({
 
 const getPreferencesModel = (options = {}) =>
   options.preferencesModel ?? BookmakerPreferences
+
+const getSupportedBookmakers = (options = {}) =>
+  options.supportedBookmakers ?? getMarketOddsConfig().bookmakers
 
 const assertUserId = (userId) => {
   if (!userId) {
@@ -109,15 +151,17 @@ const getBookmakerPreferences = async (
   assertUserId(userId)
 
   const preferencesModel = getPreferencesModel(options)
+  const supportedBookmakers = getSupportedBookmakers(options)
   const preferencesDocument = await preferencesModel.findOne({ userId })
   let response = buildPreferencesResponse({
     availableBookmakers,
     disabledBookmakerKeys: preferencesDocument?.disabledBookmakerKeys,
+    supportedBookmakers,
     usingDefaults: !preferencesDocument,
   })
 
   if (
-    response.availableBookmakers.length > 0 &&
+    response.supportedBookmakers.length > 0 &&
     response.enabledBookmakerKeys.length === 0
   ) {
     await persistDisabledKeys({
@@ -129,6 +173,7 @@ const getBookmakerPreferences = async (
       availableBookmakers,
       disabledBookmakerKeys: [],
       fallbackApplied: true,
+      supportedBookmakers,
     })
   }
 
@@ -174,39 +219,29 @@ const updateBookmakerPreferences = async (
 ) => {
   assertUserId(userId)
 
+  const supportedBookmakers = getSupportedBookmakers(options)
+  const normalizedSupported = normalizeSupportedBookmakers(supportedBookmakers)
   const normalizedAvailable = normalizeAvailableBookmakers(availableBookmakers)
-  const availableKeys = normalizedAvailable.map(
+  const supportedKeys = normalizedSupported.map(
     ({ bookmakerKey }) => bookmakerKey,
   )
-  const availableKeySet = new Set(availableKeys)
+  const supportedKeySet = new Set(supportedKeys)
   const requestedEnabledKeys = normalizeUpdatePayload(payload).filter(
-    (bookmakerKey) => availableKeySet.has(bookmakerKey),
+    (bookmakerKey) => supportedKeySet.has(bookmakerKey),
   )
   const fallbackApplied =
-    normalizedAvailable.length > 0 && requestedEnabledKeys.length === 0
+    normalizedSupported.length > 0 && requestedEnabledKeys.length === 0
   const effectiveEnabledKeys = fallbackApplied
-    ? availableKeys
+    ? supportedKeys
     : requestedEnabledKeys
   const enabledSet = new Set(effectiveEnabledKeys)
-  const currentDisabledBookmakerKeys = availableKeys.filter(
+  const disabledBookmakerKeys = supportedKeys.filter(
     (bookmakerKey) => !enabledSet.has(bookmakerKey),
   )
   const preferencesModel = getPreferencesModel(options)
-  const existingPreferences = fallbackApplied
-    ? null
-    : await preferencesModel.findOne({ userId })
-  const inactiveDisabledBookmakerKeys = normalizeDisabledKeys(
-    existingPreferences?.disabledBookmakerKeys,
-  ).filter((bookmakerKey) => !availableKeySet.has(bookmakerKey))
-  const disabledBookmakerKeys = fallbackApplied
-    ? []
-    : normalizeDisabledKeys([
-        ...inactiveDisabledBookmakerKeys,
-        ...currentDisabledBookmakerKeys,
-      ])
 
   await persistDisabledKeys({
-    disabledBookmakerKeys,
+    disabledBookmakerKeys: fallbackApplied ? [] : disabledBookmakerKeys,
     preferencesModel,
     userId,
   })
@@ -214,8 +249,9 @@ const updateBookmakerPreferences = async (
   return {
     preferences: buildPreferencesResponse({
       availableBookmakers: normalizedAvailable,
-      disabledBookmakerKeys,
+      disabledBookmakerKeys: fallbackApplied ? [] : disabledBookmakerKeys,
       fallbackApplied,
+      supportedBookmakers,
     }),
     success: true,
   }
@@ -227,6 +263,7 @@ module.exports = {
   buildPreferencesResponse,
   getBookmakerPreferences,
   normalizeAvailableBookmakers,
+  normalizeSupportedBookmakers,
   normalizeUpdatePayload,
   updateBookmakerPreferences,
 }

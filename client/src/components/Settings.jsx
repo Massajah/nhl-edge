@@ -113,6 +113,142 @@ const providerLabels = {
 const getProviderLabel = (provider) =>
   providerLabels[provider] ?? 'Email/password'
 
+const getRequestedBookmakerCount = (configuration = {}) => {
+  const bookmakers = Array.isArray(configuration.bookmakers)
+    ? configuration.bookmakers
+    : []
+
+  return bookmakers.length || '--'
+}
+
+const getAvailableBookmakerCount = (marketData = {}) => {
+  if (!Array.isArray(marketData.availableBookmakers)) {
+    return 'Not checked'
+  }
+
+  return marketData.lastSuccessfulFetch ||
+    ['cached', 'no_events', 'ready'].includes(marketData.status)
+    ? marketData.availableBookmakers.length
+    : 'Not checked'
+}
+
+const getBookmakerCatalogEmptyMessage = ({ requestStatus, status }) => {
+  if (requestStatus === 'error') {
+    return 'The requested bookmaker catalog could not be loaded.'
+  }
+
+  if (status === 'not_configured') {
+    return 'Configure The Odds API to use the requested bookmaker catalog.'
+  }
+
+  return 'No requested bookmakers are configured.'
+}
+
+const getPreferredBookmakerOptions = (preferences = {}) => {
+  const availableKeys = new Set(
+    (Array.isArray(preferences.availableBookmakers)
+      ? preferences.availableBookmakers
+      : []
+    ).map(({ bookmakerKey }) => bookmakerKey),
+  )
+  const supported = Array.isArray(preferences.supportedBookmakers)
+    ? preferences.supportedBookmakers
+    : preferences.availableBookmakers
+
+  return (Array.isArray(supported) ? supported : []).map((bookmaker) => ({
+    ...bookmaker,
+    available:
+      typeof bookmaker.available === 'boolean'
+        ? bookmaker.available
+        : availableKeys.has(bookmaker.bookmakerKey),
+  }))
+}
+
+const QUOTA_LEVEL_LABELS = Object.freeze({
+  exhausted: 'Credits exhausted',
+  healthy: 'Healthy credit balance',
+  high: 'High credit usage',
+  warning: 'Credit balance warning',
+})
+
+function MarketOddsCreditMonitor({ providerStatus, quota }) {
+  const toQuotaNumber = (value) => {
+    if (value === null || value === undefined || value === '') {
+      return null
+    }
+
+    const numberValue = Number(value)
+
+    return Number.isFinite(numberValue) ? numberValue : null
+  }
+  const remaining = toQuotaNumber(quota?.remaining)
+  const total = toQuotaNumber(quota?.total)
+  const used = toQuotaNumber(quota?.used)
+  const lastCost = toQuotaNumber(quota?.lastCost)
+  const remainingPercent = toQuotaNumber(quota?.remainingPercent)
+  const hasKnownQuota =
+    Number.isFinite(remaining) &&
+    remaining >= 0 &&
+    Number.isFinite(total) &&
+    total >= 0 &&
+    Number.isFinite(remainingPercent)
+  const remainingLevel = hasKnownQuota
+    ? quota?.remainingLevel || 'unknown'
+    : providerStatus === 'quota_exhausted'
+      ? 'exhausted'
+      : 'unknown'
+
+  return (
+    <section
+      aria-labelledby="market-api-credits-heading"
+      className={`market-api-credits ${remainingLevel}`}
+    >
+      <div className="market-api-credits-heading">
+        <div>
+          <p className="eyebrow">The Odds API usage</p>
+          <h3 id="market-api-credits-heading">API Credits</h3>
+        </div>
+        {remainingLevel !== 'unknown' ? (
+          <span>{QUOTA_LEVEL_LABELS[remainingLevel]}</span>
+        ) : null}
+      </div>
+
+      {hasKnownQuota ? (
+        <>
+          <div className="market-api-credit-summary">
+            <strong>
+              {remaining} / {total} remaining
+            </strong>
+            <span>{remainingPercent.toFixed(1)}% remaining</span>
+          </div>
+          <progress
+            aria-label={`The Odds API credits remaining: ${remaining} of ${total}`}
+            max={total > 0 ? total : 1}
+            value={Math.min(remaining, total > 0 ? total : 0)}
+          />
+          <div className="market-api-credit-details">
+            <span>
+              Used this month: {Number.isFinite(used) ? used : 'Unknown'}
+            </span>
+            <span>
+              Last request cost:{' '}
+              {Number.isFinite(lastCost)
+                ? `${lastCost} ${lastCost === 1 ? 'credit' : 'credits'}`
+                : 'Unknown'}
+            </span>
+          </div>
+        </>
+      ) : (
+        <p className="market-api-credit-unknown" role="status">
+          {providerStatus === 'quota_exhausted'
+            ? 'Credits exhausted. Exact usage metadata is unavailable.'
+            : 'Not checked yet'}
+        </p>
+      )}
+    </section>
+  )
+}
+
 const RATING_ENGINE_UPDATE_FIELDS = Object.freeze(
   RATING_ENGINE_SETTING_FIELDS.filter(
     (field) =>
@@ -275,11 +411,13 @@ function Settings({
   const [marketData, setMarketData] = useState(
     initialMarketOddsStatus ?? {
       configuration: {
+        bookmakers: [],
         cacheTtlMs: 10 * 60 * 1000,
         configured: null,
+        expectedRequestCredits: 1,
         market: 'Moneyline',
         provider: 'The Odds API',
-        region: 'EU',
+        requestScope: 'Explicit bookmakers',
         sport: 'NHL',
       },
       lastSuccessfulFetch: null,
@@ -296,6 +434,7 @@ function Settings({
       disabledBookmakerKeys: [],
       enabledBookmakerKeys: [],
       fallbackApplied: false,
+      supportedBookmakers: [],
       warning: null,
     },
   )
@@ -666,6 +805,9 @@ function Settings({
   )
   const showCustomKellyFraction = shouldShowCustomKellyFraction(
     draftBettingSettings.kellyMode,
+  )
+  const preferredBookmakerOptions = getPreferredBookmakerOptions(
+    bookmakerPreferences,
   )
 
   const formatApiFieldErrors = (details = {}) => {
@@ -1502,15 +1644,15 @@ function Settings({
             </dd>
           </div>
           <div><dt>Sport</dt><dd>{marketData.configuration.sport}</dd></div>
-          <div><dt>Region</dt><dd>{marketData.configuration.region}</dd></div>
           <div><dt>Market</dt><dd>{marketData.configuration.market}</dd></div>
           <div>
-            <dt>Cache TTL</dt>
-            <dd>{Math.round(marketData.configuration.cacheTtlMs / 60000)} min</dd>
+            <dt>Requested Bookmakers</dt>
+            <dd>{getRequestedBookmakerCount(marketData.configuration)}</dd>
           </div>
-          <div><dt>Credits Remaining</dt><dd>{marketData.quota?.remaining ?? '--'}</dd></div>
-          <div><dt>Credits Used</dt><dd>{marketData.quota?.used ?? '--'}</dd></div>
-          <div><dt>Last Request Cost</dt><dd>{marketData.quota?.lastCost ?? '--'}</dd></div>
+          <div>
+            <dt>Available Bookmakers</dt>
+            <dd>{getAvailableBookmakerCount(marketData)}</dd>
+          </div>
           <div>
             <dt>Last Successful Fetch</dt>
             <dd>
@@ -1525,6 +1667,11 @@ function Settings({
           </div>
         </dl>
 
+        <MarketOddsCreditMonitor
+          providerStatus={marketData.status}
+          quota={marketData.quota}
+        />
+
         <form
           className="preferred-bookmakers-section"
           onSubmit={handleSaveBookmakerPreferences}
@@ -1533,8 +1680,10 @@ function Settings({
             <p className="eyebrow">External Data</p>
             <h3>Preferred Bookmakers</h3>
             <p>
-              Only enabled bookmakers can supply best available odds to the
-              Dashboard, Analyzer, EV, Kelly, and saved bets.
+              Choose which requested bookmakers can supply current NHL
+              moneyline odds to the Dashboard and Analyzer. Availability is
+              based on the latest successful provider response and does not
+              change your saved selection.
             </p>
           </div>
 
@@ -1542,14 +1691,17 @@ function Settings({
             <p role="status">Loading...</p>
           ) : null}
 
-          {bookmakerPreferences.availableBookmakers.length === 0 &&
+          {preferredBookmakerOptions.length === 0 &&
           bookmakerPreferencesStatus !== 'loading' ? (
             <p className="empty-state">
-              Bookmakers will appear after market odds have been loaded.
+              {getBookmakerCatalogEmptyMessage({
+                requestStatus: marketDataStatus,
+                status: marketData.status,
+              })}
             </p>
           ) : (
             <div className="preferred-bookmaker-list">
-              {bookmakerPreferences.availableBookmakers.map((bookmaker) => (
+              {preferredBookmakerOptions.map((bookmaker) => (
                 <label key={bookmaker.bookmakerKey}>
                   <input
                     checked={draftEnabledBookmakerKeys.includes(
@@ -1564,7 +1716,16 @@ function Settings({
                       )
                     }
                   />
-                  <span>{bookmaker.bookmakerTitle}</span>
+                  <span className="bookmaker-option-name">
+                    {bookmaker.bookmakerTitle}
+                  </span>
+                  <span
+                    className={`bookmaker-availability ${
+                      bookmaker.available ? 'available' : 'unavailable'
+                    }`}
+                  >
+                    {bookmaker.available ? 'Available' : 'No current odds'}
+                  </span>
                 </label>
               ))}
             </div>
@@ -1589,7 +1750,7 @@ function Settings({
             </p>
           ) : null}
 
-          {bookmakerPreferences.availableBookmakers.length > 0 ? (
+          {preferredBookmakerOptions.length > 0 ? (
             <button
               className="save-ratings-button"
               disabled={bookmakerPreferencesStatus === 'saving'}

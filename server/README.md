@@ -218,13 +218,21 @@ Clear history action and does not recalculate or mutate model values.
 No injury provider, automatic player valuation, replacement-quality model,
 lineup optimizer, or cumulative positional penalty is part of this workflow.
 
-## Market Odds Phase 1
+## Market Odds Phases 1–2
 
 The authenticated market-odds endpoint uses The Odds API v4 for current NHL
-moneyline (`h2h`) prices in the EU region, returned as decimal odds. One
-provider request covers a buffered selected-date window and is matched to the
-NHL schedule by canonical home/away team identity plus a three-hour commence
-time tolerance. Home and away order is never reversed silently.
+moneyline (`h2h`) prices returned as decimal odds. Each request explicitly asks
+for `veikkaus_fi`, `unibet_fi`, `coolbet`, `pinnacle`, `betsson`, `nordicbet`,
+`leovegas_fi`, `williamhill`, and `sport888`; it does not request a broad
+region. The official bookmaker directory lists all nine keys, while an
+individual bookmaker can legitimately return no NHL prices. One provider
+request covers a buffered selected-date window and is matched to the NHL
+schedule by canonical home/away team identity plus a three-hour commence-time
+tolerance. Home and away order is never reversed silently.
+
+Nine explicitly selected bookmakers are one region-equivalent group, and one
+`h2h` market therefore has an expected cost of one usage credit. The actual
+cost and current usage always come from The Odds API response headers.
 
 Normalized matched events preserve each complete bookmaker row and select the
 highest valid decimal price independently for the home and away sides. Prices
@@ -232,41 +240,43 @@ are not averaged, de-vigged, or treated as consensus probabilities. Started or
 final games do not receive a current pre-match snapshot.
 
 Public provider data is cached in server memory for 10 minutes by sport,
-region, market, odds format, and commence-time window. Identical in-flight
-requests share one Promise across users. A forced Dashboard refresh is limited
-to one provider attempt per identical window every 30 seconds, and valid cache
-data is preferred when credits are low or the provider rate-limits a request.
-The server tracks only the safe `used`, `remaining`, `lastCost`, and
-`observedAt` quota fields. Missing configuration, timeouts, malformed responses,
-rate limits, and exhausted quota return structured states without breaking the
-schedule or manual-odds workflow. A valid cached snapshot remains usable after
-quota exhaustion.
+explicit bookmaker keys, market, odds format, and commence-time window.
+Identical in-flight requests share one Promise across users. A forced Dashboard
+refresh is limited to one provider attempt per identical window every 30
+seconds, and valid cache data is preferred when credits are low or the provider
+rate-limits a request. The server exposes only safe quota metadata. It derives
+`total` as `remaining + used`, then derives remaining percentage and an
+informational warning level; it also exposes `lastCost` and `observedAt`.
+Missing configuration,
+authentication failures, timeouts, malformed responses, rate limits, empty NHL
+odds, and exhausted quota return distinct structured states without breaking
+the schedule or manual-odds workflow. A valid cached snapshot remains usable
+after provider failures or quota exhaustion.
 
 The following optional variables override defaults:
 
 ```dotenv
 THE_ODDS_API_BASE_URL=https://api.the-odds-api.com
-THE_ODDS_API_SPORT=icehockey_nhl
-THE_ODDS_API_REGION=eu
-THE_ODDS_API_MARKET=h2h
-THE_ODDS_API_ODDS_FORMAT=decimal
 MARKET_ODDS_CACHE_TTL_MS=600000
 MARKET_ODDS_LOW_CREDIT_THRESHOLD=25
 MARKET_ODDS_MIN_REFRESH_INTERVAL_MS=30000
+MARKET_ODDS_REQUEST_TIMEOUT_MS=8000
 ```
 
 Development request/cache/credit summaries are emitted only when
 `NHL_EDGE_API_DEBUG=true`; request URLs and API keys are never logged.
 
-## Market Odds Phase 2A
+## Market Odds Phase 2
 
-Bookmaker preferences are stored per authenticated user. The settings API
-returns the bookmaker keys and display names observed in the latest provider
-response, with every bookmaker enabled by default. New bookmakers are also
-enabled by default. The update endpoint accepts only `enabledBookmakerKeys`;
-it never accepts a client-supplied `userId`. If a user attempts to disable
-every available bookmaker, the server restores all bookmakers and returns a
-warning.
+Bookmaker preferences are stored per authenticated user. The settings API keeps
+the fixed requested catalog separate from bookmakers with usable odds in the
+latest successful response. Every requested bookmaker is enabled by default,
+and newly added requested bookmakers are enabled without changing previously
+saved disabled keys. Temporary provider absence changes only the `available`
+status and does not remove a selection. The update endpoint accepts only
+`enabledBookmakerKeys`; it never accepts a client-supplied `userId`. If a user
+attempts to disable every requested bookmaker, the server restores all
+bookmakers and returns a warning.
 
 Preferences are applied after the shared provider response is read from cache,
 so changing them does not make another provider request or create a per-user
@@ -275,7 +285,49 @@ enabled bookmakers only. The authenticated market-odds response also preserves
 every normalized bookmaker row for transparent display and marks disabled rows
 without allowing them to influence EV, Kelly, or saved snapshots.
 
-Phase 2A intentionally has no market consensus, de-vig, historical/opening
+## Market Odds Phase 3B.1 persistence foundation
+
+`OddsSnapshot` is global NHL market data with no user owner. It stores one
+compact, normalized, immutable game/checkpoint observation, keyed uniquely by
+official NHL `gameId`, provider, and a deterministic checkpoint key derived
+from snapshot type plus scheduled start. Only `T24`, `T6`, `T2`, and `FINAL`
+are supported; first captured will be derived later from stored timestamps.
+Retries use unordered `$setOnInsert` upserts and never replace earlier odds.
+
+`OddsCaptureRun` is also global and stores only bounded operational counts,
+checkpoint outcomes, reason counts, and quota summaries. Neither collection
+stores raw provider JSON, request URLs, API keys, bookmaker titles, or user
+preferences. The strict persistence matcher uses exact ordered canonical teams
+and an inclusive 60-minute commence-time tolerance; ambiguous, duplicate,
+reversed, and unknown-team events are not persisted.
+
+Phase 3B.1 adds no route, provider call, capture orchestrator, timer, worker, or
+scheduler. Scheduled execution is intentionally deferred while the backend is
+local-only.
+
+## Market Odds Phase 3B.2 capture engine
+
+The internal odds capture engine executes only explicitly supplied checkpoint
+work; it is not a scheduler and does not scan the schedule to decide what is
+due. A run validates and filters the complete batch before credit use, reads
+the authoritative NHL schedule, performs at most one shared cache-aware
+provider fetch, applies the strict historical matcher, and persists immutable
+snapshots through the Phase 3B.1 idempotent repository.
+
+Cached odds retain their original provider observation timestamp. Per-type
+freshness and acceptance windows prevent stale data from being relabeled, and
+`FINAL` additionally requires an NHL state recheck plus inclusive T-30m to
+T-5m leakage protection. Invalid bookmaker timestamps are removed row by row;
+historical storage always uses the fixed server catalog and never user
+Preferred Bookmakers.
+
+The engine records deterministic run identity, bounded per-checkpoint outcomes,
+normalized provider failures, actual header-derived request cost when known,
+and partial successes. It has an injectable quota decision point but no
+persistent quota ledger, planner, route, startup hook, timer, worker, or
+automatic execution. Those trigger and budgeting concerns remain deferred.
+
+Phase 2 intentionally has no market consensus, de-vig, historical/opening
 odds, line movement, live updates, spreads, totals, props, polling, WebSockets,
 or automatic bet placement.
 

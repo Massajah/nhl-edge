@@ -88,7 +88,7 @@ function MarketOddsDetails({
                   >
                     <td>
                       {bookmaker.bookmakerTitle}
-                      {!bookmaker.enabled ? <small>Disabled</small> : null}
+                      {!bookmaker.enabled ? <small>Not preferred</small> : null}
                     </td>
                     <td>{formatOdds(bookmaker.awayOdds)}</td>
                     <td>{formatOdds(bookmaker.homeOdds)}</td>

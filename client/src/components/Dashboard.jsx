@@ -1007,7 +1007,9 @@ function Dashboard({
           </button>
 
           <button
+            aria-label="Refresh dashboard data; this may consume one market-odds API credit"
             className="schedule-refresh-button"
+            title="May consume one The Odds API credit"
             type="button"
             onClick={handleRefreshDashboard}
           >
@@ -1479,9 +1481,19 @@ function MarketOddsStatus({ requestStatus, result }) {
   const status = result?.status ?? 'unavailable'
   const updatedAt = formatMarketOddsTime(result?.fetchedAt)
   const statusLabel = getMarketOddsStatusLabel(status, requestStatus)
+  const isCachedFallback =
+    result?.source === 'cache' &&
+    (Array.isArray(result?.games) ? result.games : []).some(
+      (game) => game?.marketOdds,
+    ) &&
+    status !== 'cached'
   const primaryMessage =
     status === 'no_events'
-      ? 'Market odds unavailable — markets have not opened yet.'
+      ? 'No NHL odds currently available.'
+      : isCachedFallback
+        ? `${statusLabel} · using cached odds${
+            updatedAt ? ` · updated ${updatedAt}` : ''
+          }`
       : `${statusLabel}${
           updatedAt && ['cached', 'ready'].includes(status)
             ? ` · updated ${updatedAt}`
@@ -1493,9 +1505,13 @@ function MarketOddsStatus({ requestStatus, result }) {
   return (
     <div
       className={`market-odds-status ${
-        ['invalid_response', 'quota_exhausted', 'rate_limited', 'unavailable'].includes(
-          status,
-        )
+        [
+          'authentication_failed',
+          'invalid_response',
+          'quota_exhausted',
+          'rate_limited',
+          'unavailable',
+        ].includes(status)
           ? 'warning'
           : ''
       }`}
@@ -1529,7 +1545,8 @@ function GameMarketOdds({ marketOdds }) {
 
         return (
           <span key={side}>
-            {label} {Number(marketOdds[side]).toFixed(2)}
+            {metadata?.source === 'provider' ? `Best ${label.toLowerCase()}` : label}{' '}
+            {Number(marketOdds[side]).toFixed(2)}
             <small> · {sourceLabel}</small>
           </span>
         )
@@ -2057,7 +2074,7 @@ function DashboardIntelligenceSummary({ currency, dashboardStatus }) {
       Number.isFinite(kellyAmount) &&
       kellyAmount > 0
 
-    if (!valueSide?.team || !Number.isFinite(valueSide.edge)) {
+    if (!valueSide?.team || !Number.isFinite(valueSide.expectedValue)) {
       return null
     }
 
@@ -2068,8 +2085,9 @@ function DashboardIntelligenceSummary({ currency, dashboardStatus }) {
           <strong>{valueSide.team.name}</strong>
         </div>
         <div className="dashboard-intelligence-metrics">
-          <span title={PROBABILITY_EDGE_HELP_TEXT}>
-            Edge <strong>{formatProbabilityEdge(valueSide.edge)}</strong>
+          <span title="Expected-value edge = (model probability × decimal odds − 1) × 100.">
+            EV edge{' '}
+            <strong>{formatExpectedValue(valueSide.expectedValue)}</strong>
           </span>
           {showKelly ? (
             <span>

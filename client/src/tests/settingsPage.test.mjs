@@ -708,107 +708,223 @@ test('schedule adjustment draft validation rejects unsafe numeric values', () =>
   assert.equal(JSON.stringify(invalid).includes('Infinity'), false)
 })
 
-test('Market Odds status card renders safe provider and quota metadata', () => {
+const requestedBookmakers = [
+  ['veikkaus_fi', 'Veikkaus'],
+  ['unibet_fi', 'Unibet FI'],
+  ['coolbet', 'Coolbet'],
+  ['pinnacle', 'Pinnacle'],
+  ['betsson', 'Betsson'],
+  ['nordicbet', 'NordicBet'],
+  ['leovegas_fi', 'LeoVegas FI'],
+  ['williamhill', 'William Hill'],
+  ['sport888', '888sport'],
+]
+const marketConfiguration = {
+  bookmakers: requestedBookmakers.map(([key, title]) => ({ key, title })),
+  cacheTtlMs: 600000,
+  configured: true,
+  expectedRequestCredits: 1,
+  market: 'Moneyline',
+  provider: 'The Odds API',
+  requestScope: 'Explicit bookmakers',
+  sport: 'NHL',
+}
+const createMarketStatus = (overrides = {}) => ({
+  availableBookmakers: [],
+  configuration: marketConfiguration,
+  lastSuccessfulFetch: '2026-09-02T09:00:00.000Z',
+  quota: null,
+  status: 'ready',
+  ...overrides,
+})
+const createBookmakerPreferences = (overrides = {}) => ({
+  availableBookmakers: requestedBookmakers.slice(0, 3).map(
+    ([bookmakerKey, bookmakerTitle]) => ({ bookmakerKey, bookmakerTitle }),
+  ),
+  disabledBookmakerKeys: [],
+  enabledBookmakerKeys: requestedBookmakers.map(([key]) => key),
+  fallbackApplied: false,
+  supportedBookmakers: requestedBookmakers.map(
+    ([bookmakerKey, bookmakerTitle], index) => ({
+      available: index < 3,
+      bookmakerKey,
+      bookmakerTitle,
+    }),
+  ),
+  warning: null,
+  ...overrides,
+})
+
+test('Market Odds status card renders compact provider and normalized quota metadata', () => {
   const html = renderSettings({
-    initialMarketOddsStatus: {
-      configuration: {
-        cacheTtlMs: 600000,
-        configured: true,
-        market: 'Moneyline',
-        provider: 'The Odds API',
-        region: 'EU',
-        sport: 'NHL',
+    initialMarketOddsStatus: createMarketStatus({
+      availableBookmakers: createBookmakerPreferences().availableBookmakers,
+      quota: {
+        lastCost: 1,
+        remaining: 80,
+        remainingLevel: 'healthy',
+        remainingPercent: 80,
+        total: 100,
+        used: 20,
       },
-      lastSuccessfulFetch: '2026-08-03T12:00:00.000Z',
-      quota: { lastCost: 1, remaining: 80, used: 20 },
-      status: 'ready',
-    },
+    }),
   })
 
-  assert.match(html, /External data/)
-  assert.match(html, /Market Odds/)
   assert.match(html, /Provider<\/dt><dd>The Odds API/)
   assert.match(html, /Configuration<\/dt><dd>Connected/)
   assert.match(html, /Sport<\/dt><dd>NHL/)
-  assert.match(html, /Region<\/dt><dd>EU/)
   assert.match(html, /Market<\/dt><dd>Moneyline/)
-  assert.match(html, /Cache TTL<\/dt><dd>10 min/)
-  assert.match(html, /Credits Used<\/dt><dd>20/)
-  assert.match(html, /Credits Remaining<\/dt><dd>80/)
-  assert.match(html, /Last Request Cost<\/dt><dd>1/)
-  assert.doesNotMatch(html, /THE_ODDS_API_KEY|secret|api key/i)
+  assert.match(html, /Requested Bookmakers<\/dt><dd>9/)
+  assert.match(html, /Available Bookmakers<\/dt><dd>3/)
+  assert.match(html, /Last Successful Fetch<\/dt><dd>(?!Not yet)/)
+  assert.match(html, /Current Status<\/dt><dd>Ready/)
+  assert.match(html, /<h3 id="market-api-credits-heading">API Credits<\/h3>/)
+  assert.match(html, /80 \/ 100 remaining/)
+  assert.match(html, /80\.0% remaining/)
+  assert.match(html, /Used this month: 20/)
+  assert.match(html, /Last request cost: 1 credit/)
+  assert.match(
+    html,
+    /<progress aria-label="The Odds API credits remaining: 80 of 100" max="100" value="80">/,
+  )
+  assert.doesNotMatch(html, /THE_ODDS_API_KEY|secret/i)
 })
 
-test('Market Odds status card renders not-configured state without quota noise', () => {
-  const html = renderSettings({
-    initialMarketOddsStatus: {
-      configuration: {
-        cacheTtlMs: 600000,
-        configured: false,
-        market: 'Moneyline',
-        provider: 'The Odds API',
-        region: 'EU',
-        sport: 'NHL',
-      },
+test('API Credits renders warning, high, exhausted, and unknown states honestly', () => {
+  const renderQuota = (quota, status = 'ready', overrides = {}) =>
+    renderSettings({
+      initialMarketOddsStatus: createMarketStatus({
+        quota,
+        status,
+        ...overrides,
+      }),
+    })
+  const warning = renderQuota({
+    lastCost: 1,
+    remaining: 30,
+    remainingLevel: 'warning',
+    remainingPercent: 30,
+    total: 100,
+    used: 70,
+  })
+  const high = renderQuota({
+    lastCost: 1,
+    remaining: 10,
+    remainingLevel: 'high',
+    remainingPercent: 10,
+    total: 100,
+    used: 90,
+  })
+  const exhausted = renderQuota({
+    lastCost: 1,
+    remaining: 0,
+    remainingLevel: 'exhausted',
+    remainingPercent: 0,
+    total: 100,
+    used: 100,
+  }, 'quota_exhausted')
+  const unknown = renderQuota(null, 'not_checked', {
+    lastSuccessfulFetch: null,
+  })
+  const exhaustedWithoutHeaders = renderQuota(null, 'quota_exhausted')
+
+  assert.match(warning, /market-api-credits warning[\s\S]*Credit balance warning/)
+  assert.match(high, /market-api-credits high[\s\S]*High credit usage/)
+  assert.match(exhausted, /market-api-credits exhausted[\s\S]*Credits exhausted/)
+  assert.match(unknown, /API Credits[\s\S]*Not checked yet/)
+  assert.match(unknown, /Available Bookmakers<\/dt><dd>Not checked/)
+  assert.match(
+    exhaustedWithoutHeaders,
+    /Credits exhausted\. Exact usage metadata is unavailable\./,
+  )
+  assert.doesNotMatch(unknown, /500 \/ 500/)
+})
+
+test('Market Odds distinguishes no current NHL odds from provider errors', () => {
+  const preferences = createBookmakerPreferences({
+    availableBookmakers: [],
+    supportedBookmakers: createBookmakerPreferences().supportedBookmakers.map(
+      (bookmaker) => ({ ...bookmaker, available: false }),
+    ),
+  })
+  const noOddsHtml = renderSettings({
+    initialBookmakerPreferences: preferences,
+    initialMarketOddsStatus: createMarketStatus({ status: 'no_events' }),
+  })
+  const authenticationErrorHtml = renderSettings({
+    initialBookmakerPreferences: preferences,
+    initialMarketOddsStatus: createMarketStatus({
       lastSuccessfulFetch: null,
-      quota: null,
-      status: 'not_configured',
-    },
+      status: 'authentication_failed',
+    }),
   })
 
-  assert.match(html, /Configuration<\/dt><dd>Not configured/)
-  assert.match(html, /Credits Used<\/dt><dd>--/)
-  assert.match(html, /Current Status<\/dt><dd>Provider unavailable/)
+  assert.match(
+    noOddsHtml,
+    /Current Status<\/dt><dd>No NHL odds currently available/,
+  )
+  assert.match(noOddsHtml, /Veikkaus[\s\S]*No current odds/)
+  assert.match(
+    authenticationErrorHtml,
+    /Current Status<\/dt><dd>Authentication failed/,
+  )
+  assert.match(authenticationErrorHtml, /Pinnacle[\s\S]*No current odds/)
+  assert.doesNotMatch(authenticationErrorHtml, /Unsupported/)
 })
 
-test('Preferred Bookmakers renders every available bookmaker enabled by default', () => {
-  const html = renderSettings({
-    initialBookmakerPreferences: {
-      availableBookmakers: [
-        { bookmakerKey: 'book-a', bookmakerTitle: 'Book A' },
-        { bookmakerKey: 'book-b', bookmakerTitle: 'Book B' },
-      ],
-      disabledBookmakerKeys: [],
-      enabledBookmakerKeys: ['book-a', 'book-b'],
-      fallbackApplied: false,
-      warning: null,
-    },
+test('Preferred Bookmakers renders all nine choices, selection, and availability separately', () => {
+  const preferences = createBookmakerPreferences({
+    disabledBookmakerKeys: ['pinnacle'],
+    enabledBookmakerKeys: requestedBookmakers
+      .map(([key]) => key)
+      .filter((key) => key !== 'pinnacle'),
   })
+  const html = renderSettings({ initialBookmakerPreferences: preferences })
 
-  assert.match(html, /Preferred Bookmakers/)
-  assert.match(html, /Book A/)
-  assert.match(html, /Book B/)
-  assert.equal((html.match(/type="checkbox" checked=""/g) ?? []).length >= 2, true)
+  requestedBookmakers.forEach(([, title]) => assert.match(html, new RegExp(title)))
+  assert.equal((html.match(/type="checkbox" checked=""/g) ?? []).length, 8)
+  assert.match(html, /Veikkaus[\s\S]*Available/)
+  assert.match(html, /Pinnacle[\s\S]*No current odds/)
   assert.match(html, /Save Preferred Bookmakers/)
 })
 
-test('Preferred Bookmakers shows empty and all-disabled fallback states', () => {
+test('Preferred Bookmakers shows empty-catalog and all-disabled fallback states', () => {
   const emptyHtml = renderSettings({
-    initialBookmakerPreferences: {
+    initialBookmakerPreferences: createBookmakerPreferences({
       availableBookmakers: [],
-      disabledBookmakerKeys: [],
       enabledBookmakerKeys: [],
-      fallbackApplied: false,
-      warning: null,
-    },
+      supportedBookmakers: [],
+    }),
   })
   const warning =
     'At least one bookmaker must be enabled. All bookmakers have been enabled automatically.'
   const fallbackHtml = renderSettings({
-    initialBookmakerPreferences: {
-      availableBookmakers: [
-        { bookmakerKey: 'book-a', bookmakerTitle: 'Book A' },
-      ],
-      disabledBookmakerKeys: [],
-      enabledBookmakerKeys: ['book-a'],
+    initialBookmakerPreferences: createBookmakerPreferences({
       fallbackApplied: true,
       warning,
-    },
+    }),
   })
 
-  assert.match(
-    emptyHtml,
-    /Bookmakers will appear after market odds have been loaded\./,
-  )
+  assert.match(emptyHtml, /No requested bookmakers are configured\./)
   assert.match(fallbackHtml, new RegExp(warning.replaceAll('.', '\\.')))
+})
+
+test('Market Odds controls collapse safely at narrow widths', async () => {
+  const css = await import('node:fs/promises').then((fs) =>
+    fs.readFile(new URL('../App.css', import.meta.url), 'utf8'),
+  )
+
+  assert.match(
+    css,
+    /\.preferred-bookmaker-list\s*{[^}]+minmax\(230px, 1fr\)/s,
+  )
+  assert.match(css, /\.market-api-credits progress\s*{[^}]+width:\s*100%/s)
+  assert.match(
+    css,
+    /@media \(max-width: 640px\)[\s\S]*?\.preferred-bookmaker-list\s*{[^}]+minmax\(0, 1fr\)/s,
+  )
+  assert.match(
+    css,
+    /@media \(max-width: 640px\)[\s\S]*?\.market-api-credit-summary[\s\S]*?flex-direction:\s*column/s,
+  )
 })

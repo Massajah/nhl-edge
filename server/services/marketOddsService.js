@@ -7,6 +7,7 @@ const { getNhlTeamIdentity } = require('./nhlTeamIdentity')
 const {
   MarketOddsProviderError,
   createMarketOddsProvider,
+  normalizeQuotaMetadata,
 } = require('./marketOddsProvider')
 const { collectAvailableBookmakers } = require('./bookmakerOddsFilter')
 
@@ -38,12 +39,22 @@ const buildCommenceTimeWindow = (date) => {
 const getMarketOddsCacheKey = (config, window) =>
   [
     config.sport,
-    config.region,
+    config.bookmakers.map(({ key }) => key).join(','),
     config.market,
     config.oddsFormat,
     window.commenceTimeFrom,
     window.commenceTimeTo,
   ].join('|')
+
+const hasUsableMarketOdds = (events = []) =>
+  events.some((event) => Array.isArray(event.bookmakers) && event.bookmakers.length > 0)
+
+const countBookmakerRows = (events = []) =>
+  events.reduce(
+    (total, event) =>
+      total + (Array.isArray(event.bookmakers) ? event.bookmakers.length : 0),
+    0,
+  )
 
 const isGameStarted = (game, nowMs) => {
   if (STARTED_GAME_STATES.has(String(game.gameState ?? '').toUpperCase())) {
@@ -210,7 +221,7 @@ const createMarketOddsService = ({
     availableBookmakers: [],
     lastSuccessfulFetch: null,
     quota: null,
-    status: getConfig().apiKey ? 'unavailable' : 'not_configured',
+    status: getConfig().apiKey ? 'not_checked' : 'not_configured',
   }
 
   const getStatus = () => {
@@ -223,7 +234,7 @@ const createMarketOddsService = ({
       lastSuccessfulFetch: latestProviderState.lastSuccessfulFetch,
       lowQuota:
         Number.isFinite(remaining) && remaining <= config.lowCreditThreshold,
-      quota: latestProviderState.quota,
+      quota: normalizeQuotaMetadata(latestProviderState.quota),
       status: config.apiKey
         ? latestProviderState.status
         : 'not_configured',
@@ -247,7 +258,9 @@ const createMarketOddsService = ({
       const cacheStatus =
         latestProviderState.status === 'quota_exhausted'
           ? 'quota_exhausted'
-          : 'cached'
+          : hasUsableMarketOdds(cached.data.events)
+            ? 'cached'
+            : 'no_events'
 
       latestProviderState = {
         ...latestProviderState,
@@ -257,6 +270,8 @@ const createMarketOddsService = ({
       return {
         ...cached.data,
         hasUsableData: true,
+        requestAttempted: false,
+        requestQuota: null,
         source: 'cache',
         status: cacheStatus,
       }
@@ -266,6 +281,8 @@ const createMarketOddsService = ({
       return {
         events: [],
         providerFetchedAt: null,
+        requestAttempted: false,
+        requestQuota: null,
         source: 'provider',
         status: 'quota_exhausted',
       }
@@ -278,14 +295,19 @@ const createMarketOddsService = ({
 
     const recentlyFailed =
       requestedRecently &&
-      ['invalid_response', 'rate_limited', 'unavailable'].includes(
-        latestProviderState.status,
-      )
+      [
+        'authentication_failed',
+        'invalid_response',
+        'rate_limited',
+        'unavailable',
+      ].includes(latestProviderState.status)
 
     if ((refresh && forcedRecently) || recentlyFailed) {
       return {
         events: [],
         providerFetchedAt: null,
+        requestAttempted: false,
+        requestQuota: null,
         source: 'cache',
         status: recentlyFailed ? latestProviderState.status : 'unavailable',
       }
@@ -299,24 +321,31 @@ const createMarketOddsService = ({
       commenceTimeTo: window.commenceTimeTo,
     })
 
-    const request = provider
-      .fetchNhlOdds(window)
+    const fetchProviderOdds =
+      provider.fetchNhlMoneylineOdds ?? provider.fetchNhlOdds
+    const request = Promise.resolve()
+      .then(() => fetchProviderOdds.call(provider, window))
       .then((result) => {
         const availableBookmakers = collectAvailableBookmakers(result.events)
+        const quota = normalizeQuotaMetadata(result.quota)
+        const providerStatus =
+          quota?.remaining === 0
+            ? 'quota_exhausted'
+            : hasUsableMarketOdds(result.events)
+              ? 'ready'
+              : 'no_events'
 
         latestProviderState = {
-          availableBookmakers:
-            availableBookmakers.length > 0
-              ? availableBookmakers
-              : latestProviderState.availableBookmakers,
+          availableBookmakers,
           lastSuccessfulFetch: result.providerFetchedAt,
-          quota: result.quota ?? latestProviderState.quota,
-          status: result.events.length === 0 ? 'no_events' : 'ready',
+          quota: quota ?? latestProviderState.quota,
+          status: providerStatus,
         }
         const data = {
           ...result,
+          hasUsableData: true,
           source: 'provider',
-          status: result.events.length === 0 ? 'no_events' : 'ready',
+          status: providerStatus,
         }
 
         cache.set(key, {
@@ -324,38 +353,65 @@ const createMarketOddsService = ({
           expiresAt: now() + config.cacheTtlMs,
         })
         logDevelopment('Market odds provider request completed', {
-          creditsRemaining: result.quota?.remaining ?? null,
-          requestCreditCost: result.quota?.lastCost ?? null,
+          bookmakerCount: countBookmakerRows(result.events),
+          creditsRemaining: quota?.remaining ?? null,
+          eventCount: result.events.length,
+          requestCreditCost: quota?.lastCost ?? null,
+          status: providerStatus,
         })
 
-        return data
+        if (result.diagnostics?.normalizationWarnings?.length > 0) {
+          logDevelopment('Market odds normalization warnings', {
+            warnings: result.diagnostics.normalizationWarnings,
+          })
+        }
+
+        return {
+          ...data,
+          requestAttempted: true,
+          requestQuota: quota,
+        }
       })
       .catch((error) => {
         const status =
           error instanceof MarketOddsProviderError
             ? error.status
             : 'unavailable'
+        const errorQuota = normalizeQuotaMetadata(error.quota)
         latestProviderState = {
           ...latestProviderState,
-          quota: error.quota ?? latestProviderState.quota,
+          quota:
+            status === 'quota_exhausted'
+              ? errorQuota
+              : errorQuota ?? latestProviderState.quota,
           status,
         }
 
         if (
           hasFreshCache &&
-          ['quota_exhausted', 'rate_limited', 'unavailable'].includes(status)
+          [
+            'authentication_failed',
+            'invalid_response',
+            'quota_exhausted',
+            'rate_limited',
+            'unavailable',
+          ].includes(status)
         ) {
           return {
             ...cached.data,
             hasUsableData: true,
+            requestAttempted: true,
+            requestQuota: errorQuota,
             source: 'cache',
-            status: status === 'quota_exhausted' ? status : 'cached',
+            status,
           }
         }
 
         return {
           events: [],
           providerFetchedAt: null,
+          requestAttempted: true,
+          requestQuota: errorQuota,
           source: 'provider',
           status,
         }
@@ -366,6 +422,77 @@ const createMarketOddsService = ({
 
     inFlightRequests.set(key, request)
     return request
+  }
+
+  const getNhlOddsCaptureData = async ({
+    commenceTimeFrom,
+    commenceTimeTo,
+    maximumProviderAgeMs,
+  } = {}) => {
+    const fromMs = Date.parse(commenceTimeFrom)
+    const toMs = Date.parse(commenceTimeTo)
+
+    if (
+      !Number.isFinite(fromMs) ||
+      !Number.isFinite(toMs) ||
+      fromMs >= toMs ||
+      !Number.isFinite(maximumProviderAgeMs) ||
+      maximumProviderAgeMs < 0
+    ) {
+      throw new TypeError(
+        'Capture provider window and maximum age must be valid.',
+      )
+    }
+
+    const config = getConfig()
+
+    if (!config.apiKey) {
+      latestProviderState = {
+        ...latestProviderState,
+        status: 'not_configured',
+      }
+
+      return {
+        events: [],
+        hasUsableData: false,
+        providerFetchedAt: null,
+        quota: normalizeQuotaMetadata(latestProviderState.quota),
+        requestAttempted: false,
+        requestQuota: null,
+        source: 'provider',
+        status: 'not_configured',
+      }
+    }
+
+    const window = { commenceTimeFrom, commenceTimeTo }
+    const key = getMarketOddsCacheKey(config, window)
+    const cached = cache.get(key)
+    const cachedFetchedAtMs = Date.parse(cached?.data?.providerFetchedAt)
+    const cachedAgeMs = now() - cachedFetchedAtMs
+    const cachedTooOld = Boolean(
+      cached &&
+      (!Number.isFinite(cachedFetchedAtMs) ||
+        cachedAgeMs < 0 ||
+        cachedAgeMs > maximumProviderAgeMs),
+    )
+    const providerData = await getProviderData({
+      config,
+      key,
+      refresh: cachedTooOld,
+      window,
+    })
+
+    return {
+      diagnostics: providerData.diagnostics,
+      events: Array.isArray(providerData.events) ? providerData.events : [],
+      hasUsableData: Boolean(providerData.hasUsableData),
+      providerFetchedAt: providerData.providerFetchedAt ?? null,
+      quota: normalizeQuotaMetadata(latestProviderState.quota),
+      requestAttempted: Boolean(providerData.requestAttempted),
+      requestQuota: normalizeQuotaMetadata(providerData.requestQuota),
+      source: providerData.source,
+      status: providerData.status,
+    }
   }
 
   const getNhlMarketOdds = async ({ date, refresh = false }) => {
@@ -441,6 +568,8 @@ const createMarketOddsService = ({
 
     if (process.env.NODE_ENV !== 'production') {
       response.diagnostics = {
+        normalizationWarnings:
+          providerData.diagnostics?.normalizationWarnings ?? [],
         unmatchedEvents: matchResult.unmatchedEvents,
       }
     }
@@ -454,6 +583,7 @@ const createMarketOddsService = ({
   }
 
   return {
+    getNhlOddsCaptureData,
     getNhlMarketOdds,
     getStatus,
   }

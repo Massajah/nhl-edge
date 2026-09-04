@@ -1,4 +1,7 @@
-const { selectBestOdds } = require('./marketOddsProvider')
+const {
+  isValidDecimalOdds,
+  selectBestOdds,
+} = require('./marketOddsProvider')
 
 const collectAvailableBookmakers = (events = []) => {
   const bookmakers = new Map()
@@ -10,10 +13,15 @@ const collectAvailableBookmakers = (events = []) => {
           return
         }
 
+        const bookmakerTitle =
+          bookmaker.bookmakerTitle || bookmaker.bookmakerKey
+
         bookmakers.set(bookmaker.bookmakerKey, {
           bookmakerKey: bookmaker.bookmakerKey,
-          bookmakerTitle:
-            bookmaker.bookmakerTitle || bookmaker.bookmakerKey,
+          bookmakerTitle,
+          key: bookmaker.bookmakerKey,
+          lastUpdate: bookmaker.lastUpdate ?? null,
+          title: bookmakerTitle,
         })
       },
     )
@@ -43,7 +51,10 @@ const filterMarketOddsForBookmakers = (response, enabledBookmakerKeys = []) => {
         enabled: enabledSet.has(bookmaker.bookmakerKey),
       }))
       const enabledBookmakers = allBookmakers.filter(
-        (bookmaker) => bookmaker.enabled,
+        (bookmaker) =>
+          bookmaker.enabled &&
+          isValidDecimalOdds(bookmaker.awayOdds) &&
+          isValidDecimalOdds(bookmaker.homeOdds),
       )
       const awayBest = selectBestOdds(enabledBookmakers, 'away')
       const homeBest = selectBestOdds(enabledBookmakers, 'home')

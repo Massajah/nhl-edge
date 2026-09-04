@@ -2036,6 +2036,82 @@
   overflow-wrap: anywhere;
 }
 
+.market-api-credits {
+  background: rgba(7, 18, 30, 0.38);
+  border: 1px solid rgba(122, 160, 186, 0.2);
+  border-radius: 10px;
+  display: grid;
+  gap: 0.65rem;
+  margin-top: 0.85rem;
+  min-width: 0;
+  padding: 0.8rem 0.9rem;
+}
+
+.market-api-credits.warning,
+.market-api-credits.high {
+  border-color: rgba(238, 181, 74, 0.42);
+}
+
+.market-api-credits.exhausted {
+  border-color: rgba(238, 104, 104, 0.48);
+}
+
+.market-api-credits-heading,
+.market-api-credit-summary,
+.market-api-credit-details {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 1rem;
+  justify-content: space-between;
+  min-width: 0;
+}
+
+.market-api-credits-heading h3,
+.market-api-credits-heading p,
+.market-api-credit-unknown {
+  margin: 0;
+}
+
+.market-api-credits-heading > span,
+.market-api-credit-summary span,
+.market-api-credit-details,
+.market-api-credit-unknown {
+  color: var(--text-muted);
+  font-size: 0.76rem;
+}
+
+.market-api-credits.warning .market-api-credits-heading > span,
+.market-api-credits.high .market-api-credits-heading > span {
+  color: #e8c77f;
+}
+
+.market-api-credits.exhausted .market-api-credits-heading > span,
+.market-api-credits.exhausted .market-api-credit-unknown {
+  color: #f0a0a0;
+}
+
+.market-api-credit-summary strong {
+  color: var(--text-strong);
+  font-size: 0.92rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.market-api-credits progress {
+  accent-color: var(--accent);
+  height: 0.55rem;
+  width: 100%;
+}
+
+.market-api-credits.warning progress,
+.market-api-credits.high progress {
+  accent-color: #e8b54a;
+}
+
+.market-api-credits.exhausted progress {
+  accent-color: #ee6868;
+}
+
 .preferred-bookmakers-section {
   border-top: 1px solid rgba(122, 160, 186, 0.16);
   display: grid;
@@ -2058,7 +2134,7 @@
 .preferred-bookmaker-list {
   display: grid;
   gap: 0.5rem;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
 }
 
 .preferred-bookmaker-list label {
@@ -2068,7 +2144,27 @@
   border-radius: 8px;
   display: flex;
   gap: 0.55rem;
+  min-width: 0;
   padding: 0.6rem 0.7rem;
+}
+
+.bookmaker-option-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.bookmaker-availability {
+  flex: 0 0 auto;
+  font-size: 0.7rem;
+}
+
+.bookmaker-availability.available {
+  color: var(--accent);
+}
+
+.bookmaker-availability.unavailable {
+  color: var(--text-muted);
 }
 
 .preferred-bookmakers-section .save-ratings-button {
@@ -2079,6 +2175,17 @@
   .analyzer-market-odds-source {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .market-api-credits-heading,
+  .market-api-credit-summary,
+  .market-api-credit-details {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .preferred-bookmaker-list {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 

@@ -1,3 +1,19 @@
+const REQUESTED_BOOKMAKERS = Object.freeze([
+  Object.freeze({ key: 'veikkaus_fi', title: 'Veikkaus' }),
+  Object.freeze({ key: 'unibet_fi', title: 'Unibet FI' }),
+  Object.freeze({ key: 'coolbet', title: 'Coolbet' }),
+  Object.freeze({ key: 'pinnacle', title: 'Pinnacle' }),
+  Object.freeze({ key: 'betsson', title: 'Betsson' }),
+  Object.freeze({ key: 'nordicbet', title: 'NordicBet' }),
+  Object.freeze({ key: 'leovegas_fi', title: 'LeoVegas FI' }),
+  Object.freeze({ key: 'williamhill', title: 'William Hill' }),
+  Object.freeze({ key: 'sport888', title: '888sport' }),
+])
+
+// Backward-compatible export for Phase 1 consumers. These are the fixed
+// requested bookmakers, not a statement about current market availability.
+const CANDIDATE_BOOKMAKERS = REQUESTED_BOOKMAKERS
+
 const DEFAULTS = Object.freeze({
   baseUrl: 'https://api.the-odds-api.com',
   cacheTtlMs: 10 * 60 * 1000,
@@ -6,7 +22,6 @@ const DEFAULTS = Object.freeze({
   market: 'h2h',
   minimumRefreshIntervalMs: 30 * 1000,
   oddsFormat: 'decimal',
-  region: 'eu',
   requestTimeoutMs: 8000,
   sport: 'icehockey_nhl',
 })
@@ -24,6 +39,7 @@ const getMarketOddsConfig = (environment = process.env) => ({
   baseUrl: String(
     environment.THE_ODDS_API_BASE_URL ?? DEFAULTS.baseUrl,
   ).replace(/\/$/, ''),
+  bookmakers: REQUESTED_BOOKMAKERS,
   cacheTtlMs: getPositiveNumber(
     environment.MARKET_ODDS_CACHE_TTL_MS,
     DEFAULTS.cacheTtlMs,
@@ -33,33 +49,34 @@ const getMarketOddsConfig = (environment = process.env) => ({
     environment.MARKET_ODDS_LOW_CREDIT_THRESHOLD,
     DEFAULTS.lowCreditThreshold,
   ),
-  market: String(environment.THE_ODDS_API_MARKET ?? DEFAULTS.market),
+  market: DEFAULTS.market,
   minimumRefreshIntervalMs: getPositiveNumber(
     environment.MARKET_ODDS_MIN_REFRESH_INTERVAL_MS,
     DEFAULTS.minimumRefreshIntervalMs,
   ),
-  oddsFormat: String(
-    environment.THE_ODDS_API_ODDS_FORMAT ?? DEFAULTS.oddsFormat,
-  ),
-  region: String(environment.THE_ODDS_API_REGION ?? DEFAULTS.region),
+  oddsFormat: DEFAULTS.oddsFormat,
   requestTimeoutMs: getPositiveNumber(
     environment.MARKET_ODDS_REQUEST_TIMEOUT_MS,
     DEFAULTS.requestTimeoutMs,
   ),
-  sport: String(environment.THE_ODDS_API_SPORT ?? DEFAULTS.sport),
+  sport: DEFAULTS.sport,
 })
 
 const getSafeMarketOddsConfiguration = (config = getMarketOddsConfig()) => ({
+  bookmakers: config.bookmakers.map(({ key, title }) => ({ key, title })),
   cacheTtlMs: config.cacheTtlMs,
   configured: Boolean(config.apiKey),
+  expectedRequestCredits: 1,
   market: 'Moneyline',
   provider: 'The Odds API',
-  region: config.region.toUpperCase(),
+  requestScope: 'Explicit bookmakers',
   sport: 'NHL',
 })
 
 module.exports = {
+  CANDIDATE_BOOKMAKERS,
   DEFAULTS,
+  REQUESTED_BOOKMAKERS,
   getMarketOddsConfig,
   getSafeMarketOddsConfiguration,
 }

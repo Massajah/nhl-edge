@@ -1052,7 +1052,7 @@ test('Dashboard card render removes model lean and shows value side', () => {
   assert.match(html, /Bet Candidate/)
   assert.doesNotMatch(html, /Model lean|Model Lean|Highest EV|Best value/)
   assert.match(html, /Value Side[\s\S]*Toronto Maple Leafs/)
-  assert.match(html, /Edge[\s\S]*\+[0-9]+\.[0-9]{2} pp/)
+  assert.match(html, /EV edge[\s\S]*\+[0-9]+\.[0-9]%/)
   assert.match(html, /Kelly[\s\S]*(?:€|EUR)/)
   assert.match(html, /class="schedule-card neutral"/)
   assert.match(html, /No current value/)
@@ -1491,6 +1491,8 @@ test('Dashboard responsive CSS preserves primary and secondary columns', () => {
   )
   assert.match(css, /\.dashboard-today-games-grid\s*{[^}]+auto-fit/s)
   assert.match(css, /\.last-night-compact-summary\s*{[^}]+repeat\(2/s)
+  assert.match(css, /\.game-market-odds\s*{[^}]+display:\s*grid/s)
+  assert.match(css, /\.market-odds-table-scroll\s*{[^}]+overflow-x:\s*auto/s)
 })
 
 test('Previous Day compact summary renders negative Net values', () => {
@@ -1888,8 +1890,12 @@ test('Dashboard renders provider best odds, bookmaker sources, and ready status'
   })
 
   assert.match(html, /Ready/)
-  assert.match(html, /Market odds[\s\S]*Away 2\.30[\s\S]*Bookmaker A/)
-  assert.match(html, /Home 1\.72[\s\S]*Bookmaker B/)
+  assert.match(html, /Market odds[\s\S]*Best away 2\.30[\s\S]*Bookmaker A/)
+  assert.match(html, /Best home 1\.72[\s\S]*Bookmaker B/)
+  assert.match(html, /Away fair[\s\S]*2\.35/)
+  assert.match(html, /Model 42\.6%[\s\S]*Expected value -2\.1%/)
+  assert.match(html, /Home fair[\s\S]*1\.74/)
+  assert.match(html, /Model 57\.4%[\s\S]*Expected value -1\.2%/)
   assert.match(html, /View Market Odds/)
   assertNoInvalidNumbers(html)
 })
@@ -1919,6 +1925,12 @@ test('Dashboard market status covers cache, unavailable, configuration, quota, a
       status: 'unavailable',
     }),
   })
+  const cachedFallback = renderDashboard({
+    initialMarketOddsResponse: createMarketOddsResponse({
+      source: 'cache',
+      status: 'rate_limited',
+    }),
+  })
   const notConfigured = renderDashboard({
     initialMarketOddsResponse: createMarketOddsResponse({
       games: [],
@@ -1931,6 +1943,12 @@ test('Dashboard market status covers cache, unavailable, configuration, quota, a
       status: 'quota_exhausted',
     }),
   })
+  const authenticationFailed = renderDashboard({
+    initialMarketOddsResponse: createMarketOddsResponse({
+      games: [],
+      status: 'authentication_failed',
+    }),
+  })
   const low = renderDashboard({
     initialMarketOddsResponse: createMarketOddsResponse({
       lowQuota: true,
@@ -1939,8 +1957,13 @@ test('Dashboard market status covers cache, unavailable, configuration, quota, a
   })
 
   assert.match(cached, /Cached/)
-  assert.match(unavailable, /Provider unavailable/)
-  assert.match(notConfigured, /Provider unavailable/)
+  assert.match(unavailable, /Temporarily unavailable/)
+  assert.match(
+    cachedFallback,
+    /Temporarily unavailable \(rate limited\) · using cached odds · updated/,
+  )
+  assert.match(notConfigured, /Not configured/)
+  assert.match(authenticationFailed, /Authentication failed/)
   assert.match(exhausted, /Quota exhausted/)
   assert.match(low, /Low API credits: 25 remaining/)
   assert.doesNotMatch(cached, /Low API credits/)
@@ -1954,7 +1977,7 @@ test('one-sided provider odds leave the other side in Add Odds flow', () => {
     initialMarketOddsResponse: response,
   })
 
-  assert.match(html, /Away 2\.30/)
+  assert.match(html, /Best away 2\.30/)
   assert.match(html, /Value side|Worth Reviewing|No positive edge/)
   assert.match(html, /aria-label="Boston Bruins market odds"[^>]*value=""/)
   assertNoInvalidNumbers(html)
@@ -1972,11 +1995,10 @@ test('Dashboard explains when provider markets have not opened yet', () => {
   assert.equal(
     countMatches(
       html,
-      /Market odds unavailable — markets have not opened yet\./g,
+      /No NHL odds currently available\./g,
     ),
     1,
   )
-  assert.doesNotMatch(html, /No markets available yet/)
   assert.match(html, /Preliminary/)
 })
 

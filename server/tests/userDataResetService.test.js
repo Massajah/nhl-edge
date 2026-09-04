@@ -59,6 +59,15 @@ const createModels = (calls, deletedCount = 1) => {
     names.map((name) => [name, createDeleteModel(name, calls, deletedCount)]),
   )
 
+  // Global market-history collections are intentionally outside every
+  // authenticated user reset scope.
+  models.OddsSnapshot = createDeleteModel('OddsSnapshot', calls, deletedCount)
+  models.OddsCaptureRun = createDeleteModel(
+    'OddsCaptureRun',
+    calls,
+    deletedCount,
+  )
+
   models.PowerRatingSettings.findOne = async (filter, _projection, options) => {
     calls.push({ filter, method: 'findOne', name: 'PowerRatingSettings', options })
     return {
@@ -234,6 +243,8 @@ test('factory reset deletes every user-owned store without touching shared histo
     calls.some(({ name }) => name.startsWith('Historical')),
     false,
   )
+  assert.equal(calls.some(({ name }) => name === 'OddsSnapshot'), false)
+  assert.equal(calls.some(({ name }) => name === 'OddsCaptureRun'), false)
 })
 
 test('factory reset is idempotent when the user is already fresh', async () => {

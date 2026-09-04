@@ -4,6 +4,7 @@ import { createServer } from 'vite'
 
 let marketOddsApi
 let marketOddsUtils
+let calculateGameUtils
 let savedAnalyses
 let vite
 
@@ -16,6 +17,7 @@ before(async () => {
   })
   marketOddsApi = await vite.ssrLoadModule('/src/services/marketOddsApi.js')
   marketOddsUtils = await vite.ssrLoadModule('/src/utils/marketOdds.js')
+  calculateGameUtils = await vite.ssrLoadModule('/src/utils/calculateGame.js')
   savedAnalyses = await vite.ssrLoadModule('/src/utils/savedAnalyses.js')
 })
 
@@ -85,6 +87,29 @@ test('missing and one-sided provider values never fabricate odds', () => {
   assert.equal(resolved.away, '2.3')
   assert.equal(resolved.home, '')
   assert.equal(resolved.metadata.home, null)
+})
+
+test('expected-value edge uses best-side odds without changing model probability or fair odds', () => {
+  const ratingDifference = Math.log(0.55 / 0.45)
+  const result = calculateGameUtils.calculateGame(
+    { baseRating: ratingDifference, marketOdds: 1.9 },
+    { baseRating: 0, marketOdds: 2 },
+    1,
+  )
+  const neutral = calculateGameUtils.calculateGame(
+    { baseRating: 0, marketOdds: 2 },
+    { baseRating: 0, marketOdds: 2 },
+    1,
+  )
+
+  assert.ok(Math.abs(result.homeWinProbability - 0.55) < 1e-12)
+  assert.ok(Math.abs(result.awayWinProbability - 0.45) < 1e-12)
+  assert.ok(Math.abs(result.homeExpectedValue - 4.5) < 1e-12)
+  assert.ok(Math.abs(result.awayExpectedValue - -10) < 1e-12)
+  assert.ok(Math.abs(result.homeFairOdds - 1 / 0.55) < 1e-12)
+  assert.ok(Math.abs(result.awayFairOdds - 1 / 0.45) < 1e-12)
+  assert.equal(neutral.homeExpectedValue, 0)
+  assert.equal(neutral.awayExpectedValue, 0)
 })
 
 test('market odds API sends only date and refresh controls', async () => {
@@ -267,10 +292,10 @@ test('bookmaker odds sorting supports home, away, and alphabetical order', () =>
   )
 })
 
-test('market status labels distinguish no markets and cached data', () => {
+test('market status labels distinguish provider states and cached data', () => {
   assert.equal(
     marketOddsUtils.getMarketOddsStatusLabel('no_events'),
-    'No markets available yet',
+    'No NHL odds currently available',
   )
   assert.equal(
     marketOddsUtils.getMarketOddsStatusLabel('cached'),
@@ -278,10 +303,22 @@ test('market status labels distinguish no markets and cached data', () => {
   )
   assert.equal(
     marketOddsUtils.getMarketOddsStatusLabel('rate_limited'),
-    'Rate limited',
+    'Temporarily unavailable (rate limited)',
   )
   assert.equal(
     marketOddsUtils.getMarketOddsStatusLabel('quota_exhausted'),
     'Quota exhausted',
+  )
+  assert.equal(
+    marketOddsUtils.getMarketOddsStatusLabel('authentication_failed'),
+    'Authentication failed',
+  )
+  assert.equal(
+    marketOddsUtils.getMarketOddsStatusLabel('not_configured'),
+    'Not configured',
+  )
+  assert.equal(
+    marketOddsUtils.getMarketOddsStatusLabel('unavailable'),
+    'Temporarily unavailable',
   )
 })

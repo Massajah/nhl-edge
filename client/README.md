@@ -80,15 +80,25 @@ quota metadata exists. Settings includes a read-only Market Odds status card.
 The provider API key is server-only and must never be added to client `.env`
 files or any `VITE_` variable.
 
-## Market Odds Phase 2A
+## Market Odds Phase 2
 
-Settings now includes `External Data` → `Preferred Bookmakers`. It lists the
-bookmakers observed in the latest provider response, defaults all of them to
-enabled, and saves the selection for the authenticated user. Attempting to
-disable every bookmaker restores all selections and shows an explanation.
+Settings now includes `External Data` → `Preferred Bookmakers`. It lists all
+nine requested bookmakers, shows current availability separately, defaults the
+requested catalog to enabled, and saves the selection for the authenticated
+user. Temporary provider absence does not remove a saved selection. Attempting
+to disable every bookmaker restores all selections and shows an explanation.
 
-Dashboard and Analyzer calculate best home and away prices only from enabled
-bookmakers. `View Market Odds` and `View All Bookmakers` expose the complete
+The same panel shows a dedicated The Odds API credit monitor. Its total and
+remaining percentage come from normalized server values derived from provider
+headers, never a client-side plan constant. Before the first request it reports
+`Not checked yet`; known balances include accessible progress and explicit
+healthy, warning, high-usage, or exhausted text.
+
+Dashboard labels best home and away prices independently with their bookmaker.
+Its compact `EV edge` uses `((model probability × decimal odds) − 1) × 100`;
+the existing probability edge remains a separately named percentage-point
+metric in analysis details. Dashboard and Analyzer calculate prices only from
+enabled bookmakers. `View Market Odds` and `View All Bookmakers` expose the complete
 bookmaker table, including disabled rows, and can sort by home odds, away odds,
 or bookmaker. Analyzer identifies the current price source and provider update
 time. Provider event IDs, timestamps, selected bookmaker, and selected odds are
