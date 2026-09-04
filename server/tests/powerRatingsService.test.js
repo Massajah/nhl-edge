@@ -3,6 +3,7 @@ process.env.NODE_ENV = 'test'
 const assert = require('node:assert/strict')
 const test = require('node:test')
 const mongoose = require('mongoose')
+const { NHL_TEAMS } = require('../../shared/nhlTeams')
 const PowerRating = require('../models/PowerRating')
 const powerRatingsService = require('../services/powerRatingsService')
 
@@ -34,6 +35,20 @@ const withPatches = async (patches, callback) => {
     })
   }
 }
+
+test('Power Rating seed data comes from the shared 32-team catalog', async () => {
+  const seedTeams = await powerRatingsService.getSeedTeams()
+
+  assert.equal(seedTeams.length, 32)
+  assert.deepEqual(
+    seedTeams,
+    NHL_TEAMS.map((team) => ({
+      abbreviation: team.abbreviation,
+      teamId: team.id,
+      teamName: team.name,
+    })),
+  )
+})
 
 test('default team Home Adjustment is zero', async () => {
   const userId = new mongoose.Types.ObjectId()

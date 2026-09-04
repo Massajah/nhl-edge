@@ -1,7 +1,6 @@
-const path = require('path')
-const { pathToFileURL } = require('url')
 const PowerRating = require('../models/PowerRating')
 const ProcessedRatingGame = require('../models/ProcessedRatingGame')
+const { NHL_TEAMS } = require('../../shared/nhlTeams')
 const { BASE_MODEL_V1 } = require('../config/baseModel')
 const {
   DEFAULT_HOME_ADJUSTMENT,
@@ -95,10 +94,7 @@ const findDuplicates = (values) => {
 
 const getSeedTeams = async () => {
   if (!seedTeamsPromise) {
-    const teamsPath = path.resolve(__dirname, '../../client/src/data/teams.js')
-    const teamsUrl = pathToFileURL(teamsPath).href
-
-    seedTeamsPromise = import(teamsUrl).then(({ NHL_TEAMS }) => {
+    seedTeamsPromise = Promise.resolve().then(() => {
       if (!Array.isArray(NHL_TEAMS) || NHL_TEAMS.length === 0) {
         throw new PowerRatingsError(
           'Unable to load NHL team seed data.',

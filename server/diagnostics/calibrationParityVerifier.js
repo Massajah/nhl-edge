@@ -1,6 +1,4 @@
 const { performance } = require('perf_hooks')
-const path = require('path')
-const { pathToFileURL } = require('url')
 const mongoose = require('mongoose')
 const { BASE_MODEL_V1 } = require('../config/baseModel')
 const app = require('../app')
@@ -861,23 +859,15 @@ const runApiRoundTrip = async ({ representativeUserId }) => {
       { headers },
     )
     const options = await optionsResponse.json()
-    const clientUtilsUrl = pathToFileURL(
-      path.resolve(
-        __dirname,
-        '../../client/src/utils/modelCalibration.js',
-      ),
-    ).href
-    const clientUtils = await import(clientUtilsUrl)
-    const form = clientUtils.createModelCalibrationForm({
-      ...options,
-      defaultBaselineMode: BASELINE_IDENTITIES.CANONICAL_BASE_MODEL_V1,
-    })
-    form.evaluationSeasons = [...EVALUATION_SEASONS]
-    form.teamHomeAdvantage.selectedAdjustments = [0.5]
-    form.specialTeams.enabled = true
-    form.specialTeams.topBottomN = 4
-    form.specialTeams.adjustment = 0.25
-    const request = clientUtils.createModelCalibrationRequest(form)
+    const request = {
+      ...canonicalRequest([
+        TEAM_HOME_EXPERIMENTS[1],
+        SPECIAL_TEAMS_EXPERIMENTS[0],
+      ]),
+      startingStatePolicy:
+        options.startingState?.policy ??
+        STARTING_STATE_POLICIES.FIXED_SPREAD_ALPHABETICAL,
+    }
     const response = await fetch(
       `http://127.0.0.1:${port}/api/power-rating-simulations/model-calibration/run`,
       {
