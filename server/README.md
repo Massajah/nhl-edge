@@ -327,6 +327,68 @@ and partial successes. It has an injectable quota decision point but no
 persistent quota ledger, planner, route, startup hook, timer, worker, or
 automatic execution. Those trigger and budgeting concerns remain deferred.
 
+## Market Odds Phase 3B.3 scheduled capture
+
+Phase 3B.3 adds a one-shot scheduled command around the existing Phase 3B.2
+engine. It discovers official NHL games for the current UTC day and adjacent
+dates, creates only currently valid `T24`, `T6`, `T2`, and `FINAL` work, removes
+already persisted checkpoint identities, and exits without contacting The Odds
+API when no work is due. `FINAL` groups whose scheduled starts are at most 15
+minutes apart share one request. Compatible due intermediate checkpoints are
+included in that request, while remaining intermediate work is batched by
+priority (`FINAL`, `T2`, `T6`, then `T24`). Rescheduled starts naturally create
+new checkpoint keys; expired windows, started/final games, postponed games, and
+invalid schedule rows are never backfilled.
+
+Every actual The Odds API request made by the production market-odds service is
+recorded in the global `odds_quota_ledgers` collection. Cache hits, in-flight
+reuse, no-key outcomes, and local throttling do not count. The ledger records
+only normalized quota headers, observation/request metadata, request source,
+and bounded counters; it never stores a key, URL, or provider body. Manual
+Dashboard requests remain available and are labeled `MANUAL`. Scheduled calls
+are `AUTOMATIC`, except the single controlled request permitted when quota is
+unknown, which is labeled `CONTROLLED_PROBE`.
+
+The automatic policy uses repository-owned constants: a 150-credit soft target,
+180-credit hard ceiling, 100-credit remaining floor, and six successful
+automatic requests per UTC day. Above 200 remaining credits the normal cadence
+is enabled. From 101 through 200, and after the soft target, only `FINAL` work
+is allowed. At 100 or below automatic capture is disabled. When remaining quota
+is unknown, at most one actual controlled request is allowed in the current
+billing window. Missing request-cost headers debit one credit conservatively
+for budgeting, while the authoritative `lastRequestCost` remains null.
+
+The Odds API does not currently expose a reset timestamp in its documented
+quota headers. The deterministic fallback billing window is therefore the UTC
+calendar month (`YYYY-MM`, inclusive first day through exclusive first day of
+the next month). A new month atomically clears automatic counters and marks
+quota unknown until a new provider response is observed. A new UTC day clears
+only the daily successful-automatic-request counter.
+
+Each invocation acquires an atomic MongoDB lease for its deterministic
+five-minute UTC slot. Completed slots cannot execute again; expired or failed
+leases require a fresh fencing token. `OddsCaptureRun` rows left `STARTED` for
+30 minutes are moved once to terminal `RECOVERED_FAILED` status without creating
+or changing a snapshot. Completed capture runs expire after 400 days;
+`OddsSnapshot` has no TTL.
+
+Run the one-shot process locally from `server` with:
+
+```bash
+npm run cron:odds-capture
+```
+
+For Railway, create a separate cron service from the same repository and root
+Dockerfile as the API service. Keep Root Directory at the repository root, use
+the automatic Dockerfile build, set Start Command to
+`npm run cron:odds-capture`, and set Cron Schedule to `*/5 * * * *` (UTC).
+Configure `MONGODB_URI` and the server-only `THE_ODDS_API_KEY`; do not create a
+public domain. Railway starts the image on each tick, and the command closes
+MongoDB before returning. Expected no-work, lease-held, quota-blocked, and
+handled provider-failure outcomes exit successfully; configuration, database,
+or other unhandled failures exit nonzero. No interval, application startup
+hook, public trigger route, or authentication bypass is included.
+
 Phase 2 intentionally has no market consensus, de-vig, historical/opening
 odds, line movement, live updates, spreads, totals, props, polling, WebSockets,
 or automatic bet placement.

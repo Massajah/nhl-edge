@@ -17,6 +17,7 @@ const {
 const { oddsCaptureRunService } = require('./oddsCaptureRunService')
 const { oddsSnapshotRepository } = require('./oddsSnapshotRepository')
 const { marketOddsService } = require('./marketOddsService')
+const { oddsQuotaLedgerService } = require('./oddsQuotaLedgerService')
 const { getNhlTeamIdentity } = require('./nhlTeamIdentity')
 const {
   STRICT_MATCH_STATUSES,
@@ -381,12 +382,23 @@ const defaultCanSpendCredit = ({ quotaBefore }) => ({
 
 const normalizeQuotaDecision = (decision) => {
   if (typeof decision === 'boolean') {
-    return { allowed: decision, reason: decision ? '' : 'quota_blocked' }
+    return {
+      allowed: decision,
+      quota: null,
+      reason: decision ? '' : 'quota_blocked',
+      requestSource: 'AUTOMATIC',
+    }
   }
 
   return {
     allowed: decision?.allowed !== false,
+    quota: decision?.quota ?? null,
     reason: normalizeReasonCode(decision?.reason, 'quota_blocked'),
+    requestSource: ['AUTOMATIC', 'CONTROLLED_PROBE'].includes(
+      decision?.requestSource,
+    )
+      ? decision.requestSource
+      : 'AUTOMATIC',
   }
 }
 
@@ -634,6 +646,8 @@ const createOddsCaptureEngine = ({
         quotaBefore,
       }),
     )
+    quotaBefore =
+      normalizeQuotaForRun(quotaDecision.quota) ?? quotaBefore
 
     if (!quotaDecision.allowed) {
       eligible.forEach((checkpoint) => {
@@ -657,6 +671,7 @@ const createOddsCaptureEngine = ({
       providerData = await fetchOdds({
         ...buildCaptureProviderWindow(eligible),
         maximumProviderAgeMs,
+        requestSource: quotaDecision.requestSource,
       })
     } catch {
       eligible.forEach((checkpoint) => {
@@ -955,7 +970,10 @@ const createOddsCaptureEngine = ({
   return { executeOddsCapture }
 }
 
-const oddsCaptureEngine = createOddsCaptureEngine()
+const oddsCaptureEngine = createOddsCaptureEngine({
+  canSpendCredit: (request) =>
+    oddsQuotaLedgerService.getAutomaticPolicy(request),
+})
 
 module.exports = {
   STARTED_GAME_STATES,

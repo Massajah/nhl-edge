@@ -46,8 +46,10 @@ test('OddsCaptureRun is global, compact and uniquely keyed by runKey', async () 
   const indexes = OddsCaptureRun.schema.indexes()
   assert.equal(OddsCaptureRun.schema.paths.userId, undefined)
   assert.equal(document.actualCreditCost, null)
-  assert.deepEqual(indexes, [[{ runKey: 1 }, { unique: true }]])
-  assert.equal(indexes.some(([, options]) => options.expireAfterSeconds), false)
+  assert.deepEqual(indexes, [
+    [{ runKey: 1 }, { unique: true }],
+    [{ completedAt: 1 }, { expireAfterSeconds: 400 * 24 * 60 * 60 }],
+  ])
 })
 
 test('OddsCaptureRun bounds checkpoint results and reason counts', async () => {
@@ -119,6 +121,23 @@ const createMemoryCaptureRunModel = () => {
       Object.assign(document, structuredClone(update.$set))
       return document
     },
+    async updateMany(filter, update, options) {
+      assert.deepEqual(options, { runValidators: true })
+      let modifiedCount = 0
+
+      documents.forEach((document) => {
+        if (
+          document.status === filter.status &&
+          new Date(document.startedAt).getTime() <=
+            filter.startedAt.$lte.getTime()
+        ) {
+          Object.assign(document, structuredClone(update.$set))
+          modifiedCount += 1
+        }
+      })
+
+      return { modifiedCount }
+    },
   }
 }
 
@@ -181,4 +200,44 @@ test('capture-run helper rejects invalid status transitions', async () => {
     () => service.completeRun('', { status: 'COMPLETED' }),
     (error) => error.statusCode === 400,
   )
+})
+
+test('stale STARTED recovery is terminal, threshold-bounded and idempotent', async () => {
+  const model = createMemoryCaptureRunModel()
+  const recoveredAt = new Date('2026-10-08T22:00:00.000Z')
+  const service = createOddsCaptureRunService({
+    captureRunModel: model,
+    now: () => recoveredAt,
+  })
+  const stale = makeRun({
+    runId: 'stale',
+    runKey: 'stale',
+    startedAt: new Date('2026-10-08T21:30:00.000Z'),
+  })
+  const fresh = makeRun({
+    runId: 'fresh',
+    runKey: 'fresh',
+    startedAt: new Date('2026-10-08T21:30:00.001Z'),
+  })
+  const completed = makeRun({
+    completedAt: new Date('2026-10-08T21:00:00.000Z'),
+    runId: 'completed',
+    runKey: 'completed',
+    startedAt: new Date('2026-10-08T20:00:00.000Z'),
+    status: 'COMPLETED',
+  })
+
+  model.documents.set(stale.runKey, structuredClone(stale))
+  model.documents.set(fresh.runKey, structuredClone(fresh))
+  model.documents.set(completed.runKey, structuredClone(completed))
+
+  assert.equal(await service.recoverStaleStartedRuns(), 1)
+  assert.equal(model.documents.get('stale').status, 'RECOVERED_FAILED')
+  assert.equal(
+    model.documents.get('stale').recoveryReason,
+    'stale_started_recovered',
+  )
+  assert.equal(model.documents.get('fresh').status, 'STARTED')
+  assert.equal(model.documents.get('completed').status, 'COMPLETED')
+  assert.equal(await service.recoverStaleStartedRuns(), 0)
 })

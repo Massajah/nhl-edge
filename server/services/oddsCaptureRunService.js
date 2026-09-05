@@ -20,6 +20,7 @@ const COMPLETION_COUNT_FIELDS = Object.freeze([
   'snapshotsStored',
   'gamesSkipped',
 ])
+const STALE_STARTED_RUN_THRESHOLD_MS = 30 * 60 * 1000
 
 const createOddsCaptureRunService = ({
   captureRunModel = OddsCaptureRun,
@@ -101,7 +102,52 @@ const createOddsCaptureRunService = ({
     return completedRun
   }
 
-  return { completeRun, getRunByKey, startRun }
+  const recoverStaleStartedRuns = async ({
+    observedAt = now(),
+    thresholdMs = STALE_STARTED_RUN_THRESHOLD_MS,
+  } = {}) => {
+    const recoveryTime = new Date(observedAt)
+    const normalizedThresholdMs = Number(thresholdMs)
+
+    if (
+      !Number.isFinite(recoveryTime.getTime()) ||
+      !Number.isFinite(normalizedThresholdMs) ||
+      normalizedThresholdMs < 0
+    ) {
+      throw new OddsCaptureRunPersistenceError(
+        'Stale-run recovery requires a valid time and threshold.',
+        400,
+      )
+    }
+
+    const result = await captureRunModel.updateMany(
+      {
+        startedAt: {
+          $lte: new Date(recoveryTime.getTime() - normalizedThresholdMs),
+        },
+        status: 'STARTED',
+      },
+      {
+        $set: {
+          completedAt: recoveryTime,
+          reasonCounts: { stale_started_recovered: 1 },
+          recoveredAt: recoveryTime,
+          recoveryReason: 'stale_started_recovered',
+          status: 'RECOVERED_FAILED',
+        },
+      },
+      { runValidators: true },
+    )
+
+    return Number(result?.modifiedCount) || 0
+  }
+
+  return {
+    completeRun,
+    getRunByKey,
+    recoverStaleStartedRuns,
+    startRun,
+  }
 }
 
 const oddsCaptureRunService = createOddsCaptureRunService()
@@ -109,6 +155,7 @@ const oddsCaptureRunService = createOddsCaptureRunService()
 module.exports = {
   COMPLETION_COUNT_FIELDS,
   OddsCaptureRunPersistenceError,
+  STALE_STARTED_RUN_THRESHOLD_MS,
   createOddsCaptureRunService,
   oddsCaptureRunService,
 }

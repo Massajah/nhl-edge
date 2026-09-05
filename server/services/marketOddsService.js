@@ -10,6 +10,7 @@ const {
   normalizeQuotaMetadata,
 } = require('./marketOddsProvider')
 const { collectAvailableBookmakers } = require('./bookmakerOddsFilter')
+const { oddsQuotaLedgerService } = require('./oddsQuotaLedgerService')
 
 const MATCH_TOLERANCE_MS = 3 * 60 * 60 * 1000
 const WINDOW_PADDING_MS = 12 * 60 * 60 * 1000
@@ -20,6 +21,17 @@ const STARTED_GAME_STATES = new Set([
   'OFF',
   'POST',
 ])
+const PROVIDER_REQUEST_SOURCES = new Set([
+  'MANUAL',
+  'AUTOMATIC',
+  'CONTROLLED_PROBE',
+])
+
+const normalizeProviderRequestSource = (value, fallback = 'MANUAL') => {
+  const normalized = String(value ?? fallback).trim().toUpperCase()
+
+  return PROVIDER_REQUEST_SOURCES.has(normalized) ? normalized : fallback
+}
 
 const buildCommenceTimeWindow = (date) => {
   if (!nhlApiService.isValidScheduleDate(date)) {
@@ -214,6 +226,7 @@ const createMarketOddsService = ({
     getConfig,
     now: () => new Date(now()),
   }),
+  recordProviderRequest = async () => null,
 } = {}) => {
   const lastForcedRefreshAt = new Map()
   const logDevelopment = createDevelopmentLogger(logger, now)
@@ -241,7 +254,13 @@ const createMarketOddsService = ({
     }
   }
 
-  const getProviderData = async ({ config, key, refresh, window }) => {
+  const getProviderData = async ({
+    config,
+    key,
+    refresh,
+    requestSource,
+    window,
+  }) => {
     const nowMs = now()
     const cached = cache.get(key)
     const hasFreshCache = cached?.expiresAt > nowMs
@@ -323,9 +342,28 @@ const createMarketOddsService = ({
 
     const fetchProviderOdds =
       provider.fetchNhlMoneylineOdds ?? provider.fetchNhlOdds
+    const normalizedRequestSource = normalizeProviderRequestSource(
+      requestSource,
+    )
+    let providerRequestRecorded = false
+    const recordActualRequest = async ({ quota, successful }) => {
+      try {
+        await recordProviderRequest({
+          observedAt: quota?.observedAt ?? new Date(now()).toISOString(),
+          quota,
+          source: normalizedRequestSource,
+          successful,
+        })
+        providerRequestRecorded = true
+      } catch (error) {
+        error.marketOddsAccountingFailure = true
+        throw error
+      }
+    }
     const request = Promise.resolve()
       .then(() => fetchProviderOdds.call(provider, window))
-      .then((result) => {
+      .then(async (result) => {
+        await recordActualRequest({ quota: result.quota, successful: true })
         const availableBookmakers = collectAvailableBookmakers(result.events)
         const quota = normalizeQuotaMetadata(result.quota)
         const providerStatus =
@@ -372,12 +410,18 @@ const createMarketOddsService = ({
           requestQuota: quota,
         }
       })
-      .catch((error) => {
+      .catch(async (error) => {
+        if (error.marketOddsAccountingFailure || providerRequestRecorded) {
+          throw error
+        }
+
         const status =
           error instanceof MarketOddsProviderError
             ? error.status
             : 'unavailable'
         const errorQuota = normalizeQuotaMetadata(error.quota)
+
+        await recordActualRequest({ quota: errorQuota, successful: false })
         latestProviderState = {
           ...latestProviderState,
           quota:
@@ -428,6 +472,7 @@ const createMarketOddsService = ({
     commenceTimeFrom,
     commenceTimeTo,
     maximumProviderAgeMs,
+    requestSource = 'AUTOMATIC',
   } = {}) => {
     const fromMs = Date.parse(commenceTimeFrom)
     const toMs = Date.parse(commenceTimeTo)
@@ -479,6 +524,7 @@ const createMarketOddsService = ({
       config,
       key,
       refresh: cachedTooOld,
+      requestSource,
       window,
     })
 
@@ -539,7 +585,13 @@ const createMarketOddsService = ({
         status: 'no_events',
       }
     } else {
-      providerData = await getProviderData({ config, key, refresh, window })
+      providerData = await getProviderData({
+        config,
+        key,
+        refresh,
+        requestSource: 'MANUAL',
+        window,
+      })
     }
 
     const providerAvailable =
@@ -589,7 +641,10 @@ const createMarketOddsService = ({
   }
 }
 
-const marketOddsService = createMarketOddsService()
+const marketOddsService = createMarketOddsService({
+  recordProviderRequest: (request) =>
+    oddsQuotaLedgerService.recordProviderRequest(request),
+})
 
 module.exports = {
   MATCH_TOLERANCE_MS,

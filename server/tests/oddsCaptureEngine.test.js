@@ -343,6 +343,58 @@ test('happy path captures multiple checkpoints with one shared provider request'
   assert.equal(run.quotaAfter.remaining, 98)
 })
 
+test('one provider response satisfies compatible FINAL and later intermediate work', async () => {
+  const capturedAt = '2026-10-08T18:40:00.000Z'
+  const laterStart = '2026-10-08T19:55:00.000Z'
+  const finalCheckpoint = makeCheckpoint({ snapshotType: 'FINAL' })
+  const intermediateCheckpoint = makeCheckpoint({
+    awayTeamId: 'BUF',
+    gameId: '2026020002',
+    homeTeamId: 'BOS',
+    scheduledStart: laterStart,
+    ...createOddsCheckpoint({
+      scheduledStart: laterStart,
+      snapshotType: 'T2',
+    }),
+  })
+  const games = [
+    makeGame(),
+    makeGame({
+      awayTeamId: 'BUF',
+      gameId: '2026020002',
+      homeTeamId: 'BOS',
+      scheduledStart: laterStart,
+    }),
+  ]
+  const harness = createHarness({
+    games,
+    now: capturedAt,
+    providerData: makeProviderData({
+      capturedAt,
+      events: [
+        makeEvent({ capturedAt }),
+        makeEvent({
+          awayTeamId: 'BUF',
+          capturedAt,
+          commenceTime: laterStart,
+          homeTeamId: 'BOS',
+          providerEventId: 'provider-event-2',
+        }),
+      ],
+    }),
+  })
+  const result = await execute(
+    harness,
+    [finalCheckpoint, intermediateCheckpoint],
+    capturedAt,
+  )
+
+  assert.equal(result.status, 'COMPLETED')
+  assert.equal(result.insertedCount, 2)
+  assert.equal(result.providerRequestCount, 1)
+  assert.equal(harness.calls.scheduleRecheck, 1)
+})
+
 test('cached odds retain their original timestamp and stale cached odds are rejected', async () => {
   const cachedAt = '2026-10-08T18:40:00.000Z'
   const finalCheckpoint = makeCheckpoint({ snapshotType: 'FINAL' })

@@ -67,6 +67,16 @@ const createModels = (calls, deletedCount = 1) => {
     calls,
     deletedCount,
   )
+  models.OddsQuotaLedger = createDeleteModel(
+    'OddsQuotaLedger',
+    calls,
+    deletedCount,
+  )
+  models.ScheduledJobLease = createDeleteModel(
+    'ScheduledJobLease',
+    calls,
+    deletedCount,
+  )
 
   models.PowerRatingSettings.findOne = async (filter, _projection, options) => {
     calls.push({ filter, method: 'findOne', name: 'PowerRatingSettings', options })
@@ -245,6 +255,8 @@ test('factory reset deletes every user-owned store without touching shared histo
   )
   assert.equal(calls.some(({ name }) => name === 'OddsSnapshot'), false)
   assert.equal(calls.some(({ name }) => name === 'OddsCaptureRun'), false)
+  assert.equal(calls.some(({ name }) => name === 'OddsQuotaLedger'), false)
+  assert.equal(calls.some(({ name }) => name === 'ScheduledJobLease'), false)
 })
 
 test('factory reset is idempotent when the user is already fresh', async () => {

@@ -6,6 +6,7 @@
   "scripts": {
     "cleanup:pre-auth-data": "node scripts/cleanupPreAuthData.js",
     "backfill:bankroll-settlements": "node scripts/backfillBankrollSettlements.js",
+    "cron:odds-capture": "node scripts/runOddsCaptureCron.js",
     "dev": "nodemon index.js",
     "lint": "node scripts/lintServer.js",
     "migrate:home-adjustments": "node scripts/migrateHomeAdjustments.js",

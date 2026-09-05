@@ -9,6 +9,7 @@ const CAPTURE_RUN_STATUSES = Object.freeze([
   'PARTIAL',
   'FAILED',
   'QUOTA_BLOCKED',
+  'RECOVERED_FAILED',
 ])
 const CAPTURE_RUN_FINAL_STATUSES = Object.freeze(
   CAPTURE_RUN_STATUSES.filter((status) => status !== 'STARTED'),
@@ -129,6 +130,13 @@ const oddsCaptureRunSchema = new mongoose.Schema(
     intendedAt: { type: Date, immutable: true, required: true },
     startedAt: { type: Date, immutable: true, required: true },
     completedAt: { type: Date, default: null },
+    recoveredAt: { type: Date, default: null },
+    recoveryReason: {
+      type: String,
+      maxlength: 160,
+      default: '',
+      trim: true,
+    },
     status: {
       type: String,
       enum: CAPTURE_RUN_STATUSES,
@@ -177,6 +185,10 @@ const oddsCaptureRunSchema = new mongoose.Schema(
 )
 
 oddsCaptureRunSchema.index({ runKey: 1 }, { unique: true })
+oddsCaptureRunSchema.index(
+  { completedAt: 1 },
+  { expireAfterSeconds: 400 * 24 * 60 * 60 },
+)
 
 const OddsCaptureRun = mongoose.model('OddsCaptureRun', oddsCaptureRunSchema)
 
