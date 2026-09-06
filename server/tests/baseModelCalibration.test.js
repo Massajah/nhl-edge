@@ -1,6 +1,4 @@
 process.env.NODE_ENV = 'test'
-process.env.JWT_SECRET = 'test-jwt-secret'
-process.env.JWT_EXPIRES_IN = '1h'
 process.env.GOOGLE_CLIENT_ID = 'google-client-id'
 
 const assert = require('node:assert/strict')
@@ -16,7 +14,7 @@ const Injury = require('../models/Injury')
 const PowerRating = require('../models/PowerRating')
 const ProcessedRatingGame = require('../models/ProcessedRatingGame')
 const RatingEngineSettings = require('../models/RatingEngineSettings')
-const authService = require('../services/authService')
+const authSessionService = require('../services/authSessionService')
 const calibrationService = require('../services/baseModelCalibrationService')
 const { extractScheduleGamesForDateRange } = require('../services/nhlApiService')
 const { getNhlTeamIdentity } = require('../services/nhlTeamIdentity')
@@ -1330,7 +1328,7 @@ test('calibration routes require authentication', async () => {
 
 test('authenticated calibration route uses the authenticated user', async () => {
   const userId = new mongoose.Types.ObjectId().toString()
-  const token = authService.signAuthToken(userId)
+  const token = authSessionService.createTestAuthSession(userId)
   const originalRun = calibrationService.runBaseModelCalibration
   let capturedUserId = null
   let capturedPayload = null
@@ -1354,8 +1352,9 @@ test('authenticated calibration route uses the authenticated user', async () => 
           }),
         ),
         headers: {
-          Authorization: `Bearer ${token}`,
+          Cookie: `nhl_edge_session=${token}`,
           'Content-Type': 'application/json',
+          Origin: 'http://localhost:5173',
         },
         method: 'POST',
       },

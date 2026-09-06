@@ -183,7 +183,6 @@ test('betting settings API formats get, update, and reset requests', async () =>
   const originalFetch = globalThis.fetch
   const capturedRequests = []
 
-  apiClient.setAuthToken('betting-settings-token')
   globalThis.fetch = async (url, options = {}) => {
     capturedRequests.push({
       body: options.body ? JSON.parse(options.body) : null,
@@ -215,7 +214,6 @@ test('betting settings API formats get, update, and reset requests', async () =>
     })
     await bettingSettingsApi.resetBettingSettings()
   } finally {
-    apiClient.clearAuthToken()
     globalThis.fetch = originalFetch
   }
 
@@ -233,7 +231,7 @@ test('betting settings API formats get, update, and reset requests', async () =>
   )
   assert.equal(
     capturedRequests[0].headers.get('Authorization'),
-    'Bearer betting-settings-token',
+    null,
   )
   assert.equal(capturedRequests[1].body.kellyMode, 'HALF')
 })

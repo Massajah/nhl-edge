@@ -124,7 +124,6 @@ test('getPowerRatingHistory formats query parameters centrally', async () => {
   const originalFetch = globalThis.fetch
   const capturedRequests = []
 
-  apiClient.setAuthToken('history-token')
   globalThis.fetch = async (url, options = {}) => {
     capturedRequests.push({
       headers: options.headers,
@@ -154,7 +153,6 @@ test('getPowerRatingHistory formats query parameters centrally', async () => {
 
     assert.equal(result.items.length, 1)
   } finally {
-    apiClient.clearAuthToken()
     globalThis.fetch = originalFetch
   }
 
@@ -166,7 +164,7 @@ test('getPowerRatingHistory formats query parameters centrally', async () => {
   )
   assert.equal(
     capturedRequests[0].headers.get('Authorization'),
-    'Bearer history-token',
+    null,
   )
 })
 
@@ -174,7 +172,6 @@ test('getPowerRatingHistorySeasons uses centralized authenticated request', asyn
   const originalFetch = globalThis.fetch
   const capturedRequests = []
 
-  apiClient.setAuthToken('season-token')
   globalThis.fetch = async (url, options = {}) => {
     capturedRequests.push({
       headers: options.headers,
@@ -198,14 +195,13 @@ test('getPowerRatingHistorySeasons uses centralized authenticated request', asyn
     assert.equal(result.seasons[1].endDate, '2026-04-16')
     assert.equal(result.seasons[1].historyFilterEndDate, '2026-04-17')
   } finally {
-    apiClient.clearAuthToken()
     globalThis.fetch = originalFetch
   }
 
   assert.equal(capturedRequests[0].url, '/api/power-ratings/history/seasons')
   assert.equal(
     capturedRequests[0].headers.get('Authorization'),
-    'Bearer season-token',
+    null,
   )
 })
 

@@ -2,6 +2,8 @@ const mongoose = require('mongoose')
 const { isValidEmail, normalizeEmail } = require('../utils/email')
 
 const AUTH_PROVIDERS = ['local', 'google', 'both']
+const USER_ROLES = ['user', 'admin']
+const USER_STATUSES = ['active', 'disabled']
 
 const userSchema = new mongoose.Schema(
   {
@@ -40,6 +42,22 @@ const userSchema = new mongoose.Schema(
       trim: true,
       default: '',
     },
+    role: {
+      type: String,
+      enum: USER_ROLES,
+      default: 'user',
+      required: true,
+    },
+    status: {
+      type: String,
+      enum: USER_STATUSES,
+      default: 'active',
+      required: true,
+    },
+    lastLoginAt: {
+      type: Date,
+      default: null,
+    },
   },
   {
     timestamps: true,
@@ -60,3 +78,5 @@ userSchema.index({ googleId: 1 }, { unique: true, sparse: true })
 
 module.exports = mongoose.model('User', userSchema)
 module.exports.AUTH_PROVIDERS = AUTH_PROVIDERS
+module.exports.USER_ROLES = USER_ROLES
+module.exports.USER_STATUSES = USER_STATUSES

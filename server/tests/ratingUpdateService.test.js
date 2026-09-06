@@ -1,13 +1,11 @@
 process.env.NODE_ENV = 'test'
-process.env.JWT_SECRET = 'test-jwt-secret'
-process.env.JWT_EXPIRES_IN = '1h'
 process.env.GOOGLE_CLIENT_ID = 'google-client-id'
 
 const assert = require('node:assert/strict')
 const test = require('node:test')
 const mongoose = require('mongoose')
 const app = require('../app')
-const authService = require('../services/authService')
+const authSessionService = require('../services/authSessionService')
 const powerRatingsService = require('../services/powerRatingsService')
 const {
   RESULT_TYPES,
@@ -1414,15 +1412,16 @@ test('update endpoint rejects unauthenticated requests', async () => {
 })
 
 test('update endpoint validates invalid date ranges', async () => {
-  const token = authService.signAuthToken(new mongoose.Types.ObjectId())
+  const token = authSessionService.createTestAuthSession(new mongoose.Types.ObjectId())
   const response = await request('/api/power-ratings/update', {
     body: JSON.stringify({
       from: '2025-03-02',
       to: '2025-03-01',
     }),
     headers: {
-      Authorization: `Bearer ${token}`,
+      Cookie: `nhl_edge_session=${token}`,
       'Content-Type': 'application/json',
+      Origin: 'http://localhost:5173',
     },
     method: 'POST',
   })

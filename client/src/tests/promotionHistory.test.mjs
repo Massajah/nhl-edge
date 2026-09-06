@@ -256,7 +256,6 @@ test('history client API uses authenticated bounded list and encoded detail rout
   const originalFetch = globalThis.fetch
   const captured = []
 
-  apiClient.setAuthToken('history-token')
   globalThis.fetch = async (url, requestOptions) => {
     captured.push({
       headers: requestOptions.headers,
@@ -276,7 +275,6 @@ test('history client API uses authenticated bounded list and encoded detail rout
     })
     await simulationsApi.getModelCalibrationPromotion('promotion/id')
   } finally {
-    apiClient.clearAuthToken()
     globalThis.fetch = originalFetch
   }
 
@@ -290,8 +288,8 @@ test('history client API uses authenticated bounded list and encoded detail rout
       '/api/power-rating-simulations/model-calibration/promotions/promotion%2Fid',
     ],
   ])
-  assert.equal(captured[0].headers.get('Authorization'), 'Bearer history-token')
-  assert.equal(captured[1].headers.get('Authorization'), 'Bearer history-token')
+  assert.equal(captured[0].headers.get('Authorization'), null)
+  assert.equal(captured[1].headers.get('Authorization'), null)
 })
 
 test('Model Calibration exposes the concise seven-stage workflow and baseline distinction', async () => {

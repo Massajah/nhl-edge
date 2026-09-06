@@ -4,6 +4,8 @@ import { useAuth } from '../../context/AuthContext.jsx'
 
 const GOOGLE_SCRIPT_SRC = 'https://accounts.google.com/gsi/client'
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID ?? ''
+const LOCAL_AUTH_ENABLED =
+  String(import.meta.env.VITE_LOCAL_AUTH_ENABLED ?? '').toLowerCase() === 'true'
 let googleScriptPromise = null
 
 const isValidEmail = (email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())
@@ -49,7 +51,7 @@ const loadGoogleScript = () => {
 }
 
 function AuthPage({ mode, onModeChange, onSuccess }) {
-  const isRegister = mode === 'register'
+  const isRegister = LOCAL_AUTH_ENABLED && mode === 'register'
   const { googleLogin, login, register, sessionMessage } = useAuth()
   const [values, setValues] = useState(getInitialValues)
   const [errorMessage, setErrorMessage] = useState('')
@@ -142,7 +144,8 @@ function AuthPage({ mode, onModeChange, onSuccess }) {
           </div>
         </div>
 
-        <form className="auth-form" onSubmit={handleSubmit}>
+        {LOCAL_AUTH_ENABLED ? (
+          <form className="auth-form" onSubmit={handleSubmit}>
           {isRegister ? (
             <label className="field auth-field" htmlFor="auth-name">
               <span>Name</span>
@@ -180,12 +183,6 @@ function AuthPage({ mode, onModeChange, onSuccess }) {
             />
           </label>
 
-          {errorMessage || sessionMessage ? (
-            <p className="auth-error" role="alert">
-              {errorMessage || sessionMessage}
-            </p>
-          ) : null}
-
           <button
             className="auth-primary-button"
             type="submit"
@@ -198,27 +195,38 @@ function AuthPage({ mode, onModeChange, onSuccess }) {
             )}
             {isRegister ? 'Create account' : 'Sign In'}
           </button>
-        </form>
+          </form>
+        ) : null}
 
-        <div className="auth-divider">
-          <span>or</span>
-        </div>
+        {LOCAL_AUTH_ENABLED ? (
+          <div className="auth-divider">
+            <span>or</span>
+          </div>
+        ) : null}
 
         <GoogleSignInButton
           disabled={isSubmitting || isGoogleSubmitting}
-          mode={mode}
+          mode={LOCAL_AUTH_ENABLED ? mode : 'login'}
           status={googleStatus}
           onCredential={handleGoogleCredential}
         />
 
-        <button
-          className="auth-secondary-link"
-          type="button"
-          disabled={isSubmitting || isGoogleSubmitting}
-          onClick={() => onModeChange(isRegister ? 'login' : 'register')}
-        >
-          {isRegister ? 'Already have an account?' : 'Create account'}
-        </button>
+        {errorMessage || sessionMessage ? (
+          <p className="auth-error" role="alert">
+            {errorMessage || sessionMessage}
+          </p>
+        ) : null}
+
+        {LOCAL_AUTH_ENABLED ? (
+          <button
+            className="auth-secondary-link"
+            type="button"
+            disabled={isSubmitting || isGoogleSubmitting}
+            onClick={() => onModeChange(isRegister ? 'login' : 'register')}
+          >
+            {isRegister ? 'Already have an account?' : 'Create account'}
+          </button>
+        ) : null}
       </section>
     </main>
   )

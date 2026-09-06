@@ -1,6 +1,4 @@
 process.env.NODE_ENV = 'test'
-process.env.JWT_SECRET = 'test-jwt-secret'
-process.env.JWT_EXPIRES_IN = '1h'
 process.env.GOOGLE_CLIENT_ID = 'google-client-id'
 
 const assert = require('node:assert/strict')
@@ -8,7 +6,7 @@ const test = require('node:test')
 const mongoose = require('mongoose')
 const app = require('../app')
 const PowerRating = require('../models/PowerRating')
-const authService = require('../services/authService')
+const authSessionService = require('../services/authSessionService')
 const nhlApiService = require('../services/nhlApiService')
 const {
   calculateTeamRatingSummary,
@@ -87,8 +85,9 @@ const postPreview = (token, body) =>
   request('/api/power-rating-simulations/preview', {
     body: JSON.stringify(body),
     headers: {
-      Authorization: `Bearer ${token}`,
+      Cookie: `nhl_edge_session=${token}`,
       'Content-Type': 'application/json',
+      Origin: 'http://localhost:5173',
     },
     method: 'POST',
   })
@@ -602,7 +601,7 @@ test('current starting mode clones user ratings without modifying them', async (
 })
 
 test('invalid gameTypes values return 400', async () => {
-  const token = authService.signAuthToken(new mongoose.Types.ObjectId())
+  const token = authSessionService.createTestAuthSession(new mongoose.Types.ObjectId())
   const response = await postPreview(token, {
     dateFrom: '2025-01-01',
     dateTo: '2025-01-01',
@@ -617,7 +616,7 @@ test('invalid gameTypes values return 400', async () => {
 })
 
 test('all game types false returns 400', async () => {
-  const token = authService.signAuthToken(new mongoose.Types.ObjectId())
+  const token = authSessionService.createTestAuthSession(new mongoose.Types.ObjectId())
   const response = await postPreview(token, {
     dateFrom: '2025-01-01',
     dateTo: '2025-01-01',
@@ -634,7 +633,7 @@ test('all game types false returns 400', async () => {
 })
 
 test('invalid includeGameResults returns 400', async () => {
-  const token = authService.signAuthToken(new mongoose.Types.ObjectId())
+  const token = authSessionService.createTestAuthSession(new mongoose.Types.ObjectId())
   const response = await postPreview(token, {
     dateFrom: '2025-01-01',
     dateTo: '2025-01-01',
@@ -647,7 +646,7 @@ test('invalid includeGameResults returns 400', async () => {
 })
 
 test('invalid includeSkippedGames returns 400', async () => {
-  const token = authService.signAuthToken(new mongoose.Types.ObjectId())
+  const token = authSessionService.createTestAuthSession(new mongoose.Types.ObjectId())
   const response = await postPreview(token, {
     dateFrom: '2025-01-01',
     dateTo: '2025-01-01',
@@ -723,7 +722,7 @@ test('preview endpoint rejects unauthenticated requests', async () => {
 })
 
 test('preview endpoint validates input', async () => {
-  const token = authService.signAuthToken(new mongoose.Types.ObjectId())
+  const token = authSessionService.createTestAuthSession(new mongoose.Types.ObjectId())
   const response = await postPreview(token, {
     dateFrom: '2025-01-02',
     dateTo: '2025-01-01',
@@ -737,7 +736,7 @@ test('preview endpoint validates input', async () => {
 test('preview endpoint cannot access another user rating from request body', async () => {
   const userA = new mongoose.Types.ObjectId().toString()
   const userB = new mongoose.Types.ObjectId().toString()
-  const token = authService.signAuthToken(userA)
+  const token = authSessionService.createTestAuthSession(userA)
   let capturedFilter = null
 
   await withPatches(
@@ -775,7 +774,7 @@ test('preview endpoint cannot access another user rating from request body', asy
 
 test('preview endpoint does not change PowerRating documents', async () => {
   const userId = new mongoose.Types.ObjectId().toString()
-  const token = authService.signAuthToken(userId)
+  const token = authSessionService.createTestAuthSession(userId)
   const documents = [
     makeRatingDocument({
       baseRating: 54,

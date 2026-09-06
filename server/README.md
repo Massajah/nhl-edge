@@ -2,20 +2,24 @@
 
 ## Authentication
 
-Phase 1 backend auth uses stateless bearer tokens. Frontend clients should send
-the application JWT in:
+Authentication uses revocable opaque server sessions. Google Identity Services
+credentials are verified once by the API; the API stores only a SHA-256 hash of
+the generated NHL Edge session token and returns the raw token in an HttpOnly
+cookie. Browser requests use credentialed fetch and never store a bearer token.
 
-```text
-Authorization: Bearer <token>
-```
+Production interactive authentication is Google-only unless local auth is
+explicitly enabled. See `../AUTH_DEPLOYMENT.md` for the complete Vercel,
+Railway, Google Console, cookie, CORS and operator configuration.
 
 Required environment variables:
 
 - `MONGODB_URI`
-- `JWT_SECRET`
-- `JWT_EXPIRES_IN`, for example `7d`
 - `GOOGLE_CLIENT_ID`
 - `CLIENT_ORIGIN`, comma-separated for multiple frontend origins
+- `SESSION_COOKIE_NAME`
+- `SESSION_TTL_MS`, default 30 days
+- `SESSION_COOKIE_SAME_SITE`
+- `SESSION_COOKIE_SECURE`
 
 Market odds use one additional server-only secret:
 
@@ -44,7 +48,7 @@ Protected user-specific routes:
 - `POST /api/power-ratings/update`
 - `/api/settings/betting`
 - `/api/settings/rating-engine`
-- `GET /api/settings/storage`
+- `GET /api/settings/storage` (admin only)
 - `GET /api/settings/bookmakers`
 - `PUT /api/settings/bookmakers`
 - `GET /api/market-odds/nhl?date=YYYY-MM-DD&refresh=true|false`
@@ -56,7 +60,7 @@ Protected user-specific routes:
 
 ## Database storage monitoring
 
-`GET /api/settings/storage` is an authenticated, read-only monitor. It measures
+`GET /api/settings/storage` is an admin-only, read-only monitor. It measures
 cluster-wide uncompressed BSON data plus indexes with Atlas `atlasSize`; it does
 not scan documents or modify storage. The capacity is separate deployment
 configuration: `MONGODB_STORAGE_LIMIT_BYTES` defaults to 512 MiB for the
@@ -270,13 +274,15 @@ Development request/cache/credit summaries are emitted only when
 
 Bookmaker preferences are stored per authenticated user. The settings API keeps
 the fixed requested catalog separate from bookmakers with usable odds in the
-latest successful response. Every requested bookmaker is enabled by default,
-and newly added requested bookmakers are enabled without changing previously
+latest successful response. Every requested bookmaker is enabled by default in
+the unsaved Settings view, and newly added requested bookmakers are enabled
+without changing previously
 saved disabled keys. Temporary provider absence changes only the `available`
 status and does not remove a selection. The update endpoint accepts only
-`enabledBookmakerKeys`; it never accepts a client-supplied `userId`. If a user
-attempts to disable every requested bookmaker, the server restores all
-bookmakers and returns a warning.
+`enabledBookmakerKeys`; it never accepts a client-supplied `userId`. Only an
+explicitly persisted preferences row participates in scheduled capture. Saving
+an empty selection disables participation for that account and returns a
+warning; it does not re-enable bookmakers as a fallback.
 
 Preferences are applied after the shared provider response is read from cache,
 so changing them does not make another provider request or create a per-user
@@ -322,13 +328,15 @@ or away odds changed. Ordering, provider metadata, and timestamp-only changes
 do not create history rows. An unchanged successful fetch still advances the
 durable latest-safe observation time for each bookmaker present.
 
-The selected provider set is the union of bookmakers currently enabled by NHL
-Edge users. A user without a preferences row contributes the default full set;
-the all-disabled fallback is also the full supported set. One request asks The
-Odds API for that union, never one request per user, game, or bookmaker. No user
-identifier is stored with global market history. Every historical observation
-records its selected set, so later Settings changes neither rewrite old data nor
-fabricate missing bookmaker history.
+The selected provider set is the union of bookmakers explicitly configured by
+active NHL Edge users. A user without a persisted preferences row does not
+participate, and an all-disabled row contributes no bookmakers. An empty union
+does not call The Odds API; quota-free finalization can still use the selected
+set already stored with an existing closing-market observation. A non-empty
+union produces one provider request, never one request per user, game, or
+bookmaker. No user identifier is stored with global market history. Every
+historical observation records its selected set, so later Settings changes
+neither rewrite old data nor fabricate missing bookmaker history.
 
 Each closing document durably maintains `latestSafeBookmakers`, independently
 per bookmaker. A disappearance is represented in the change-driven observation
@@ -591,7 +599,8 @@ persisted current Power Ratings manually with:
 
 ```bash
 curl -X POST http://localhost:5000/api/power-ratings/update \
-  -H "Authorization: Bearer <token>" \
+  -b "nhl_edge_session=<session-cookie>" \
+  -H "Origin: http://localhost:5173" \
   -H "Content-Type: application/json" \
   -d '{"from":"2025-10-01","to":"2025-10-07"}'
 ```
@@ -618,7 +627,8 @@ Dashboard can also ask the server to process newly completed games with:
 
 ```bash
 curl -X POST http://localhost:5000/api/power-ratings/auto-update \
-  -H "Authorization: Bearer <token>" \
+  -b "nhl_edge_session=<session-cookie>" \
+  -H "Origin: http://localhost:5173" \
   -H "Content-Type: application/json" \
   -d '{}'
 ```
@@ -654,7 +664,7 @@ Authenticated users can query immutable, user-specific
 
 ```bash
 curl "http://localhost:5000/api/power-ratings/history?page=1&limit=25&from=2026-01-01&to=2026-01-31&team=CAR&resultType=REGULATION" \
-  -H "Authorization: Bearer <token>"
+  -b "nhl_edge_session=<session-cookie>"
 ```
 
 Supported query parameters:
@@ -671,7 +681,7 @@ Season metadata for the history UI is available at:
 
 ```bash
 curl "http://localhost:5000/api/power-ratings/history/seasons" \
-  -H "Authorization: Bearer <token>"
+  -b "nhl_edge_session=<session-cookie>"
 ```
 
 The seasons response includes `currentSeasonId`, `seasons`, `metadataSource`,
@@ -1150,23 +1160,26 @@ npm run migrate:home-adjustments -- --confirm
 
 The migration is idempotent and does not run automatically.
 
-## Pre-Auth Test Data Cleanup
+## Legacy owner migration
 
-The auth migration does not delete data on startup. To inspect pre-auth
-user-specific test data that lacks `userId`, run:
-
-```bash
-npm run cleanup:pre-auth-data
-```
-
-To delete only those pre-auth `bets`, `injuries`, and `powerratings` documents,
-and remove obsolete global unique Power Ratings indexes, run:
+The auth migration does not delete or claim data on startup. To inspect every
+private collection for records lacking `userId`, identify one existing User by
+both Google subject and email and run:
 
 ```bash
-npm run cleanup:pre-auth-data -- --confirm
+npm run migrate:assign-legacy-owner -- --email=OWNER --google-subject=SUBJECT
 ```
 
-Do not run the cleanup until the affected collection counts have been reviewed.
+This is a dry run. After reviewing the intended owner, per-collection counts,
+sample IDs and legacy indexes, repeat with explicit confirmation:
+
+```bash
+npm run migrate:assign-legacy-owner -- --email=OWNER --google-subject=SUBJECT --confirm
+```
+
+The operation assigns only missing/null owners, records a durable versioned
+marker, and is idempotent. The old destructive cleanup command is permanently
+disabled.
 
 ## Rating Lab Phase 3: Schedule & Context
 

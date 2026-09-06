@@ -716,7 +716,6 @@ test('focused client API uses authenticated Model Calibration routes', async () 
   const originalFetch = globalThis.fetch
   const captured = []
 
-  apiClient.setAuthToken('calibration-token')
   globalThis.fetch = async (url, requestOptions) => {
     captured.push({
       body: requestOptions.body ? JSON.parse(requestOptions.body) : null,
@@ -743,7 +742,6 @@ test('focused client API uses authenticated Model Calibration routes', async () 
     await simulationsApi.previewModelCalibrationPromotion(robustnessPayload)
     await simulationsApi.applyModelCalibrationPromotion('preview-1')
   } finally {
-    apiClient.clearAuthToken()
     globalThis.fetch = originalFetch
   }
 
@@ -754,7 +752,7 @@ test('focused client API uses authenticated Model Calibration routes', async () 
     ['POST', '/api/power-rating-simulations/model-calibration/promotion/preview'],
     ['POST', '/api/power-rating-simulations/model-calibration/promotion/apply'],
   ])
-  assert.equal(captured[0].headers.get('Authorization'), 'Bearer calibration-token')
+  assert.equal(captured[0].headers.get('Authorization'), null)
   assert.deepEqual(captured[1].body, payload)
   assert.deepEqual(captured[3].body, robustnessPayload)
   assert.deepEqual(captured[4].body, { promotionPreviewId: 'preview-1' })

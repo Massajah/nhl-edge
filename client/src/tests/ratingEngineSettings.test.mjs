@@ -244,7 +244,6 @@ test('rating engine settings API uses centralized authenticated requests', async
   const originalFetch = globalThis.fetch
   const capturedRequests = []
 
-  apiClient.setAuthToken('settings-token')
   globalThis.fetch = async (url, options = {}) => {
     capturedRequests.push({
       body: options.body ? JSON.parse(options.body) : null,
@@ -287,7 +286,6 @@ test('rating engine settings API uses centralized authenticated requests', async
     })
     await settingsApi.resetRatingEngineSettings()
   } finally {
-    apiClient.clearAuthToken()
     globalThis.fetch = originalFetch
   }
 
@@ -307,7 +305,7 @@ test('rating engine settings API uses centralized authenticated requests', async
   )
   assert.equal(
     capturedRequests[0].headers.get('Authorization'),
-    'Bearer settings-token',
+    null,
   )
   assert.deepEqual(
     capturedRequests[1].body,

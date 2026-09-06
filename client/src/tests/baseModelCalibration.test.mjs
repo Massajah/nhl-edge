@@ -861,7 +861,6 @@ test('calibration APIs use protected options, preparation and run endpoints', as
   const originalFetch = globalThis.fetch
   const capturedRequests = []
 
-  apiClient.setAuthToken('calibration-token')
   globalThis.fetch = async (url, requestOptions) => {
     capturedRequests.push({
       body: requestOptions.body ? JSON.parse(requestOptions.body) : null,
@@ -881,7 +880,6 @@ test('calibration APIs use protected options, preparation and run endpoints', as
     await simulationsApi.prepareHistoricalCalibrationSeason('20242025')
     await simulationsApi.runBaseModelCalibration({ seasonId: '20242025' })
   } finally {
-    apiClient.clearAuthToken()
     globalThis.fetch = originalFetch
   }
 
@@ -892,7 +890,7 @@ test('calibration APIs use protected options, preparation and run endpoints', as
   assert.equal(capturedRequests[0].method, 'GET')
   assert.equal(
     capturedRequests[0].headers.get('Authorization'),
-    'Bearer calibration-token',
+    null,
   )
   assert.equal(
     capturedRequests[1].url,

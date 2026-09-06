@@ -371,9 +371,25 @@ const createOddsCheckpointPlanner = ({
 
     const games = uniqueScheduleGames(schedules)
     const selectedBookmakerKeys = await getSelectedBookmakerKeys()
+    const finalizations = buildFinalizationGames(games, current)
+
+    if (selectedBookmakerKeys.length === 0) {
+      addReason(reasonCounts, 'no_participating_bookmakers')
+      return {
+        dueCheckpointCount: 0,
+        groups: [],
+        finalizations,
+        policy,
+        reasonCounts,
+        scheduleDates,
+        selectedBookmakerKeys,
+        scheduleFailureCount,
+        status: finalizations.length > 0 ? 'FINALIZE_ONLY' : 'NO_DUE_WORK',
+      }
+    }
+
     const due = buildDueCheckpoints(games, current, selectedBookmakerKeys)
     const closing = buildClosingWork(games, current, selectedBookmakerKeys)
-    const finalizations = buildFinalizationGames(games, current)
 
     Object.entries(due.reasonCounts).forEach(([reason, count]) =>
       addReason(reasonCounts, reason, count),

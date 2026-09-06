@@ -408,7 +408,6 @@ test('Team Home Advantage APIs use authenticated isolated options, prepare and r
   const originalFetch = globalThis.fetch
   const capturedRequests = []
 
-  apiClient.setAuthToken('phase-2-token')
   globalThis.fetch = async (url, requestOptions) => {
     capturedRequests.push({
       body: requestOptions.body ? JSON.parse(requestOptions.body) : null,
@@ -428,7 +427,6 @@ test('Team Home Advantage APIs use authenticated isolated options, prepare and r
     await simulationsApi.prepareHomeAdvantageHistoricalSeason('20202021')
     await simulationsApi.runHomeAdvantageCalibration({ customAdjustment: 0.6 })
   } finally {
-    apiClient.clearAuthToken()
     globalThis.fetch = originalFetch
   }
 
@@ -439,7 +437,7 @@ test('Team Home Advantage APIs use authenticated isolated options, prepare and r
   assert.equal(capturedRequests[0].method, 'GET')
   assert.equal(
     capturedRequests[0].headers.get('Authorization'),
-    'Bearer phase-2-token',
+    null,
   )
   assert.equal(
     capturedRequests[1].url,

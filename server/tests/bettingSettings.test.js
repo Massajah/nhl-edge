@@ -1,13 +1,11 @@
 process.env.NODE_ENV = 'test'
-process.env.JWT_SECRET = 'test-jwt-secret'
-process.env.JWT_EXPIRES_IN = '1h'
 
 const assert = require('node:assert/strict')
 const test = require('node:test')
 const mongoose = require('mongoose')
 const app = require('../app')
 const BettingSettings = require('../models/BettingSettings')
-const authService = require('../services/authService')
+const authSessionService = require('../services/authSessionService')
 const bettingSettingsService = require('../services/bettingSettingsService')
 
 const queryOf = (value) => ({
@@ -342,8 +340,8 @@ test('BettingSettings does not duplicate bankroll balances or currency', () => {
 test('betting settings endpoint saves and reads only authenticated user settings', async () => {
   const userA = new mongoose.Types.ObjectId()
   const userB = new mongoose.Types.ObjectId()
-  const tokenA = authService.signAuthToken(userA)
-  const tokenB = authService.signAuthToken(userB)
+  const tokenA = authSessionService.createTestAuthSession(userA)
+  const tokenB = authSessionService.createTestAuthSession(userB)
   const settings = []
 
   await withPatches(
@@ -412,30 +410,33 @@ test('betting settings endpoint saves and reads only authenticated user settings
           userId: userB.toString(),
         }),
         headers: {
-          Authorization: `Bearer ${tokenA}`,
+          Cookie: `nhl_edge_session=${tokenA}`,
           'Content-Type': 'application/json',
+          Origin: 'http://localhost:5173',
         },
         method: 'PUT',
       })
       const retrySaveA = await request('/api/settings/betting', {
         body: JSON.stringify(payloadA),
         headers: {
-          Authorization: `Bearer ${tokenA}`,
+          Cookie: `nhl_edge_session=${tokenA}`,
           'Content-Type': 'application/json',
+          Origin: 'http://localhost:5173',
         },
         method: 'PUT',
       })
       const saveB = await request('/api/settings/betting', {
         body: JSON.stringify(payloadB),
         headers: {
-          Authorization: `Bearer ${tokenB}`,
+          Cookie: `nhl_edge_session=${tokenB}`,
           'Content-Type': 'application/json',
+          Origin: 'http://localhost:5173',
         },
         method: 'PUT',
       })
       const readA = await request('/api/settings/betting', {
         headers: {
-          Authorization: `Bearer ${tokenA}`,
+          Cookie: `nhl_edge_session=${tokenA}`,
         },
       })
 

@@ -236,7 +236,6 @@ test('preview API sends the correct protected request payload', async () => {
   const payload = ratingLabUtils.createSimulationPreviewPayload(form)
   let capturedRequest
 
-  apiClient.setAuthToken('test-token')
   globalThis.fetch = async (url, options) => {
     capturedRequest = {
       body: JSON.parse(options.body),
@@ -256,13 +255,12 @@ test('preview API sends the correct protected request payload', async () => {
   try {
     await simulationsApi.previewPowerRatingSimulation(payload)
   } finally {
-    apiClient.clearAuthToken()
     globalThis.fetch = originalFetch
   }
 
   assert.equal(capturedRequest.url, '/api/power-rating-simulations/preview')
   assert.equal(capturedRequest.method, 'POST')
-  assert.equal(capturedRequest.headers.get('Authorization'), 'Bearer test-token')
+  assert.equal(capturedRequest.headers.get('Authorization'), null)
   assert.deepEqual(capturedRequest.body, {
     configuration: {
       kFactor: 1.3,

@@ -1,7 +1,6 @@
 process.env.NODE_ENV = 'test'
-process.env.JWT_SECRET = 'test-jwt-secret'
-process.env.JWT_EXPIRES_IN = '1h'
 process.env.GOOGLE_CLIENT_ID = 'google-client-id'
+process.env.LOCAL_AUTH_ENABLED = 'true'
 
 const assert = require('node:assert/strict')
 const test = require('node:test')
@@ -13,6 +12,7 @@ const User = require('../models/User')
 const PowerRating = require('../models/PowerRating')
 const googleAuthService = require('../services/googleAuthService')
 const authService = require('../services/authService')
+const authSessionService = require('../services/authSessionService')
 const betsService = require('../services/betsService')
 const powerRatingsService = require('../services/powerRatingsService')
 const { hashPassword } = require('../utils/password')
@@ -171,7 +171,7 @@ test('local registration succeeds, hashes password and initializes ratings', asy
 
       assert.equal(result.user.email, 'test@example.com')
       assert.equal(result.user.id, userId.toString())
-      assert.equal(typeof result.token, 'string')
+      assert.equal(Object.hasOwn(result, 'token'), false)
       assert.equal(initializedUserId, userId)
       assert.notEqual(createdUser.passwordHash, 'password123')
       assert.equal(await bcrypt.compare('password123', createdUser.passwordHash), true)
@@ -193,7 +193,7 @@ test('duplicate registration email is rejected with 409', async () => {
           }),
         (error) =>
           error.statusCode === 409 &&
-          error.message === 'A user with that email already exists.',
+          error.message === 'Unable to create an account with those credentials.',
       )
     },
   )
@@ -238,7 +238,7 @@ test('login succeeds with correct credentials', async () => {
       })
 
       assert.equal(result.user.email, 'test@example.com')
-      assert.equal(typeof result.token, 'string')
+      assert.equal(Object.hasOwn(result, 'token'), false)
     },
   )
 })
@@ -300,15 +300,15 @@ test('protected route rejects missing token', async () => {
   assert.equal(response.body.message, 'Authentication required.')
 })
 
-test('protected route accepts valid token', async () => {
-  const token = authService.signAuthToken(new mongoose.Types.ObjectId())
+test('protected route accepts a valid session cookie', async () => {
+  const token = authSessionService.createTestAuthSession(new mongoose.Types.ObjectId())
 
   await withPatches(
     [[Bet, 'find', () => queryOf([])]],
     async () => {
       const response = await request('/api/bets', {
         headers: {
-          Authorization: `Bearer ${token}`,
+          Cookie: `nhl_edge_session=${token}`,
         },
       })
 
@@ -322,15 +322,13 @@ test('/api/auth/me returns safe current-user data', async () => {
   const user = makeUser({
     passwordHash: 'secret-hash',
   })
-  const token = authService.signAuthToken(user._id)
+  const token = authSessionService.createTestAuthSession(user._id, { user })
 
   await withPatches(
     [[User, 'findById', () => queryOf(user)]],
     async () => {
       const response = await request('/api/auth/me', {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
+        headers: { Cookie: `nhl_edge_session=${token}` },
       })
 
       assert.equal(response.status, 200)
@@ -637,6 +635,149 @@ test('Google token verification failure is rejected cleanly', async () => {
           error.statusCode === 401 &&
           error.message === 'Google authentication failed.',
       )
+    },
+  )
+})
+
+test('first Google login creates a User bound to the verified subject', async () => {
+  const createdId = new mongoose.Types.ObjectId()
+  let createdPayload = null
+  let findCall = 0
+
+  await withPatches(
+    [
+      [
+        googleAuthService,
+        'verifyGoogleIdToken',
+        async () => ({
+          email: 'google@example.com',
+          googleId: 'stable-google-subject',
+          name: 'Google User',
+          profileImage: '',
+        }),
+      ],
+      [
+        User,
+        'findOne',
+        () => {
+          findCall += 1
+          return queryOf(null)
+        },
+      ],
+      [
+        User,
+        'create',
+        async (payload) => {
+          createdPayload = payload
+          return makeUser({ ...payload, _id: createdId })
+        },
+      ],
+      [powerRatingsService, 'initializeDefaultPowerRatings', async () => ({})],
+    ],
+    async () => {
+      const result = await authService.authenticateGoogleUser({ credential: 'valid' })
+
+      assert.equal(findCall, 2)
+      assert.equal(createdPayload.googleId, 'stable-google-subject')
+      assert.equal(createdPayload.authProvider, 'google')
+      assert.equal(result.user.id, createdId.toString())
+      assert.equal(Object.hasOwn(result, 'token'), false)
+    },
+  )
+})
+
+test('returning Google subject resolves the same User without email linking', async () => {
+  const user = makeUser({ googleId: 'stable-google-subject' })
+
+  await withPatches(
+    [
+      [
+        googleAuthService,
+        'verifyGoogleIdToken',
+        async () => ({
+          email: user.email,
+          googleId: 'stable-google-subject',
+          name: user.name,
+          profileImage: '',
+        }),
+      ],
+      [User, 'findOne', () => queryOf(user)],
+      [powerRatingsService, 'initializeDefaultPowerRatings', async () => ({})],
+    ],
+    async () => {
+      const result = await authService.authenticateGoogleUser({ credential: 'valid' })
+      assert.equal(result.user.id, user._id.toString())
+    },
+  )
+})
+
+test('matching unverified local email is never silently linked to Google', async () => {
+  const localUser = makeUser({ authProvider: 'local', googleId: undefined })
+  let call = 0
+
+  await withPatches(
+    [
+      [
+        googleAuthService,
+        'verifyGoogleIdToken',
+        async () => ({
+          email: localUser.email,
+          googleId: 'attacker-or-owner-subject',
+          name: localUser.name,
+          profileImage: '',
+        }),
+      ],
+      [
+        User,
+        'findOne',
+        () => {
+          call += 1
+          return queryOf(call === 1 ? null : localUser)
+        },
+      ],
+    ],
+    async () => {
+      await assert.rejects(
+        () => authService.authenticateGoogleUser({ credential: 'valid' }),
+        (error) => error.statusCode === 409,
+      )
+      assert.equal(localUser.googleId, undefined)
+      assert.equal(localUser.authProvider, 'local')
+    },
+  )
+})
+
+test('same email with another Google subject cannot hijack a bound account', async () => {
+  const boundUser = makeUser({ googleId: 'original-subject' })
+  let call = 0
+
+  await withPatches(
+    [
+      [
+        googleAuthService,
+        'verifyGoogleIdToken',
+        async () => ({
+          email: boundUser.email,
+          googleId: 'different-subject',
+          name: boundUser.name,
+          profileImage: '',
+        }),
+      ],
+      [
+        User,
+        'findOne',
+        () => {
+          call += 1
+          return queryOf(call === 1 ? null : boundUser)
+        },
+      ],
+    ],
+    async () => {
+      await assert.rejects(
+        () => authService.authenticateGoogleUser({ credential: 'valid' }),
+        (error) => error.statusCode === 409,
+      )
+      assert.equal(boundUser.googleId, 'original-subject')
     },
   )
 })

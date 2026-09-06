@@ -10,62 +10,38 @@ import {
   fetchCurrentUser,
   loginUser,
   loginWithGoogle,
+  logoutUser,
   registerUser,
 } from '../services/authApi.js'
-import {
-  clearAuthToken,
-  getStoredAuthToken,
-  setAuthToken,
-  subscribeToUnauthorized,
-} from '../services/apiClient.js'
+import { subscribeToUnauthorized } from '../services/apiClient.js'
 
 const AuthContext = createContext(null)
 
 const getAuthMessage = (error, fallbackMessage) => {
-  if (!error) {
-    return fallbackMessage
-  }
-
-  if (error.status === 0) {
-    return 'Network error. Check your connection and try again.'
-  }
-
+  if (!error) return fallbackMessage
+  if (error.status === 0) return 'Network error. Check your connection and try again.'
   return error.message || fallbackMessage
 }
 
 export function AuthProvider({ children }) {
-  const [token, setToken] = useState(() => getStoredAuthToken())
   const [user, setUser] = useState(null)
   const [loading, setLoading] = useState(true)
   const [sessionMessage, setSessionMessage] = useState('')
 
   const clearSession = useCallback(({ message = '' } = {}) => {
-    clearAuthToken()
-    setToken('')
     setUser(null)
     setSessionMessage(message)
   }, [])
 
   const applyAuthResult = useCallback(
     async (result) => {
-      const nextToken = result?.token ?? ''
-      const fallbackUser = result?.user ?? null
-
-      if (!nextToken || !fallbackUser) {
-        throw new Error('Authentication response was incomplete.')
-      }
-
-      setAuthToken(nextToken)
-      setToken(nextToken)
+      if (!result?.user) throw new Error('Authentication response was incomplete.')
 
       try {
         const currentUser = await fetchCurrentUser()
-        const nextUser = currentUser ?? fallbackUser
-
-        setUser(nextUser)
+        setUser(currentUser ?? result.user)
         setSessionMessage('')
-
-        return nextUser
+        return currentUser ?? result.user
       } catch (error) {
         clearSession()
         throw error
@@ -75,31 +51,18 @@ export function AuthProvider({ children }) {
   )
 
   const refreshUser = useCallback(async () => {
-    const currentToken = getStoredAuthToken()
-
-    if (!currentToken) {
-      clearSession()
-      return null
-    }
-
-    setAuthToken(currentToken)
-    setToken(currentToken)
-
     try {
       const currentUser = await fetchCurrentUser()
-
       setUser(currentUser)
       setSessionMessage('')
-
       return currentUser
     } catch (error) {
       clearSession({
         message:
           error.status === 401
-            ? 'Session expired. Please sign in again.'
+            ? ''
             : getAuthMessage(error, 'Unable to restore your session.'),
       })
-
       return null
     }
   }, [clearSession])
@@ -110,14 +73,10 @@ export function AuthProvider({ children }) {
     const restoreSession = async () => {
       setLoading(true)
       await refreshUser()
-
-      if (isCurrent) {
-        setLoading(false)
-      }
+      if (isCurrent) setLoading(false)
     }
 
     restoreSession()
-
     return () => {
       isCurrent = false
     }
@@ -126,9 +85,7 @@ export function AuthProvider({ children }) {
   useEffect(
     () =>
       subscribeToUnauthorized(() => {
-        clearSession({
-          message: 'Session expired. Please sign in again.',
-        })
+        clearSession({ message: 'Session expired. Please sign in again.' })
       }),
     [clearSession],
   )
@@ -151,12 +108,9 @@ export function AuthProvider({ children }) {
       try {
         return applyAuthResult(await registerUser(values))
       } catch (error) {
-        throw new Error(
-          getAuthMessage(error, 'Unable to create your account.'),
-          {
-            cause: error,
-          },
-        )
+        throw new Error(getAuthMessage(error, 'Unable to create your account.'), {
+          cause: error,
+        })
       }
     },
     [applyAuthResult],
@@ -167,32 +121,32 @@ export function AuthProvider({ children }) {
       try {
         return applyAuthResult(await loginWithGoogle(credential))
       } catch (error) {
-        throw new Error(
-          getAuthMessage(error, 'Unable to sign in with Google.'),
-          {
-            cause: error,
-          },
-        )
+        throw new Error(getAuthMessage(error, 'Unable to sign in with Google.'), {
+          cause: error,
+        })
       }
     },
     [applyAuthResult],
   )
 
-  const logout = useCallback(() => {
-    clearSession()
+  const logout = useCallback(async () => {
+    try {
+      await logoutUser()
+    } finally {
+      clearSession()
+    }
   }, [clearSession])
 
   const value = useMemo(
     () => ({
       googleLogin,
-      isAuthenticated: Boolean(token && user),
+      isAuthenticated: Boolean(user),
       loading,
       login,
       logout,
       refreshUser,
       register,
       sessionMessage,
-      token,
       user,
     }),
     [
@@ -203,7 +157,6 @@ export function AuthProvider({ children }) {
       refreshUser,
       register,
       sessionMessage,
-      token,
       user,
     ],
   )
@@ -214,10 +167,6 @@ export function AuthProvider({ children }) {
 // eslint-disable-next-line react-refresh/only-export-components
 export function useAuth() {
   const context = useContext(AuthContext)
-
-  if (!context) {
-    throw new Error('useAuth must be used inside AuthProvider.')
-  }
-
+  if (!context) throw new Error('useAuth must be used inside AuthProvider.')
   return context
 }

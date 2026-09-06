@@ -1,13 +1,11 @@
 process.env.NODE_ENV = 'test'
-process.env.JWT_SECRET = 'test-jwt-secret'
-process.env.JWT_EXPIRES_IN = '1h'
 process.env.GOOGLE_CLIENT_ID = 'google-client-id'
 
 const assert = require('node:assert/strict')
 const test = require('node:test')
 const mongoose = require('mongoose')
 const app = require('../app')
-const authService = require('../services/authService')
+const authSessionService = require('../services/authSessionService')
 const RatingEngineSettings = require('../models/RatingEngineSettings')
 const { BASE_MODEL_V1 } = require('../config/baseModel')
 const {
@@ -765,8 +763,8 @@ test('Power Rating Engine scoped save cannot own Maximum Player Injury Penalty',
 test('settings endpoint saves and reads only the authenticated user settings', async () => {
   const userA = new mongoose.Types.ObjectId().toString()
   const userB = new mongoose.Types.ObjectId().toString()
-  const tokenA = authService.signAuthToken(userA)
-  const tokenB = authService.signAuthToken(userB)
+  const tokenA = authSessionService.createTestAuthSession(userA)
+  const tokenB = authSessionService.createTestAuthSession(userB)
   const settings = []
 
   await withPatches(
@@ -824,22 +822,24 @@ test('settings endpoint saves and reads only the authenticated user settings', a
       const saveA = await request('/api/settings/rating-engine', {
         body: JSON.stringify(payloadA),
         headers: {
-          Authorization: `Bearer ${tokenA}`,
+          Cookie: `nhl_edge_session=${tokenA}`,
           'Content-Type': 'application/json',
+          Origin: 'http://localhost:5173',
         },
         method: 'PUT',
       })
       const saveB = await request('/api/settings/rating-engine', {
         body: JSON.stringify(payloadB),
         headers: {
-          Authorization: `Bearer ${tokenB}`,
+          Cookie: `nhl_edge_session=${tokenB}`,
           'Content-Type': 'application/json',
+          Origin: 'http://localhost:5173',
         },
         method: 'PUT',
       })
       const readA = await request('/api/settings/rating-engine', {
         headers: {
-          Authorization: `Bearer ${tokenA}`,
+          Cookie: `nhl_edge_session=${tokenA}`,
         },
       })
       const modelAdjustmentsSave = await request(
@@ -847,15 +847,16 @@ test('settings endpoint saves and reads only the authenticated user settings', a
         {
           body: JSON.stringify({ homeAdvantage: 4.75 }),
           headers: {
-            Authorization: `Bearer ${tokenA}`,
+            Cookie: `nhl_edge_session=${tokenA}`,
             'Content-Type': 'application/json',
+            Origin: 'http://localhost:5173',
           },
           method: 'PUT',
         },
       )
       const readAfterModelSave = await request('/api/settings/rating-engine', {
         headers: {
-          Authorization: `Bearer ${tokenA}`,
+          Cookie: `nhl_edge_session=${tokenA}`,
         },
       })
 

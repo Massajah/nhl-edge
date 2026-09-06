@@ -1,13 +1,11 @@
 process.env.NODE_ENV = 'test'
-process.env.JWT_SECRET = 'test-jwt-secret'
-process.env.JWT_EXPIRES_IN = '1h'
 process.env.GOOGLE_CLIENT_ID = 'google-client-id'
 
 const assert = require('node:assert/strict')
 const test = require('node:test')
 const mongoose = require('mongoose')
 const app = require('../app')
-const authService = require('../services/authService')
+const authSessionService = require('../services/authSessionService')
 const calibrationOrchestrator = require('../calibration/calibrationOrchestrator')
 const calibrationOrchestrationOptions = require(
   '../calibration/calibrationOrchestrationOptions'
@@ -115,7 +113,7 @@ test('Model Calibration routes require authentication', async () => {
 test('promotion history routes use authenticated scope and ignore query identity', async () => {
   const authenticatedUserId = new mongoose.Types.ObjectId().toString()
   const attackerUserId = new mongoose.Types.ObjectId().toString()
-  const token = authService.signAuthToken(authenticatedUserId)
+  const token = authSessionService.createTestAuthSession(authenticatedUserId)
   const captured = []
 
   await withPatch(
@@ -133,7 +131,7 @@ test('promotion history routes use authenticated scope and ignore query identity
         return { promotion: { promotionId } }
       },
       async () => {
-        const headers = { Authorization: `Bearer ${token}` }
+        const headers = { Cookie: `nhl_edge_session=${token}` }
         const list = await request(
           `/api/power-rating-simulations/model-calibration/promotions?limit=2&userId=${attackerUserId}`,
           { headers },
@@ -164,10 +162,11 @@ test('promotion history routes use authenticated scope and ignore query identity
 test('promotion routes use authenticated scope and delegate only candidate or preview identity', async () => {
   const authenticatedUserId = new mongoose.Types.ObjectId().toString()
   const attackerUserId = new mongoose.Types.ObjectId().toString()
-  const token = authService.signAuthToken(authenticatedUserId)
+  const token = authSessionService.createTestAuthSession(authenticatedUserId)
   const headers = {
-    Authorization: `Bearer ${token}`,
+    Cookie: `nhl_edge_session=${token}`,
     'Content-Type': 'application/json',
+    Origin: 'http://localhost:5173',
   }
   const previewPayload = {
     candidateId: 'candidate-1',
@@ -239,7 +238,7 @@ test('promotion routes use authenticated scope and delegate only candidate or pr
 test('robustness route uses authenticated scope and delegates only the requested frozen analysis identity', async () => {
   const authenticatedUserId = new mongoose.Types.ObjectId().toString()
   const attackerUserId = new mongoose.Types.ObjectId().toString()
-  const token = authService.signAuthToken(authenticatedUserId)
+  const token = authSessionService.createTestAuthSession(authenticatedUserId)
   const payload = {
     candidateId: 'candidate-1',
     identity: {
@@ -276,8 +275,9 @@ test('robustness route uses authenticated scope and delegates only the requested
         {
           body: JSON.stringify(payload),
           headers: {
-            Authorization: `Bearer ${token}`,
+            Cookie: `nhl_edge_session=${token}`,
             'Content-Type': 'application/json',
+            Origin: 'http://localhost:5173',
           },
           method: 'POST',
         },
@@ -297,7 +297,7 @@ test('robustness route uses authenticated scope and delegates only the requested
 test('run route delegates the exact request to the calibration orchestrator using only the authenticated user', async () => {
   const authenticatedUserId = new mongoose.Types.ObjectId().toString()
   const attackerUserId = new mongoose.Types.ObjectId().toString()
-  const token = authService.signAuthToken(authenticatedUserId)
+  const token = authSessionService.createTestAuthSession(authenticatedUserId)
   const payload = {
     baselineMode: 'CURRENT_PRODUCTION',
     evaluationSeasons: ['20242025'],
@@ -331,8 +331,9 @@ test('run route delegates the exact request to the calibration orchestrator usin
         {
           body: JSON.stringify(payload),
           headers: {
-            Authorization: `Bearer ${token}`,
+            Cookie: `nhl_edge_session=${token}`,
             'Content-Type': 'application/json',
+            Origin: 'http://localhost:5173',
           },
           method: 'POST',
         },
@@ -351,10 +352,11 @@ test('run route delegates the exact request to the calibration orchestrator usin
 
 test('authenticated run route accepts valid COMBINED requests and rejects duplicate families', async () => {
   const authenticatedUserId = new mongoose.Types.ObjectId().toString()
-  const token = authService.signAuthToken(authenticatedUserId)
+  const token = authSessionService.createTestAuthSession(authenticatedUserId)
   const headers = {
-    Authorization: `Bearer ${token}`,
+    Cookie: `nhl_edge_session=${token}`,
     'Content-Type': 'application/json',
+    Origin: 'http://localhost:5173',
   }
   const basePayload = {
     baselineMode: 'CANONICAL_BASE_MODEL_V1',
@@ -426,7 +428,7 @@ test('authenticated run route accepts valid COMBINED requests and rejects duplic
 
 test('options route resolves user-scoped production context through the focused service', async () => {
   const authenticatedUserId = new mongoose.Types.ObjectId().toString()
-  const token = authService.signAuthToken(authenticatedUserId)
+  const token = authSessionService.createTestAuthSession(authenticatedUserId)
   let capturedUserId = null
 
   await withPatch(
@@ -442,7 +444,7 @@ test('options route resolves user-scoped production context through the focused 
     async () => {
       const response = await request(
         '/api/power-rating-simulations/model-calibration/options',
-        { headers: { Authorization: `Bearer ${token}` } },
+        { headers: { Cookie: `nhl_edge_session=${token}` } },
       )
 
       assert.equal(response.status, 200)

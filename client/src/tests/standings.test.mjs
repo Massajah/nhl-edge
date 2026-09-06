@@ -684,7 +684,6 @@ test('season API requests update the selected standings query without user ident
   const originalFetch = globalThis.fetch
   const requests = []
 
-  apiClient.setAuthToken('standings-token')
   globalThis.fetch = async (url, options = {}) => {
     requests.push({ headers: options.headers, url })
 
@@ -700,7 +699,6 @@ test('season API requests update the selected standings query without user ident
     await standingsApi.fetchPlayoffs('20242025')
   } finally {
     globalThis.fetch = originalFetch
-    apiClient.clearAuthToken()
   }
 
   assert.deepEqual(
@@ -713,7 +711,7 @@ test('season API requests update the selected standings query without user ident
   )
   assert.equal(
     requests[1].headers.get('Authorization'),
-    'Bearer standings-token',
+    null,
   )
   assert.equal(requests[1].url.includes('userId'), false)
   assert.equal(requests[2].url.includes('userId'), false)

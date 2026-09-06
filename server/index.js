@@ -2,13 +2,13 @@ require('dotenv').config()
 
 const app = require('./app')
 const connectDB = require('./config/db')
-const { assertJwtConfig } = require('./config/auth')
+const { assertAuthConfig } = require('./config/auth')
 
 const PORT = process.env.PORT || 5000
 const HOST = '0.0.0.0'
 
 async function startServer() {
-  assertJwtConfig()
+  assertAuthConfig()
   await connectDB()
 
   app.listen(PORT, HOST, () => {

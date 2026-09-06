@@ -256,7 +256,6 @@ test('Database Storage API uses authenticated GETs and refresh bypass explicitly
   const originalFetch = globalThis.fetch
   const capturedRequests = []
 
-  apiClient.setAuthToken('storage-token')
   globalThis.fetch = async (url, options = {}) => {
     capturedRequests.push({
       body: options.body,
@@ -285,7 +284,6 @@ test('Database Storage API uses authenticated GETs and refresh bypass explicitly
     await databaseStorageApi.getDatabaseStorage()
     await databaseStorageApi.getDatabaseStorage({ refresh: true })
   } finally {
-    apiClient.clearAuthToken()
     globalThis.fetch = originalFetch
   }
 
@@ -295,7 +293,7 @@ test('Database Storage API uses authenticated GETs and refresh bypass explicitly
   )
   assert.equal(
     capturedRequests.every(
-      ({ headers }) => headers.get('Authorization') === 'Bearer storage-token',
+      ({ headers }) => headers.get('Authorization') === null,
     ),
     true,
   )
@@ -339,7 +337,6 @@ test('reset API calls are authenticated and never accept a client userId', async
   const originalFetch = globalThis.fetch
   const capturedRequests = []
 
-  apiClient.setAuthToken('reset-token')
   globalThis.fetch = async (url, options = {}) => {
     capturedRequests.push({
       body: options.body ? JSON.parse(options.body) : null,
@@ -359,7 +356,6 @@ test('reset API calls are authenticated and never accept a client userId', async
     await userDataResetApi.resetForNewSeason()
     await userDataResetApi.factoryResetUserData('DELETE')
   } finally {
-    apiClient.clearAuthToken()
     globalThis.fetch = originalFetch
   }
 
@@ -374,7 +370,7 @@ test('reset API calls are authenticated and never accept a client userId', async
   assert.equal(capturedRequests.every(({ method }) => method === 'POST'), true)
   assert.equal(
     capturedRequests.every(
-      ({ headers }) => headers.get('Authorization') === 'Bearer reset-token',
+      ({ headers }) => headers.get('Authorization') === null,
     ),
     true,
   )
@@ -388,7 +384,6 @@ test('reset API calls are authenticated and never accept a client userId', async
 test('season reset clears only documented browser-local operational state', () => {
   const originalWindow = globalThis.window
   const values = new Map([
-    ['nhl-edge-auth-token', 'keep-authenticated'],
     ['nhl-edge-dashboard-market-odds', '{}'],
     ['nhl-edge-power-ratings', '{}'],
     ['nhl-edge-saved-analyses', '[]'],
@@ -411,7 +406,7 @@ test('season reset clears only documented browser-local operational state', () =
   assert.equal(values.has('nhl-edge-dashboard-market-odds'), false)
   assert.equal(values.has('nhl-edge-power-ratings'), false)
   assert.equal(values.has('nhl-edge-saved-analyses'), false)
-  assert.equal(values.get('nhl-edge-auth-token'), 'keep-authenticated')
+  assert.equal(values.has('nhl-edge-auth-token'), false)
   assert.equal(values.get('nhl-edge-sidebar-collapsed'), 'true')
 })
 
@@ -741,9 +736,11 @@ const createBookmakerPreferences = (overrides = {}) => ({
   availableBookmakers: requestedBookmakers.slice(0, 3).map(
     ([bookmakerKey, bookmakerTitle]) => ({ bookmakerKey, bookmakerTitle }),
   ),
+  captureParticipation: 'enabled',
   disabledBookmakerKeys: [],
   enabledBookmakerKeys: requestedBookmakers.map(([key]) => key),
   fallbackApplied: false,
+  participatesInCapture: true,
   supportedBookmakers: requestedBookmakers.map(
     ([bookmakerKey, bookmakerTitle], index) => ({
       available: index < 3,
@@ -888,7 +885,7 @@ test('Preferred Bookmakers renders all nine choices, selection, and availability
   assert.match(html, /Save Preferred Bookmakers/)
 })
 
-test('Preferred Bookmakers shows empty-catalog and all-disabled fallback states', () => {
+test('Preferred Bookmakers shows empty-catalog and all-disabled participation states', () => {
   const emptyHtml = renderSettings({
     initialBookmakerPreferences: createBookmakerPreferences({
       availableBookmakers: [],
@@ -897,16 +894,18 @@ test('Preferred Bookmakers shows empty-catalog and all-disabled fallback states'
     }),
   })
   const warning =
-    'At least one bookmaker must be enabled. All bookmakers have been enabled automatically.'
-  const fallbackHtml = renderSettings({
+    'No bookmakers are enabled. This account will not participate in scheduled odds capture.'
+  const disabledHtml = renderSettings({
     initialBookmakerPreferences: createBookmakerPreferences({
-      fallbackApplied: true,
+      captureParticipation: 'disabled',
+      enabledBookmakerKeys: [],
+      participatesInCapture: false,
       warning,
     }),
   })
 
   assert.match(emptyHtml, /No requested bookmakers are configured\./)
-  assert.match(fallbackHtml, new RegExp(warning.replaceAll('.', '\\.')))
+  assert.match(disabledHtml, new RegExp(warning.replaceAll('.', '\\.')))
 })
 
 test('Market Odds controls collapse safely at narrow widths', async () => {

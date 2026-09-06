@@ -1,7 +1,6 @@
-const jwt = require('jsonwebtoken')
 const mongoose = require('mongoose')
 const User = require('../models/User')
-const { getJwtExpiresIn, getJwtSecret } = require('../config/auth')
+const { isLocalAuthEnabled } = require('../config/auth')
 const googleAuthService = require('./googleAuthService')
 const powerRatingsService = require('./powerRatingsService')
 const { hashPassword, verifyPassword } = require('../utils/password')
@@ -35,38 +34,25 @@ const serializeUser = (user) => {
     name: plainUser.name ?? '',
     authProvider: plainUser.authProvider,
     profileImage: plainUser.profileImage ?? '',
+    role: plainUser.role ?? 'user',
     createdAt: plainUser.createdAt,
+    lastLoginAt: plainUser.lastLoginAt ?? null,
   }
 }
 
-const signAuthToken = (userId) =>
-  jwt.sign({ userId: userId.toString() }, getJwtSecret(), {
-    expiresIn: getJwtExpiresIn(),
-  })
-
-const verifyAuthToken = (token) => {
-  try {
-    const payload = jwt.verify(token, getJwtSecret())
-
-    if (!payload?.userId) {
-      throw new AuthError('Authentication required.', 401)
-    }
-
-    return {
-      userId: payload.userId,
-    }
-  } catch {
-    throw new AuthError('Authentication required.', 401)
-  }
-}
-
-const buildAuthResponse = (user) => ({
-  token: signAuthToken(user._id ?? user.id),
+const buildAuthResult = (user) => ({
   user: serializeUser(user),
+  userId: user._id ?? user.id,
 })
 
+const localAuthDisabledError = () =>
+  new AuthError('Local authentication is disabled.', 404)
+
 const duplicateEmailError = () =>
-  new AuthError('A user with that email already exists.', 409)
+  new AuthError('Unable to create an account with those credentials.', 409)
+
+const googleAccountCollisionError = () =>
+  new AuthError('Unable to sign in with this Google account.', 409)
 
 const isDuplicateKeyError = (error) => error?.code === 11000
 
@@ -90,141 +76,122 @@ const validateEmailInput = (email) => {
   return normalizedEmail
 }
 
-const registerLocalUser = async (payload = {}) => {
+const assertLocalAuthEnabled = (environment = process.env) => {
+  if (!isLocalAuthEnabled(environment)) throw localAuthDisabledError()
+}
+
+const assertUserIsActive = (user) => {
+  if (user?.status === 'disabled') {
+    throw new AuthError('Authentication required.', 401)
+  }
+}
+
+const persistUser = async (user) => {
+  if (typeof user.save === 'function') await user.save()
+  return user
+}
+
+const registerLocalUser = async (
+  payload = {},
+  { environment = process.env } = {},
+) => {
+  assertLocalAuthEnabled(environment)
   const email = validateEmailInput(payload.email)
 
-  if (await findUserByEmail(email)) {
-    throw duplicateEmailError()
-  }
+  if (await findUserByEmail(email)) throw duplicateEmailError()
 
   const passwordHash = await hashPassword(payload.password)
-
   let user
 
   try {
     user = await User.create({
       authProvider: 'local',
       email,
+      lastLoginAt: new Date(),
       name: toText(payload.name),
       passwordHash,
     })
   } catch (error) {
-    if (isDuplicateKeyError(error)) {
-      throw duplicateEmailError()
-    }
-
+    if (isDuplicateKeyError(error)) throw duplicateEmailError()
     throw error
   }
 
   await powerRatingsService.initializeDefaultPowerRatings(user._id)
-
-  return buildAuthResponse(user)
+  return buildAuthResult(user)
 }
 
-const loginLocalUser = async (payload = {}) => {
+const loginLocalUser = async (
+  payload = {},
+  { environment = process.env } = {},
+) => {
+  assertLocalAuthEnabled(environment)
   const email = validateEmailInput(payload.email)
   const invalidCredentialsError = new AuthError('Invalid email or password.', 401)
   const user = await findUserByEmail(email, { includePassword: true })
 
-  if (!user?.passwordHash) {
+  if (!user?.passwordHash || user.status === 'disabled') {
     throw invalidCredentialsError
   }
 
-  const passwordMatches = await verifyPassword(payload.password, user.passwordHash)
-
-  if (!passwordMatches) {
+  if (!(await verifyPassword(payload.password, user.passwordHash))) {
     throw invalidCredentialsError
   }
 
+  user.lastLoginAt = new Date()
+  await persistUser(user)
   await powerRatingsService.initializeDefaultPowerRatings(user._id)
 
-  return buildAuthResponse(user)
+  return buildAuthResult(user)
 }
 
-const persistUser = async (user) => {
-  if (typeof user.save === 'function') {
-    await user.save()
-  }
+const updateReturningGoogleUser = async (user, claims) => {
+  if (user.googleId !== claims.googleId) throw googleAccountCollisionError()
 
-  return user
-}
-
-const mergeGoogleClaimsIntoUser = async (user, claims) => {
-  if (!user.googleId) {
-    user.googleId = claims.googleId
-  }
-
-  if (!user.email) {
-    user.email = claims.email
-  }
-
-  if (!user.name && claims.name) {
-    user.name = claims.name
-  }
-
+  assertUserIsActive(user)
+  if (!user.name && claims.name) user.name = claims.name
   if (!user.profileImage && claims.profileImage) {
     user.profileImage = claims.profileImage
   }
-
-  if (user.authProvider === 'local') {
-    user.authProvider = 'both'
-  } else if (!user.authProvider) {
-    user.authProvider = 'google'
-  }
+  user.lastLoginAt = new Date()
 
   return persistUser(user)
 }
-
-const findGoogleUserAfterDuplicate = async (claims) =>
-  User.findOne({
-    $or: [{ googleId: claims.googleId }, { email: claims.email }],
-  })
 
 const authenticateGoogleUser = async (payload = {}) => {
   const claims = await googleAuthService.verifyGoogleIdToken(payload.credential)
   let user = await User.findOne({ googleId: claims.googleId })
 
   if (user) {
-    user = await mergeGoogleClaimsIntoUser(user, claims)
+    user = await updateReturningGoogleUser(user, claims)
     await powerRatingsService.initializeDefaultPowerRatings(user._id)
-
-    return buildAuthResponse(user)
+    return buildAuthResult(user)
   }
 
-  user = await findUserByEmail(claims.email)
-
-  if (user) {
-    user = await mergeGoogleClaimsIntoUser(user, claims)
-    await powerRatingsService.initializeDefaultPowerRatings(user._id)
-
-    return buildAuthResponse(user)
-  }
+  // Email is profile/contact information. It is deliberately not an account-
+  // linking credential because local accounts do not prove email ownership.
+  if (await findUserByEmail(claims.email)) throw googleAccountCollisionError()
 
   try {
     user = await User.create({
       authProvider: 'google',
       email: claims.email,
       googleId: claims.googleId,
+      lastLoginAt: new Date(),
       name: claims.name,
       profileImage: claims.profileImage,
     })
   } catch (error) {
-    if (!isDuplicateKeyError(error)) {
-      throw error
-    }
+    if (!isDuplicateKeyError(error)) throw error
 
-    user = await findGoogleUserAfterDuplicate(claims)
-
-    if (!user) {
-      throw duplicateEmailError()
-    }
-
-    user = await mergeGoogleClaimsIntoUser(user, claims)
+    // A concurrent request for the same verified Google subject may have won.
+    // An email-only conflict is never accepted as proof of account ownership.
+    user = await User.findOne({ googleId: claims.googleId })
+    if (!user) throw googleAccountCollisionError()
+    user = await updateReturningGoogleUser(user, claims)
   }
 
   await powerRatingsService.initializeDefaultPowerRatings(user._id)
-
-  return buildAuthResponse(user)
+  return buildAuthResult(user)
 }
 
 const getSafeUserById = async (userId) => {
@@ -232,22 +199,21 @@ const getSafeUserById = async (userId) => {
     throw new AuthError('Authenticated user was not found.', 401)
   }
 
-  const user = await User.findById(userId)
+  const user = await User.findOne({
+    _id: userId,
+    status: { $ne: 'disabled' },
+  })
 
-  if (!user) {
-    throw new AuthError('Authenticated user was not found.', 401)
-  }
-
+  if (!user) throw new AuthError('Authenticated user was not found.', 401)
   return serializeUser(user)
 }
 
 module.exports = {
   AuthError,
+  assertLocalAuthEnabled,
   authenticateGoogleUser,
   getSafeUserById,
   loginLocalUser,
   registerLocalUser,
   serializeUser,
-  signAuthToken,
-  verifyAuthToken,
 }

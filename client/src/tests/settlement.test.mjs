@@ -97,7 +97,6 @@ test('settlement action uses one authenticated POST and returns its summary', as
   const originalFetch = globalThis.fetch
   const requests = []
 
-  apiClient.setAuthToken('settlement-token')
   globalThis.fetch = async (url, options = {}) => {
     requests.push({
       authorization: new Headers(options.headers).get('Authorization'),
@@ -127,14 +126,13 @@ test('settlement action uses one authenticated POST and returns its summary', as
     assert.equal(summary.settled, 2)
     assert.deepEqual(requests, [
       {
-        authorization: 'Bearer settlement-token',
+        authorization: null,
         method: 'POST',
         url: '/api/bets/settle',
       },
     ])
   } finally {
     globalThis.fetch = originalFetch
-    apiClient.setAuthToken('')
   }
 })
 

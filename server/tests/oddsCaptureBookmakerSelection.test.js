@@ -35,18 +35,46 @@ test('global scheduled capture uses the union of user-enabled bookmakers', async
   ])
 })
 
-test('a user on default settings keeps the full catalog tracked', async () => {
+test('a user without explicit preferences does not expand capture', async () => {
   const service = createService({
     preferences: [{ userId: 'a', disabledBookmakerKeys: ['coolbet'] }],
     users: [{ _id: 'a' }, { _id: 'default-user' }],
   })
 
-  assert.deepEqual(await service.getSelectedBookmakerKeys(), BOOKMAKERS.map(({ key }) => key))
+  assert.deepEqual(await service.getSelectedBookmakerKeys(), [
+    'pinnacle',
+    'unibet_fi',
+  ])
 })
 
-test('an empty installation safely tracks the supported catalog', async () => {
-  assert.deepEqual(
-    await createService().getSelectedBookmakerKeys(),
-    BOOKMAKERS.map(({ key }) => key),
-  )
+test('two users selecting the same bookmaker contribute one global key', async () => {
+  const disabledBookmakerKeys = ['coolbet', 'unibet_fi']
+  const service = createService({
+    preferences: [
+      { userId: 'a', disabledBookmakerKeys },
+      { userId: 'b', disabledBookmakerKeys },
+    ],
+    users: [{ _id: 'a' }, { _id: 'b' }],
+  })
+
+  assert.deepEqual(await service.getSelectedBookmakerKeys(), ['pinnacle'])
+})
+
+test('an empty installation makes no provider selection', async () => {
+  assert.deepEqual(await createService().getSelectedBookmakerKeys(), [])
+})
+
+test('all-disabled and disabled-user preferences do not expand capture', async () => {
+  const service = createService({
+    preferences: [
+      { userId: 'a', disabledBookmakerKeys: BOOKMAKERS.map(({ key }) => key) },
+      { userId: 'b', disabledBookmakerKeys: [] },
+    ],
+    users: [
+      { _id: 'a', status: 'active' },
+      { _id: 'b', status: 'disabled' },
+    ],
+  })
+
+  assert.deepEqual(await service.getSelectedBookmakerKeys(), [])
 })

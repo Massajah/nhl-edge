@@ -91,6 +91,18 @@ test('planner loads the UTC day plus adjacent dates and makes no provider reques
   assert.equal(plan.reasonCounts.no_games, 1)
 })
 
+test('empty participating bookmaker union schedules no provider capture', async () => {
+  const plan = await makePlanner({
+    games: [makeGame()],
+    selectedBookmakerKeys: [],
+  }).planner.planDueCheckpoints({ observedAt: NOW })
+
+  assert.equal(plan.status, 'NO_DUE_WORK')
+  assert.equal(plan.groups.length, 0)
+  assert.equal(plan.dueCheckpointCount, 0)
+  assert.equal(plan.reasonCounts.no_participating_bookmakers, 1)
+})
+
 test('every checkpoint planning window is inclusive at its exact boundaries', () => {
   const start = new Date('2026-10-10T20:00:00.000Z')
   const game = makeGame({ scheduledStart: start.toISOString() })

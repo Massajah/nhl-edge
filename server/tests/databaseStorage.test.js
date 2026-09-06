@@ -1,11 +1,10 @@
 process.env.NODE_ENV = 'test'
-process.env.JWT_SECRET = 'test-jwt-secret'
 
 const assert = require('node:assert/strict')
 const test = require('node:test')
 const mongoose = require('mongoose')
 const app = require('../app')
-const authService = require('../services/authService')
+const authSessionService = require('../services/authSessionService')
 const databaseStorageService = require('../services/databaseStorageService')
 
 const request = async (path, options = {}) => {
@@ -163,10 +162,22 @@ test('storage endpoint rejects unauthenticated requests', async () => {
   assert.equal(response.body.message, 'Authentication required.')
 })
 
+test('ordinary authenticated users cannot inspect database-wide storage', async () => {
+  const token = authSessionService.createTestAuthSession(new mongoose.Types.ObjectId())
+  const response = await request('/api/settings/storage', {
+    headers: { Cookie: `nhl_edge_session=${token}` },
+  })
+
+  assert.equal(response.status, 403)
+})
+
 test('authenticated storage endpoint returns normalized metadata and honors refresh', async () => {
   const originalGetStatus = databaseStorageService.getDatabaseStorageStatus
   const capturedOptions = []
-  const token = authService.signAuthToken(new mongoose.Types.ObjectId())
+  const token = authSessionService.createTestAuthSession(
+    new mongoose.Types.ObjectId(),
+    { role: 'admin' },
+  )
 
   databaseStorageService.getDatabaseStorageStatus = async (options) => {
     capturedOptions.push(options)
@@ -191,7 +202,7 @@ test('authenticated storage endpoint returns normalized metadata and honors refr
     const response = await request(
       '/api/settings/storage?refresh=true&userId=another-user',
       {
-        headers: { Authorization: `Bearer ${token}` },
+        headers: { Cookie: `nhl_edge_session=${token}` },
       },
     )
 

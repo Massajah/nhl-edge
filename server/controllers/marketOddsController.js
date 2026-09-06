@@ -35,7 +35,9 @@ const getNhlMarketOdds = async (request, response, next) => {
       ...result,
       bookmakerPreferences: {
         enabledBookmakerKeys: preferences.enabledBookmakerKeys,
+        captureParticipation: preferences.captureParticipation,
         fallbackApplied: preferences.fallbackApplied,
+        participatesInCapture: preferences.participatesInCapture,
         warning: preferences.warning,
       },
     })

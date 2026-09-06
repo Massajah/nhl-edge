@@ -11,6 +11,7 @@ class GoogleAuthError extends Error {
 }
 
 let googleClient = null
+const GOOGLE_ISSUERS = new Set(['accounts.google.com', 'https://accounts.google.com'])
 
 const getGoogleClient = () => {
   if (!googleClient || googleClient._clientId !== process.env.GOOGLE_CLIENT_ID) {
@@ -21,20 +22,28 @@ const getGoogleClient = () => {
   return googleClient
 }
 
-const verifyGoogleIdToken = async (credential) => {
+const verifyGoogleIdToken = async (
+  credential,
+  {
+    clientId = process.env.GOOGLE_CLIENT_ID,
+    now = Date.now(),
+    verifyIdToken,
+  } = {},
+) => {
   if (typeof credential !== 'string' || !credential.trim()) {
     throw new GoogleAuthError('Google credential is required.', 400)
   }
 
-  if (!process.env.GOOGLE_CLIENT_ID) {
+  if (!clientId) {
     throw new GoogleAuthError('Google authentication is not configured.', 500)
   }
 
   let ticket
 
   try {
-    ticket = await getGoogleClient().verifyIdToken({
-      audience: process.env.GOOGLE_CLIENT_ID,
+    const verifier = verifyIdToken ?? ((options) => getGoogleClient().verifyIdToken(options))
+    ticket = await verifier({
+      audience: clientId,
       idToken: credential,
     })
   } catch {
@@ -43,7 +52,13 @@ const verifyGoogleIdToken = async (credential) => {
 
   const payload = ticket.getPayload()
 
-  if (!payload?.sub) {
+  if (
+    !payload?.sub ||
+    !GOOGLE_ISSUERS.has(payload.iss) ||
+    payload.aud !== clientId ||
+    !Number.isFinite(Number(payload.exp)) ||
+    Number(payload.exp) * 1000 <= Number(now)
+  ) {
     throw new GoogleAuthError('Google authentication failed.', 401)
   }
 
@@ -64,6 +79,7 @@ const verifyGoogleIdToken = async (credential) => {
 }
 
 module.exports = {
+  GOOGLE_ISSUERS,
   GoogleAuthError,
   verifyGoogleIdToken,
 }

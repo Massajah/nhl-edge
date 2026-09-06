@@ -14,11 +14,17 @@ const settingsRoutes = require('./routes/settingsRoutes')
 const standingsRoutes = require('./routes/standingsRoutes')
 const teamsRoutes = require('./routes/teamsRoutes')
 const { getCorsOptions } = require('./config/cors')
+const { requireTrustedOrigin } = require('./middleware/requireTrustedOrigin')
+const securityHeaders = require('./middleware/securityHeaders')
 
 const app = express()
 
+app.disable('x-powered-by')
+if (process.env.NODE_ENV === 'production') app.set('trust proxy', 1)
+app.use(securityHeaders)
 app.use(cors(getCorsOptions()))
 app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || '1mb' }))
+app.use(requireTrustedOrigin)
 
 app.get('/api', (_request, response) => {
   response.json({

@@ -1,5 +1,4 @@
 process.env.NODE_ENV = 'test'
-process.env.JWT_SECRET = 'test-jwt-secret'
 
 const assert = require('node:assert/strict')
 const test = require('node:test')

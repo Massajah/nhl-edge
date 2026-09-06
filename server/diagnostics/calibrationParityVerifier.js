@@ -10,7 +10,7 @@ const ProcessedRatingGame = require('../models/ProcessedRatingGame')
 const QuickRematchSettings = require('../models/QuickRematchSettings')
 const RatingEngineSettings = require('../models/RatingEngineSettings')
 const User = require('../models/User')
-const authService = require('../services/authService')
+const authSessionService = require('../services/authSessionService')
 const baseModelCalibrationService = require(
   '../services/baseModelCalibrationService'
 )
@@ -848,10 +848,15 @@ const getProductionStateFingerprint = async (userId) => {
 }
 
 const runApiRoundTrip = async ({ representativeUserId }) => {
+  const { session, token } = await authSessionService.createAuthSession(
+    representativeUserId,
+  )
   const server = app.listen(0)
   const { port } = server.address()
-  const token = authService.signAuthToken(representativeUserId)
-  const headers = { Authorization: `Bearer ${token}` }
+  const headers = {
+    Cookie: `nhl_edge_session=${token}`,
+    Origin: 'http://localhost:5173',
+  }
 
   try {
     const optionsResponse = await fetch(
@@ -938,6 +943,7 @@ const runApiRoundTrip = async ({ representativeUserId }) => {
     }
   } finally {
     await new Promise((resolve) => server.close(resolve))
+    await session.deleteOne()
   }
 }
 

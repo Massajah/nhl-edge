@@ -5,11 +5,13 @@
   "main": "index.js",
   "scripts": {
     "cleanup:pre-auth-data": "node scripts/cleanupPreAuthData.js",
+    "migrate:assign-legacy-owner": "node scripts/assignLegacyOwner.js",
     "backfill:bankroll-settlements": "node scripts/backfillBankrollSettlements.js",
     "cron:odds-capture": "node scripts/runOddsCaptureCron.js",
     "dev": "nodemon index.js",
     "lint": "node scripts/lintServer.js",
     "migrate:home-adjustments": "node scripts/migrateHomeAdjustments.js",
+    "operator:set-user-role": "node scripts/setUserRole.js",
     "test": "node --test tests/*.test.js",
     "verify:calibration-parity:base": "node --expose-gc scripts/verifyCalibrationParity.js --base-only",
     "verify:calibration-combined": "node --expose-gc scripts/verifyCalibrationParity.js --combined-only",
@@ -26,7 +28,6 @@
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "google-auth-library": "^10.9.0",
-    "jsonwebtoken": "^9.0.3",
     "mongoose": "^9.7.3"
   },
   "devDependencies": {

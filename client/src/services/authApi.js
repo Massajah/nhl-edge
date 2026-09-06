@@ -47,3 +47,8 @@ export const fetchCurrentUser = async () => {
   return data.user
 }
 
+export const logoutUser = async () =>
+  apiRequest('/api/auth/logout', { method: 'POST' }, {
+    fallbackMessage: 'Unable to close the server session.',
+  })
+

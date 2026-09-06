@@ -1,6 +1,7 @@
 const express = require('express')
 const powerRatingSimulationsController = require('../controllers/powerRatingSimulationsController')
 const authenticate = require('../middleware/authenticate')
+const { requireRole } = require('../middleware/authorizeRole')
 
 const router = express.Router()
 
@@ -41,6 +42,7 @@ router.get(
 )
 router.post(
   '/calibration/historical-seasons/:seasonId/prepare',
+  requireRole('admin'),
   powerRatingSimulationsController.prepareHistoricalCalibrationSeason,
 )
 router.post(
@@ -53,6 +55,7 @@ router.get(
 )
 router.post(
   '/home-advantage/historical-seasons/:seasonId/prepare',
+  requireRole('admin'),
   powerRatingSimulationsController.prepareHomeAdvantageHistoricalSeason,
 )
 router.post(
@@ -65,6 +68,7 @@ router.get(
 )
 router.post(
   '/schedule-context/historical-seasons/:seasonId/prepare',
+  requireRole('admin'),
   powerRatingSimulationsController.prepareScheduleCalibrationSeason,
 )
 router.post(
@@ -77,10 +81,12 @@ router.get(
 )
 router.post(
   '/special-teams/historical-seasons/:seasonId/prepare',
+  requireRole('admin'),
   powerRatingSimulationsController.prepareSpecialTeamsCalibrationGameSeason,
 )
 router.post(
   '/special-teams/reference-seasons/:seasonId/prepare',
+  requireRole('admin'),
   powerRatingSimulationsController.prepareSpecialTeamsReferenceSeason,
 )
 router.post(

@@ -1,12 +1,13 @@
 const express = require('express')
 const settingsController = require('../controllers/settingsController')
 const authenticate = require('../middleware/authenticate')
+const { requireRole } = require('../middleware/authorizeRole')
 
 const router = express.Router()
 
 router.use(authenticate)
 
-router.get('/storage', settingsController.getDatabaseStorage)
+router.get('/storage', requireRole('admin'), settingsController.getDatabaseStorage)
 router.post('/reset/settings', settingsController.resetSettingsToDefaults)
 router.post('/reset/new-season', settingsController.resetForNewSeason)
 router.post('/reset/factory', settingsController.factoryResetUserData)

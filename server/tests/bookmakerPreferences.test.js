@@ -3,7 +3,7 @@ process.env.NODE_ENV = 'test'
 const assert = require('node:assert/strict')
 const test = require('node:test')
 const app = require('../app')
-const authService = require('../services/authService')
+const authSessionService = require('../services/authSessionService')
 const bookmakerPreferencesService = require('../services/bookmakerPreferencesService')
 const {
   ALL_DISABLED_WARNING,
@@ -60,6 +60,8 @@ test('all available bookmakers are enabled by default', async () => {
   ])
   assert.deepEqual(preferences.disabledBookmakerKeys, [])
   assert.equal(preferences.usingDefaults, true)
+  assert.equal(preferences.captureParticipation, 'unconfigured')
+  assert.equal(preferences.participatesInCapture, false)
 })
 
 test('bookmaker preferences persist independently for each user', async () => {
@@ -134,7 +136,7 @@ test('temporarily unavailable bookmakers retain the user preference', async () =
   ])
 })
 
-test('disabling every bookmaker falls back to all and returns a warning', async () => {
+test('disabling every bookmaker persists an explicit empty selection', async () => {
   const preferencesModel = createPreferencesModel()
   const { preferences } = await updateBookmakerPreferences(
     'user-a',
@@ -143,17 +145,19 @@ test('disabling every bookmaker falls back to all and returns a warning', async 
     createOptions(preferencesModel),
   )
 
-  assert.equal(preferences.fallbackApplied, true)
+  assert.equal(preferences.fallbackApplied, false)
+  assert.equal(preferences.captureParticipation, 'disabled')
+  assert.equal(preferences.participatesInCapture, false)
   assert.equal(preferences.warning, ALL_DISABLED_WARNING)
-  assert.deepEqual(preferences.disabledBookmakerKeys, [])
-  assert.deepEqual(preferences.enabledBookmakerKeys, [
-    'book-b',
+  assert.deepEqual(preferences.disabledBookmakerKeys, [
     'book-a',
+    'book-b',
     'book-c',
   ])
+  assert.deepEqual(preferences.enabledBookmakerKeys, [])
   assert.deepEqual(
     preferencesModel.documents.get('user-a').disabledBookmakerKeys,
-    [],
+    ['book-b', 'book-a', 'book-c'],
   )
 })
 
@@ -239,7 +243,7 @@ test('preference operations require an authenticated user identity', async () =>
   )
 })
 
-test('authenticated preference endpoints read and save only for the JWT user', async (t) => {
+test('authenticated preference endpoints read and save only for the session user', async (t) => {
   const server = app.listen(0)
   const calls = []
   const originalGet = bookmakerPreferencesService.getBookmakerPreferences
@@ -267,10 +271,11 @@ test('authenticated preference endpoints read and save only for the JWT user', a
 
   await new Promise((resolve) => server.once('listening', resolve))
   const { port } = server.address()
-  const token = authService.signAuthToken('jwt-user')
+  const token = authSessionService.createTestAuthSession('session-user')
   const headers = {
-    Authorization: `Bearer ${token}`,
+    Cookie: `nhl_edge_session=${token}`,
     'Content-Type': 'application/json',
+    Origin: 'http://localhost:5173',
   }
   const read = await fetch(
     `http://127.0.0.1:${port}/api/settings/bookmakers?userId=other-user`,
@@ -288,11 +293,11 @@ test('authenticated preference endpoints read and save only for the JWT user', a
   assert.equal(read.status, 200)
   assert.equal(save.status, 200)
   assert.deepEqual(calls, [
-    { operation: 'read', userId: 'jwt-user' },
+    { operation: 'read', userId: 'session-user' },
     {
       operation: 'save',
       payload: { enabledBookmakerKeys: ['coolbet'] },
-      userId: 'jwt-user',
+      userId: 'session-user',
     },
   ])
 })

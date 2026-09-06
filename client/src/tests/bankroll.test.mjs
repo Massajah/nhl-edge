@@ -292,7 +292,6 @@ test('bankroll summary API builds authenticated season query', async () => {
   const metadata =
     bankrollUtils.normalizeBankrollSeasonsResponse(seasonResponse)
 
-  apiClient.setAuthToken('bankroll-token')
   globalThis.fetch = async (url, options = {}) => {
     capturedRequests.push({
       headers: options.headers,
@@ -319,7 +318,6 @@ test('bankroll summary API builds authenticated season query', async () => {
 
     assert.equal(summary.currentBankroll, 100)
   } finally {
-    apiClient.clearAuthToken()
     globalThis.fetch = originalFetch
   }
 
@@ -329,7 +327,7 @@ test('bankroll summary API builds authenticated season query', async () => {
   )
   assert.equal(
     capturedRequests[0].headers.get('Authorization'),
-    'Bearer bankroll-token',
+    null,
   )
 })
 
@@ -337,7 +335,6 @@ test('deposit API sends normalized money request body', async () => {
   const originalFetch = globalThis.fetch
   const capturedRequests = []
 
-  apiClient.setAuthToken('bankroll-token')
   globalThis.fetch = async (url, options = {}) => {
     capturedRequests.push({
       body: JSON.parse(options.body),
@@ -363,7 +360,6 @@ test('deposit API sends normalized money request body', async () => {
 
     assert.equal(result.summary.currentBankroll, 100)
   } finally {
-    apiClient.clearAuthToken()
     globalThis.fetch = originalFetch
   }
 
@@ -382,7 +378,6 @@ test('transactions API includes pagination, period, and type filters', async () 
   const metadata =
     bankrollUtils.normalizeBankrollSeasonsResponse(seasonResponse)
 
-  apiClient.setAuthToken('bankroll-token')
   globalThis.fetch = async (url, options = {}) => {
     capturedRequests.push({
       headers: options.headers,
@@ -412,7 +407,6 @@ test('transactions API includes pagination, period, and type filters', async () 
 
     assert.equal(result.items[0].runningBalance, 100)
   } finally {
-    apiClient.clearAuthToken()
     globalThis.fetch = originalFetch
   }
 

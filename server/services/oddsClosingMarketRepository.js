@@ -209,7 +209,7 @@ const createOddsClosingMarketRepository = ({
   }) => {
     const closingKey = buildClosingMarketKey({ gameId, scheduledStart })
     const finalizedAt = new Date(observedAt)
-    const finalSelectedBookmakerKeys = normalizeSelectedBookmakerKeys(
+    const requestedBookmakerKeys = normalizeSelectedBookmakerKeys(
       selectedBookmakerKeys,
     )
 
@@ -221,6 +221,10 @@ const createOddsClosingMarketRepository = ({
         return { closingMarket: existing, status: 'EXISTING' }
       }
 
+      const finalSelectedBookmakerKeys =
+        requestedBookmakerKeys.length > 0
+          ? requestedBookmakerKeys
+          : normalizeSelectedBookmakerKeys(existing.selectedBookmakerKeys)
       const selected = new Set(finalSelectedBookmakerKeys)
       const finalBookmakers = (existing.latestSafeBookmakers ?? [])
         .filter((row) => selected.has(row.key))

@@ -431,9 +431,11 @@ function Settings({
   const [bookmakerPreferences, setBookmakerPreferences] = useState(
     initialBookmakerPreferences ?? {
       availableBookmakers: [],
+      captureParticipation: 'unconfigured',
       disabledBookmakerKeys: [],
       enabledBookmakerKeys: [],
       fallbackApplied: false,
+      participatesInCapture: false,
       supportedBookmakers: [],
       warning: null,
     },
@@ -1734,13 +1736,13 @@ function Settings({
           {bookmakerPreferencesMessage ? (
             <p
               className={`form-status ${
-                bookmakerPreferences.fallbackApplied ||
+                bookmakerPreferences.warning ||
                 bookmakerPreferencesStatus === 'error'
                   ? 'error'
                   : 'success'
               }`}
               role={
-                bookmakerPreferences.fallbackApplied ||
+                bookmakerPreferences.warning ||
                 bookmakerPreferencesStatus === 'error'
                   ? 'alert'
                   : 'status'

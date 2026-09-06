@@ -1,4 +1,4 @@
-const authService = require('../services/authService')
+const authSessionService = require('../services/authSessionService')
 
 const sendUnauthorized = (response) => {
   response.status(401).json({
@@ -7,24 +7,32 @@ const sendUnauthorized = (response) => {
   })
 }
 
-const authenticate = (request, response, next) => {
-  const authorization = request.get('authorization') ?? ''
-  const [scheme, token] = authorization.split(' ')
+const authenticate = async (request, response, next) => {
+  const token = authSessionService.getSessionTokenFromRequest(request)
 
-  if (scheme !== 'Bearer' || !token) {
+  if (!token) {
     sendUnauthorized(response)
     return
   }
 
   try {
-    const { userId } = authService.verifyAuthToken(token)
+    const resolved = await authSessionService.resolveAuthSession(token)
+
+    if (!resolved) {
+      sendUnauthorized(response)
+      return
+    }
+
+    request.authSession = resolved.session
+    request.authUser = resolved.user
     request.user = {
-      id: userId,
+      id: resolved.user._id?.toString?.() ?? String(resolved.user.id),
+      role: resolved.user.role ?? 'user',
     }
 
     next()
-  } catch {
-    sendUnauthorized(response)
+  } catch (error) {
+    next(error)
   }
 }
 

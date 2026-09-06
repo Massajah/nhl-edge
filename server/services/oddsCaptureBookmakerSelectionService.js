@@ -13,40 +13,29 @@ const createOddsCaptureBookmakerSelectionService = ({
   const getSelectedBookmakerKeys = async () => {
     const supported = getConfig().bookmakers.map(({ key }) => key)
     const [users, preferences] = await Promise.all([
-      toPlainRows(userModel.find({}, { _id: 1 })),
+      toPlainRows(userModel.find({}, { _id: 1, status: 1 })),
       toPlainRows(
         preferencesModel.find({}, { disabledBookmakerKeys: 1, userId: 1 }),
       ),
     ])
 
-    if (!Array.isArray(users) || users.length === 0) {
-      return supported
-    }
-
-    const preferencesByUser = new Map(
-      (Array.isArray(preferences) ? preferences : []).map((row) => [
-        String(row.userId),
-        new Set(row.disabledBookmakerKeys ?? []),
-      ]),
+    const activeUserIds = new Set(
+      (Array.isArray(users) ? users : [])
+        .filter((user) => user.status !== 'disabled')
+        .map((user) => String(user._id)),
     )
     const selected = new Set()
 
-    users.forEach((user) => {
-      const disabled = preferencesByUser.get(String(user._id))
+    ;(Array.isArray(preferences) ? preferences : []).forEach((preference) => {
+      if (!activeUserIds.has(String(preference.userId))) return
 
-      if (!disabled) {
-        supported.forEach((key) => selected.add(key))
-        return
-      }
-
+      const disabled = new Set(preference.disabledBookmakerKeys ?? [])
       supported.forEach((key) => {
         if (!disabled.has(key)) selected.add(key)
       })
     })
 
-    return selected.size > 0
-      ? supported.filter((key) => selected.has(key))
-      : supported
+    return supported.filter((key) => selected.has(key))
   }
 
   return { getSelectedBookmakerKeys }

@@ -2,7 +2,7 @@ const BookmakerPreferences = require('../models/BookmakerPreferences')
 const { getMarketOddsConfig } = require('../config/marketOdds')
 
 const ALL_DISABLED_WARNING =
-  'At least one bookmaker must be enabled. All bookmakers have been enabled automatically.'
+  'No bookmakers are enabled. This account will not participate in scheduled odds capture.'
 
 class BookmakerPreferencesError extends Error {
   constructor(message, statusCode = 500, details = undefined) {
@@ -71,7 +71,7 @@ const normalizeDisabledKeys = (values = []) =>
 const buildPreferencesResponse = ({
   availableBookmakers,
   disabledBookmakerKeys = [],
-  fallbackApplied = false,
+  participationConfigured = false,
   supportedBookmakers = getMarketOddsConfig().bookmakers,
   usingDefaults = false,
 }) => {
@@ -90,14 +90,23 @@ const buildPreferencesResponse = ({
     (bookmakerKey) => supportedKeySet.has(bookmakerKey),
   )
   const disabledSet = new Set(normalizedDisabled)
+  const enabledBookmakerKeys = normalizedSupported
+    .map(({ bookmakerKey }) => bookmakerKey)
+    .filter((bookmakerKey) => !disabledSet.has(bookmakerKey))
+  const participatesInCapture =
+    participationConfigured && enabledBookmakerKeys.length > 0
 
   return {
     availableBookmakers: supportedAvailable,
+    captureParticipation: !participationConfigured
+      ? 'unconfigured'
+      : participatesInCapture
+        ? 'enabled'
+        : 'disabled',
     disabledBookmakerKeys: normalizedDisabled,
-    enabledBookmakerKeys: normalizedSupported
-      .map(({ bookmakerKey }) => bookmakerKey)
-      .filter((bookmakerKey) => !disabledSet.has(bookmakerKey)),
-    fallbackApplied,
+    enabledBookmakerKeys,
+    fallbackApplied: false,
+    participatesInCapture,
     supportedBookmakers: normalizedSupported.map((bookmaker) => ({
       ...bookmaker,
       available: availableByKey.has(bookmaker.bookmakerKey),
@@ -105,7 +114,10 @@ const buildPreferencesResponse = ({
         availableByKey.get(bookmaker.bookmakerKey)?.lastUpdate ?? null,
     })),
     usingDefaults,
-    warning: fallbackApplied ? ALL_DISABLED_WARNING : null,
+    warning:
+      participationConfigured && !participatesInCapture
+        ? ALL_DISABLED_WARNING
+        : null,
   }
 }
 
@@ -156,26 +168,10 @@ const getBookmakerPreferences = async (
   let response = buildPreferencesResponse({
     availableBookmakers,
     disabledBookmakerKeys: preferencesDocument?.disabledBookmakerKeys,
+    participationConfigured: Boolean(preferencesDocument),
     supportedBookmakers,
     usingDefaults: !preferencesDocument,
   })
-
-  if (
-    response.supportedBookmakers.length > 0 &&
-    response.enabledBookmakerKeys.length === 0
-  ) {
-    await persistDisabledKeys({
-      disabledBookmakerKeys: [],
-      preferencesModel,
-      userId,
-    })
-    response = buildPreferencesResponse({
-      availableBookmakers,
-      disabledBookmakerKeys: [],
-      fallbackApplied: true,
-      supportedBookmakers,
-    })
-  }
 
   return { preferences: response }
 }
@@ -229,19 +225,14 @@ const updateBookmakerPreferences = async (
   const requestedEnabledKeys = normalizeUpdatePayload(payload).filter(
     (bookmakerKey) => supportedKeySet.has(bookmakerKey),
   )
-  const fallbackApplied =
-    normalizedSupported.length > 0 && requestedEnabledKeys.length === 0
-  const effectiveEnabledKeys = fallbackApplied
-    ? supportedKeys
-    : requestedEnabledKeys
-  const enabledSet = new Set(effectiveEnabledKeys)
+  const enabledSet = new Set(requestedEnabledKeys)
   const disabledBookmakerKeys = supportedKeys.filter(
     (bookmakerKey) => !enabledSet.has(bookmakerKey),
   )
   const preferencesModel = getPreferencesModel(options)
 
   await persistDisabledKeys({
-    disabledBookmakerKeys: fallbackApplied ? [] : disabledBookmakerKeys,
+    disabledBookmakerKeys,
     preferencesModel,
     userId,
   })
@@ -249,8 +240,8 @@ const updateBookmakerPreferences = async (
   return {
     preferences: buildPreferencesResponse({
       availableBookmakers: normalizedAvailable,
-      disabledBookmakerKeys: fallbackApplied ? [] : disabledBookmakerKeys,
-      fallbackApplied,
+      disabledBookmakerKeys,
+      participationConfigured: true,
       supportedBookmakers,
     }),
     success: true,

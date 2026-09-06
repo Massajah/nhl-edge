@@ -229,7 +229,6 @@ test('bet API defaults to 5 and sends season, result, and model-status filters',
   const originalFetch = globalThis.fetch
   let requestedUrl = ''
 
-  apiClient.setAuthToken('bet-token')
   globalThis.fetch = async (url) => {
     requestedUrl = url
 
@@ -272,7 +271,6 @@ test('bet API defaults to 5 and sends season, result, and model-status filters',
     assert.equal(result.items.length, 5)
     assert.equal(result.pagination.pageSize, 5)
   } finally {
-    apiClient.clearAuthToken()
     globalThis.fetch = originalFetch
   }
 

@@ -541,7 +541,6 @@ test('clearTeamInjuryHistory uses the authenticated API client and team route', 
   const originalFetch = globalThis.fetch
   let request
 
-  apiClient.setAuthToken('injury-test-token')
   globalThis.fetch = async (url, options) => {
     request = { options, url }
     return new Response(
@@ -557,11 +556,10 @@ test('clearTeamInjuryHistory uses the authenticated API client and team route', 
     assert.equal(request.options.method, 'DELETE')
     assert.equal(
       request.options.headers.get('Authorization'),
-      'Bearer injury-test-token',
+      null,
     )
     assert.equal(result.deletedCount, 2)
   } finally {
-    apiClient.clearAuthToken()
     globalThis.fetch = originalFetch
   }
 })

@@ -1,7 +1,4 @@
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, '') ?? ''
-const AUTH_TOKEN_STORAGE_KEY = 'nhl-edge-auth-token'
-
-let authToken = getStoredAuthToken()
 const unauthorizedListeners = new Set()
 
 export class ApiError extends Error {
@@ -11,36 +8,6 @@ export class ApiError extends Error {
     this.details = details
     this.status = status
   }
-}
-
-export function getStoredAuthToken() {
-  if (typeof window === 'undefined') {
-    return ''
-  }
-
-  return window.localStorage.getItem(AUTH_TOKEN_STORAGE_KEY) ?? ''
-}
-
-export function getAuthToken() {
-  return authToken
-}
-
-export function setAuthToken(token) {
-  authToken = typeof token === 'string' ? token : ''
-
-  if (typeof window === 'undefined') {
-    return
-  }
-
-  if (authToken) {
-    window.localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, authToken)
-  } else {
-    window.localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY)
-  }
-}
-
-export function clearAuthToken() {
-  setAuthToken('')
 }
 
 export function subscribeToUnauthorized(listener) {
@@ -76,11 +43,8 @@ const getFriendlyMessage = ({ fallbackMessage, message, skipAuth, status }) => {
     return 'Google sign-in is not configured.'
   }
 
-  if (
-    message === 'A user with that email already exists.' ||
-    message?.toLowerCase().includes('already exists')
-  ) {
-    return 'Email already registered.'
+  if (message === 'Unable to sign in with this Google account.') {
+    return 'This Google account conflicts with an existing NHL Edge account.'
   }
 
   if (status === 401 && !skipAuth) {
@@ -101,15 +65,12 @@ export async function apiRequest(
     headers.set('Content-Type', 'application/json')
   }
 
-  if (!skipAuth && authToken && !headers.has('Authorization')) {
-    headers.set('Authorization', `Bearer ${authToken}`)
-  }
-
   let response
 
   try {
     response = await fetch(`${API_BASE_URL}${path}`, {
       ...options,
+      credentials: 'include',
       headers,
     })
   } catch {
@@ -127,10 +88,7 @@ export async function apiRequest(
       status: response.status,
     })
 
-    if (response.status === 401 && !skipAuth) {
-      clearAuthToken()
-      notifyUnauthorized()
-    }
+    if (response.status === 401 && !skipAuth) notifyUnauthorized()
 
     throw new ApiError(message, {
       details: data.details,
@@ -138,9 +96,6 @@ export async function apiRequest(
     })
   }
 
-  if (response.status === 204) {
-    return null
-  }
-
+  if (response.status === 204) return null
   return response.json()
 }

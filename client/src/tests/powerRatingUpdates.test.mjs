@@ -100,7 +100,6 @@ test('Starting Rating Scale API uses authenticated Power Ratings endpoints', asy
   const originalFetch = globalThis.fetch
   const capturedRequests = []
 
-  apiClient.setAuthToken('ratings-token')
   globalThis.fetch = async (url, options = {}) => {
     capturedRequests.push({
       body: options.body ? JSON.parse(options.body) : null,
@@ -168,11 +167,10 @@ test('Starting Rating Scale API uses authenticated Power Ratings endpoints', asy
     })
     assert.equal(
       capturedRequests[0].headers.get('Authorization'),
-      'Bearer ratings-token',
+      null,
     )
   } finally {
     globalThis.fetch = originalFetch
-    apiClient.clearAuthToken()
   }
 })
 
@@ -180,7 +178,6 @@ test('updatePowerRatings formats a valid date range request', async () => {
   const originalFetch = globalThis.fetch
   const capturedRequests = []
 
-  apiClient.setAuthToken('ratings-token')
   globalThis.fetch = async (url, options = {}) => {
     capturedRequests.push({
       body: options.body ? JSON.parse(options.body) : null,
@@ -205,7 +202,6 @@ test('updatePowerRatings formats a valid date range request', async () => {
 
     assert.equal(result.gamesProcessed, 1)
   } finally {
-    apiClient.clearAuthToken()
     globalThis.fetch = originalFetch
   }
 
@@ -222,7 +218,7 @@ test('updatePowerRatings formats a valid date range request', async () => {
   )
   assert.equal(
     capturedRequests[0].headers.get('Authorization'),
-    'Bearer ratings-token',
+    null,
   )
 })
 
@@ -234,7 +230,6 @@ test('autoUpdatePowerRatings deduplicates in-flight requests without userId', as
     resolveResponse = resolve
   })
 
-  apiClient.setAuthToken('ratings-token')
   globalThis.fetch = async (url, options = {}) => {
     capturedRequests.push({
       body: options.body ? JSON.parse(options.body) : null,
@@ -267,7 +262,6 @@ test('autoUpdatePowerRatings deduplicates in-flight requests without userId', as
     assert.equal(firstResult.status, 'updated')
     assert.equal(firstResult.gamesProcessed, 1)
   } finally {
-    apiClient.clearAuthToken()
     globalThis.fetch = originalFetch
   }
 
@@ -278,7 +272,7 @@ test('autoUpdatePowerRatings deduplicates in-flight requests without userId', as
   assert.equal(Object.hasOwn(capturedRequests[0].body, 'userId'), false)
   assert.equal(
     capturedRequests[0].headers.get('Authorization'),
-    'Bearer ratings-token',
+    null,
   )
 })
 
