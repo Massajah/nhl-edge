@@ -35,6 +35,37 @@ test('OddsSnapshot stores a valid global normalized nine-bookmaker observation',
   assert.equal(document.bookmakers.every((row) => row._id === undefined), true)
 })
 
+test('v1 legacy FINAL remains distinguishable from v2 target checkpoints', async () => {
+  const legacy = new OddsSnapshot(makeOddsSnapshot({ snapshotType: 'FINAL' }))
+  const v2 = new OddsSnapshot(
+    makeOddsSnapshot({
+      schemaVersion: 2,
+      selectedBookmakerKeys: makeBookmakers().map(({ key }) => key),
+    }),
+  )
+
+  await legacy.validate()
+  await v2.validate()
+  assert.equal(legacy.schemaVersion, 1)
+  assert.equal(legacy.selectedBookmakerKeys, undefined)
+  assert.equal(v2.schemaVersion, 2)
+  assert.equal(v2.selectedBookmakerKeys.length, 9)
+})
+
+test('v2 snapshots require a non-empty unique selected-bookmaker set', async () => {
+  await assertSnapshotFieldError(
+    makeOddsSnapshot({ schemaVersion: 2, selectedBookmakerKeys: [] }),
+    'selectedBookmakerKeys',
+  )
+  await assertSnapshotFieldError(
+    makeOddsSnapshot({
+      schemaVersion: 2,
+      selectedBookmakerKeys: ['coolbet', 'coolbet'],
+    }),
+    'selectedBookmakerKeys',
+  )
+})
+
 test('OddsSnapshot declares only the approved unique and analysis indexes', () => {
   const indexes = OddsSnapshot.schema.indexes()
 

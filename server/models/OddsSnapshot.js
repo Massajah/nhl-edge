@@ -26,6 +26,8 @@ const hasUniqueBookmakerKeys = (bookmakers = []) => {
 
   return new Set(keys).size === keys.length
 }
+const hasSelectedBookmakers = (keys = []) =>
+  Array.isArray(keys) && keys.length > 0 && new Set(keys).size === keys.length
 
 const bookmakerOddsSchema = new mongoose.Schema(
   {
@@ -70,7 +72,7 @@ const oddsSnapshotSchema = new mongoose.Schema(
   {
     schemaVersion: {
       type: Number,
-      enum: [1],
+      enum: [1, 2],
       immutable: true,
       required: true,
     },
@@ -185,6 +187,19 @@ const oddsSnapshotSchema = new mongoose.Schema(
       maxlength: 200,
       required: true,
       trim: true,
+    },
+    selectedBookmakerKeys: {
+      type: [String],
+      enum: SUPPORTED_BOOKMAKER_KEYS,
+      default: undefined,
+      immutable: true,
+      required() {
+        return this.schemaVersion === 2
+      },
+      validate: {
+        message: 'Selected bookmaker keys must be non-empty and unique.',
+        validator: hasSelectedBookmakers,
+      },
     },
     bookmakers: {
       type: [bookmakerOddsSchema],

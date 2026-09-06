@@ -285,60 +285,114 @@ enabled bookmakers only. The authenticated market-odds response also preserves
 every normalized bookmaker row for transparent display and marks disabled rows
 without allowing them to influence EV, Kelly, or saved snapshots.
 
-## Market Odds Phase 3B.1 persistence foundation
+## Odds snapshots and closing market v2
 
-`OddsSnapshot` is global NHL market data with no user owner. It stores one
-compact, normalized, immutable game/checkpoint observation, keyed uniquely by
-official NHL `gameId`, provider, and a deterministic checkpoint key derived
-from snapshot type plus scheduled start. Only `T24`, `T6`, `T2`, and `FINAL`
-are supported; first captured will be derived later from stored timestamps.
-Retries use unordered `$setOnInsert` upserts and never replace earlier odds.
+The one-shot Railway command discovers official NHL games for the current UTC
+day and adjacent dates. It exits without contacting The Odds API when no fetch
+work is useful. The external Railway cron schedule is `*/5 * * * *` (UTC); the
+API process itself has no timer, worker, startup hook, or public trigger route.
 
-`OddsCaptureRun` is also global and stores only bounded operational counts,
-checkpoint outcomes, reason counts, and quota summaries. Neither collection
-stores raw provider JSON, request URLs, API keys, bookmaker titles, or user
-preferences. The strict persistence matcher uses exact ordered canonical teams
-and an inclusive 60-minute commence-time tolerance; ambiguous, duplicate,
-reversed, and unknown-team events are not persisted.
+`OddsSnapshot` remains global NHL market data with no user owner. V2 stores the
+immutable long-term checkpoints below in `odds_snapshots`:
 
-Phase 3B.1 adds no route, provider call, capture orchestrator, timer, worker, or
-scheduler. Scheduled execution is intentionally deferred while the backend is
-local-only.
+- `T24`: first successful fetch in inclusive T-24h through T-18h. Eligibility
+  begins at the nominal T-24h target, so a healthy five-minute cron normally
+  captures the first tick at or immediately after that target.
+- `T6`: first successful fetch in inclusive T-6h through T-4h.
+- `T2`: first successful fetch in inclusive T-2h through T-75m.
 
-## Market Odds Phase 3B.2 capture engine
+The later ends are retry tolerances for cron drift, downtime, provider failure,
+or a temporarily missing market. A failed target attempt does not consume the
+checkpoint. To prevent one missing long-term market from spending every
+five-minute slot, retries are deterministic: every 30 minutes for T24 and every
+15 minutes for T6/T2, measured from the first five-minute cron slot at or after
+the nominal target. This yields at most 13 T24, 9 T6, and 4 T2 attempts across
+their respective windows. Once a valid checkpoint is inserted, the unique
+game/provider/snapshot-start key and `$setOnInsert` persistence keep it
+immutable. The v2 row also records the selected bookmaker keys used for that
+capture.
 
-The internal odds capture engine executes only explicitly supplied checkpoint
-work; it is not a scheduler and does not scan the schedule to decide what is
-due. A run validates and filters the complete batch before credit use, reads
-the authoritative NHL schedule, performs at most one shared cache-aware
-provider fetch, applies the strict historical matcher, and persists immutable
-snapshots through the Phase 3B.1 idempotent repository.
+Closing observations are a separate game/start document in
+`odds_closing_markets`. From inclusive scheduled T-30m through T-5m, each
+eligible five-minute cron may fetch the selected bookmakers. All closing games
+due on the same cron tick share one provider request; compatible T24/T6/T2 work
+is included where possible. The response is normalized and a closing
+observation is appended only when selected-bookmaker availability, home odds,
+or away odds changed. Ordering, provider metadata, and timestamp-only changes
+do not create history rows. An unchanged successful fetch still advances the
+durable latest-safe observation time for each bookmaker present.
 
-Cached odds retain their original provider observation timestamp. Per-type
-freshness and acceptance windows prevent stale data from being relabeled, and
-`FINAL` additionally requires an NHL state recheck plus inclusive T-30m to
-T-5m leakage protection. Invalid bookmaker timestamps are removed row by row;
-historical storage always uses the fixed server catalog and never user
-Preferred Bookmakers.
+The selected provider set is the union of bookmakers currently enabled by NHL
+Edge users. A user without a preferences row contributes the default full set;
+the all-disabled fallback is also the full supported set. One request asks The
+Odds API for that union, never one request per user, game, or bookmaker. No user
+identifier is stored with global market history. Every historical observation
+records its selected set, so later Settings changes neither rewrite old data nor
+fabricate missing bookmaker history.
 
-The engine records deterministic run identity, bounded per-checkpoint outcomes,
-normalized provider failures, actual header-derived request cost when known,
-and partial successes. It has an injectable quota decision point but no
-persistent quota ledger, planner, route, startup hook, timer, worker, or
-automatic execution. Those trigger and budgeting concerns remain deferred.
+Each closing document durably maintains `latestSafeBookmakers`, independently
+per bookmaker. A disappearance is represented in the change-driven observation
+but does not erase that bookmaker's earlier safe price. At T-5 (after any
+eligible capture attempt), or earlier if authoritative NHL state says the game
+started, quota-free finalization copies the currently selected bookmakers'
+latest safe rows to `finalBookmakers`. Finalization performs no provider fetch,
+so a failed last request retains prior safe data. Repeated finalization and
+concurrent writes use a unique closing key plus optimistic revisions and cannot
+replace an already finalized result. Eligible unfinalized starts are retried
+idempotently for up to 36 hours.
 
-## Market Odds Phase 3B.3 scheduled capture
+`FINAL` is therefore not a price that must have been fetched exactly at T-5 or
+at puck drop. It is the latest successfully observed safe pregame price for
+each selected bookmaker. Different bookmakers may legitimately have different
+FINAL timestamps. `bestFinal.home` and `bestFinal.away` independently select
+the maximum valid decimal FINAL and record its bookmaker and observation time;
+the two sides may come from different books. All underlying bookmaker FINALs
+remain stored. If a closing state exists but contains no safe price,
+finalization records `NO_SAFE_ODDS` with empty finals; if no observation ever
+existed, no document or price is fabricated.
 
-Phase 3B.3 adds a one-shot scheduled command around the existing Phase 3B.2
-engine. It discovers official NHL games for the current UTC day and adjacent
-dates, creates only currently valid `T24`, `T6`, `T2`, and `FINAL` work, removes
-already persisted checkpoint identities, and exits without contacting The Odds
-API when no work is due. `FINAL` groups whose scheduled starts are at most 15
-minutes apart share one request. Compatible due intermediate checkpoints are
-included in that request, while remaining intermediate work is batched by
-priority (`FINAL`, `T2`, `T6`, then `T24`). Rescheduled starts naturally create
-new checkpoint keys; expired windows, started/final games, postponed games, and
-invalid schedule rows are never backfilled.
+Closing safety is fail-closed and cumulative:
+
+- planning requires a valid NHL `FUT`/`PRE` game, an unreached scheduled start,
+  and the T-30 through T-5 window;
+- the capture engine reloads the authoritative schedule and requires the exact
+  game, teams, season, game type, and unchanged scheduled start;
+- the provider event must have the same ordered canonical teams and a commence
+  time within 60 minutes of the NHL start;
+- provider fetch time must remain inside the closing window and no later than
+  five minutes before the earlier of NHL scheduled start and provider commence;
+- when bookmaker `lastUpdate` exists it must be no later than both fetch time
+  and the same safe cutoff; invalid rows are removed individually;
+- after the fetch, NHL game landing state is rechecked and any live/started,
+  postponed, rescheduled, mismatched, or unavailable state blocks persistence.
+
+A missing bookmaker `lastUpdate` is accepted only when the enclosing fetch and
+both NHL pre/post checks satisfy every pregame guard. Such rows explicitly store
+`lastUpdate: null`, `lastUpdateMissing: true`, and a `safetyReason`. If NHL moves
+the scheduled time, its timestamp becomes part of new checkpoint and closing
+keys, preserving the previous history separately. If actual puck drop is late
+but the schedule is unchanged, capture still stops at T-5; the system never
+crosses scheduled start to chase a newer price.
+
+The v2 closing document stores compact normalized data only: game/season/type,
+teams, provider and `h2h` market, scheduled start, selected sets, change-driven
+observations, durable latest-safe rows, immutable bookmaker FINALs, and derived
+best sides. Bookmaker rows retain key, both decimal prices, provider
+`lastUpdate`, provider event/commence metadata where safety requires it, and the
+provider fetch/observation time. Indexes cover the unique game/start closing
+identity, game plus scheduled start, finalization plus scheduled start, and
+bookmaker FINAL retrieval. The separate collection makes a redundant constant
+"observation type" index unnecessary.
+
+Existing schemaVersion 1 `OddsSnapshot` documents, including legacy `FINAL`
+rows with first-success-in-window semantics, remain readable and untouched.
+They are not reinterpreted as bookmaker-level v2 closing prices. New long-term
+checkpoints are schemaVersion 2; new bookmaker closing data lives only in the
+v2 closing collection. No destructive migration is required.
+
+`OddsCaptureRun` stores only bounded operational counts, checkpoint outcomes,
+reason counts, and quota summaries. No odds collection stores raw provider JSON,
+request URLs, API keys, bookmaker titles, or user preferences.
 
 Every actual The Odds API request made by the production market-odds service is
 recorded in the global `odds_quota_ledgers` collection. Cache hits, in-flight
@@ -349,14 +403,28 @@ Dashboard requests remain available and are labeled `MANUAL`. Scheduled calls
 are `AUTOMATIC`, except the single controlled request permitted when quota is
 unknown, which is labeled `CONTROLLED_PROBE`.
 
-The automatic policy uses repository-owned constants: a 150-credit soft target,
-180-credit hard ceiling, 100-credit remaining floor, and six successful
-automatic requests per UTC day. Above 200 remaining credits the normal cadence
-is enabled. From 101 through 200, and after the soft target, only `FINAL` work
-is allowed. At 100 or below automatic capture is disabled. When remaining quota
-is unknown, at most one actual controlled request is allowed in the current
+The automatic policy uses repository-owned constants: a 400-credit monthly soft
+target, 450-credit hard ceiling, 100-credit remaining floor, and 24 successful
+automatic requests per UTC day for full cadence. Above 200 remaining credits
+and below the soft/daily targets, T24/T6/T2 and closing work are enabled. At 200
+or fewer remaining credits, after 400 automatic credits in the billing month,
+or after 24 successful automatic requests that UTC day, only closing work is
+allowed. The daily limit intentionally does not block later closing games; one
+missing game can retry only in its finite, at-most-six-tick closing window. The hard
+ceiling and remaining floor still block every provider call. When quota is
+unknown, at most one actual controlled request is allowed in the current
 billing window. Missing request-cost headers debit one credit conservatively
-for budgeting, while the authoritative `lastRequestCost` remains null.
+for budgeting, while authoritative `lastRequestCost` remains null.
+
+For request planning, games at one common start time cost at most six closing
+requests plus one healthy first-success request for each of T24, T6, and T2:
+at most nine requests across the lifecycle of that start cohort. Two fully
+separate start cohorts are approximately 18 and three are approximately 27;
+overlapping closing windows, shared checkpoint targets, a late T-5 process
+start, and existing snapshots reduce that count. A day with no due work makes
+zero provider requests. These are request counts, not assumed credit costs;
+actual provider headers remain authoritative and the retry schedules above are
+the additional failure-path bounds.
 
 The Odds API does not currently expose a reset timestamp in its documented
 quota headers. The deterministic fallback billing window is therefore the UTC
@@ -389,9 +457,9 @@ handled provider-failure outcomes exit successfully; configuration, database,
 or other unhandled failures exit nonzero. No interval, application startup
 hook, public trigger route, or authentication bypass is included.
 
-Phase 2 intentionally has no market consensus, de-vig, historical/opening
-odds, line movement, live updates, spreads, totals, props, polling, WebSockets,
-or automatic bet placement.
+The current subsystem stores source history for later line-movement and CLV
+analysis, but does not yet derive market consensus or de-vig values and does not
+provide live updates, spreads, totals, props, WebSockets, or automatic betting.
 
 Public NHL data routes:
 

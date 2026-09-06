@@ -17,6 +17,9 @@ const {
 } = require('../services/oddsSnapshotRepository')
 const { createOddsCheckpoint } = require('../services/oddsSnapshotContracts')
 const {
+  buildClosingWorkKey,
+} = require('../services/oddsClosingMarketContracts')
+const {
   makeBookmakers,
 } = require('./fixtures/oddsSnapshotFixtures')
 
@@ -37,6 +40,25 @@ const makeCheckpoint = (overrides = {}) => {
     seasonId: '20262027',
     snapshotType,
     ...createOddsCheckpoint({ scheduledStart, snapshotType }),
+    ...overrides,
+  }
+}
+
+const makeClosingGame = (overrides = {}) => {
+  const scheduledStart = overrides.scheduledStart ?? START
+  const gameId = overrides.gameId ?? '2026020001'
+
+  return {
+    awayTeamId: 'MTL',
+    checkpointKey: buildClosingWorkKey({ gameId, scheduledStart }),
+    gameId,
+    gameType: 2,
+    homeTeamId: 'TOR',
+    scheduledStart,
+    seasonId: '20262027',
+    selectedBookmakerKeys: ['coolbet', 'pinnacle'],
+    snapshotType: 'CLOSING',
+    targetAt: new Date(Date.parse(scheduledStart) - 10 * 60 * 1000),
     ...overrides,
   }
 }
@@ -216,6 +238,7 @@ const createClock = (values) => {
 
 const createHarness = ({
   canSpendCredit = async () => ({ allowed: true }),
+  closingRepository,
   games = [makeGame()],
   now = T2_CAPTURED_AT,
   providerData = makeProviderData(),
@@ -233,9 +256,20 @@ const createHarness = ({
     now: createClock(Array.isArray(now) ? now[now.length - 1] : now),
   })
   const calls = { provider: 0, schedule: 0, scheduleRecheck: 0 }
+  const closingRecords = []
+  const effectiveClosingRepository = closingRepository ?? {
+    async finalizeClosingMarket() {
+      return { status: 'NO_OBSERVATIONS' }
+    },
+    async recordObservation(candidate) {
+      closingRecords.push(structuredClone(candidate))
+      return { observationStored: true, status: 'CREATED' }
+    },
+  }
   const engine = createOddsCaptureEngine({
     canSpendCredit,
     captureRunService,
+    closingRepository: effectiveClosingRepository,
     fetchOdds: async (request) => {
       calls.provider += 1
       calls.providerRequest = request
@@ -270,6 +304,7 @@ const createHarness = ({
 
   return {
     calls,
+    closingRecords,
     captureRunModel,
     engine,
     snapshotModel,
@@ -320,6 +355,11 @@ test('happy path captures multiple checkpoints with one shared provider request'
   assert.equal(result.actualCreditCost, 1)
   assert.equal(harness.calls.provider, 1)
   assert.equal(snapshots.length, 2)
+  assert.equal(snapshots.every(({ schemaVersion }) => schemaVersion === 2), true)
+  assert.equal(
+    snapshots.every(({ selectedBookmakerKeys }) => selectedBookmakerKeys.length === 9),
+    true,
+  )
   assert.equal(snapshots.every(({ bookmakers }) => bookmakers.length === 9), true)
   assert.equal(
     snapshots.every(
@@ -969,4 +1009,122 @@ test('quota normalization never fabricates zero values or epoch timestamps', () 
     }),
     null,
   )
+})
+
+test('CLOSING work records safe selected-bookmaker observations instead of legacy FINAL snapshots', async () => {
+  const rows = makeSafeBookmakers(FINAL_CAPTURED_AT).filter(({ key }) =>
+    ['coolbet', 'pinnacle'].includes(key),
+  )
+  rows.find(({ key }) => key === 'coolbet').lastUpdate = null
+  const harness = createHarness({
+    now: FINAL_CAPTURED_AT,
+    providerData: makeProviderData({
+      capturedAt: FINAL_CAPTURED_AT,
+      events: [
+        makeEvent({
+          bookmakers: rows,
+          capturedAt: FINAL_CAPTURED_AT,
+        }),
+      ],
+    }),
+  })
+  const result = await harness.engine.executeOddsCapture({
+    checkpoints: [],
+    closingGames: [makeClosingGame()],
+    intendedAt: FINAL_CAPTURED_AT,
+    triggerSource: 'TEST',
+  })
+
+  assert.equal(result.status, 'COMPLETED')
+  assert.equal(result.insertedCount, 1)
+  assert.equal(harness.snapshotModel.documents.size, 0)
+  assert.equal(harness.closingRecords.length, 1)
+  assert.deepEqual(
+    harness.closingRecords[0].bookmakers.map(({ key }) => key).sort(),
+    ['coolbet', 'pinnacle'],
+  )
+  assert.equal(
+    harness.calls.providerRequest.bookmakerKeys.includes('veikkaus_fi'),
+    false,
+  )
+})
+
+test('CLOSING work is rejected when the NHL post-fetch recheck reports LIVE', async () => {
+  const harness = createHarness({
+    now: FINAL_CAPTURED_AT,
+    providerData: makeProviderData({
+      capturedAt: FINAL_CAPTURED_AT,
+      events: [makeEvent({ capturedAt: FINAL_CAPTURED_AT })],
+    }),
+    recheckedGames: [makeGame({ gameState: 'LIVE', status: 'Live' })],
+  })
+  const result = await harness.engine.executeOddsCapture({
+    closingGames: [makeClosingGame()],
+    intendedAt: FINAL_CAPTURED_AT,
+    triggerSource: 'TEST',
+  })
+
+  assert.equal(result.insertedCount, 0)
+  assert.equal(result.reasonCounts.game_started, 1)
+  assert.equal(harness.closingRecords.length, 0)
+})
+
+test('CLOSING provider commence cutoff prevents live-leakage candidates', async () => {
+  const harness = createHarness({
+    now: '2026-10-08T18:54:00.000Z',
+    providerData: makeProviderData({
+      capturedAt: '2026-10-08T18:54:00.000Z',
+      events: [
+        makeEvent({
+          capturedAt: '2026-10-08T18:54:00.000Z',
+          commenceTime: '2026-10-08T18:58:00.000Z',
+        }),
+      ],
+    }),
+  })
+  const result = await harness.engine.executeOddsCapture({
+    closingGames: [makeClosingGame()],
+    intendedAt: '2026-10-08T18:54:00.000Z',
+    triggerSource: 'TEST',
+  })
+
+  assert.equal(result.insertedCount, 0)
+  assert.equal(result.reasonCounts.final_leakage_cutoff, 1)
+  assert.equal(harness.closingRecords.length, 0)
+})
+
+test('one closing finalization failure does not block other games', async () => {
+  const calls = []
+  const harness = createHarness({
+    closingRepository: {
+      async finalizeClosingMarket({ gameId }) {
+        calls.push(gameId)
+        if (gameId === '2026020001') throw new Error('isolated write failure')
+        return { status: 'FINALIZED' }
+      },
+      async recordObservation() {
+        throw new Error('not used')
+      },
+    },
+  })
+  const result = await harness.engine.finalizeClosingMarkets({
+    games: [
+      {
+        finalizationReason: 'CLOSING_WINDOW_ENDED',
+        gameId: '2026020001',
+        scheduledStart: START,
+      },
+      {
+        finalizationReason: 'CLOSING_WINDOW_ENDED',
+        gameId: '2026020002',
+        scheduledStart: START,
+      },
+    ],
+    observedAt: FINAL_CAPTURED_AT,
+    selectedBookmakerKeys: ['coolbet'],
+  })
+
+  assert.deepEqual(calls, ['2026020001', '2026020002'])
+  assert.equal(result.failedCount, 1)
+  assert.equal(result.finalizedCount, 1)
 })

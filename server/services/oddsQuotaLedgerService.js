@@ -6,10 +6,10 @@ const {
   ODDS_SNAPSHOT_PROVIDER,
 } = require('./oddsSnapshotContracts')
 
-const AUTOMATIC_CREDIT_TARGET = 150
-const AUTOMATIC_CREDIT_HARD_CEILING = 180
+const AUTOMATIC_CREDIT_TARGET = 400
+const AUTOMATIC_CREDIT_HARD_CEILING = 450
 const AUTOMATIC_REMAINING_FLOOR = 100
-const AUTOMATIC_DAILY_SUCCESS_LIMIT = 6
+const AUTOMATIC_DAILY_SUCCESS_LIMIT = 24
 const UNKNOWN_QUOTA_PROBE_LIMIT = 1
 
 const AUTOMATIC_POLICY_MODES = Object.freeze({
@@ -264,7 +264,9 @@ const createOddsQuotaLedgerService = ({
     const remaining = toNonNegativeNumber(ledger.remaining)
     const checkpointTypes = (Array.isArray(checkpoints) ? checkpoints : [])
       .map(({ snapshotType }) => String(snapshotType ?? '').toUpperCase())
-    const hasNonFinal = checkpointTypes.some((type) => type !== 'FINAL')
+    const hasNonFinal = checkpointTypes.some(
+      (type) => !['CLOSING', 'FINAL'].includes(type),
+    )
     const base = {
       automaticCreditSpend,
       dailyAutomaticSuccessfulRequestCount: dailySuccessCount,
@@ -289,11 +291,11 @@ const createOddsQuotaLedgerService = ({
       }
     }
 
-    if (dailySuccessCount >= AUTOMATIC_DAILY_SUCCESS_LIMIT) {
+    if (dailySuccessCount >= AUTOMATIC_DAILY_SUCCESS_LIMIT && hasNonFinal) {
       return {
         ...base,
         allowed: false,
-        mode: AUTOMATIC_POLICY_MODES.DISABLED,
+        mode: AUTOMATIC_POLICY_MODES.FINAL_ONLY,
         reason: 'automatic_daily_limit',
       }
     }
@@ -326,7 +328,9 @@ const createOddsQuotaLedgerService = ({
     }
 
     const finalOnly =
-      remaining <= 200 || automaticCreditSpend >= AUTOMATIC_CREDIT_TARGET
+      dailySuccessCount >= AUTOMATIC_DAILY_SUCCESS_LIMIT ||
+      remaining <= 200 ||
+      automaticCreditSpend >= AUTOMATIC_CREDIT_TARGET
 
     if (finalOnly && hasNonFinal) {
       return {

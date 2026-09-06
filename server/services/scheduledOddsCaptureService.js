@@ -57,9 +57,16 @@ const createScheduledOddsCaptureService = ({
       const plan = await planner.planDueCheckpoints({ observedAt })
       const runResults = []
 
-      for (const checkpoints of plan.groups) {
+      for (const workGroup of plan.groups) {
+        const checkpoints = workGroup.filter(
+          ({ snapshotType }) => snapshotType !== 'CLOSING',
+        )
+        const closingGames = workGroup.filter(
+          ({ snapshotType }) => snapshotType === 'CLOSING',
+        )
         const result = await captureEngine.executeOddsCapture({
           checkpoints,
+          closingGames,
           intendedAt,
           triggerSource: 'SCHEDULED',
         })
@@ -70,6 +77,13 @@ const createScheduledOddsCaptureService = ({
           break
         }
       }
+      const finalizationResult = captureEngine.finalizeClosingMarkets
+        ? await captureEngine.finalizeClosingMarkets({
+            games: plan.finalizations ?? [],
+            observedAt: normalizeDate(now(), 'clock'),
+            selectedBookmakerKeys: plan.selectedBookmakerKeys ?? [],
+          })
+        : { failedCount: 0, finalizedCount: 0, results: [] }
 
       const providerRequestCount = runResults.reduce(
         (count, result) => count + (Number(result.providerRequestCount) || 0),
@@ -93,7 +107,9 @@ const createScheduledOddsCaptureService = ({
       const quotaBlocked = runResults.some(
         ({ status }) => status === 'QUOTA_BLOCKED',
       )
-      const failed = runResults.some(({ status }) => status === 'FAILED')
+      const failed =
+        runResults.some(({ status }) => status === 'FAILED') ||
+        Number(finalizationResult.failedCount) > 0
       const outcome = quotaBlocked
         ? 'QUOTA_BLOCKED'
         : failed
@@ -107,6 +123,9 @@ const createScheduledOddsCaptureService = ({
         dailyAutomaticSuccessfulRequestCount:
           plan.policy.dailyAutomaticSuccessfulRequestCount ?? null,
         dueCheckpointCount: plan.dueCheckpointCount,
+        failedClosingMarketFinalizationCount:
+          finalizationResult.failedCount ?? 0,
+        finalizedClosingMarketCount: finalizationResult.finalizedCount,
         intendedAt: intendedAt.toISOString(),
         leaseRecovered: leaseResult.recovered,
         outcome,

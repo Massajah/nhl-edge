@@ -66,7 +66,7 @@ const checkpointResultSchema = new mongoose.Schema(
     },
     snapshotType: {
       type: String,
-      enum: ODDS_SNAPSHOT_TYPE_VALUES,
+      enum: [...ODDS_SNAPSHOT_TYPE_VALUES, 'CLOSING'],
       required: true,
     },
     status: {

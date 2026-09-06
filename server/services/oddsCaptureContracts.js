@@ -10,6 +10,10 @@ const {
   normalizeSnapshotType,
   parseValidDate,
 } = require('./oddsSnapshotContracts')
+const { REQUESTED_BOOKMAKERS } = require('../config/marketOdds')
+const {
+  normalizeSelectedBookmakerKeys,
+} = require('./oddsClosingMarketContracts')
 
 const MINUTE_MS = 60 * 1000
 const HOUR_MS = 60 * MINUTE_MS
@@ -19,15 +23,15 @@ const MAX_CAPTURE_CHECKPOINTS = MAX_CHECKPOINT_RESULTS
 
 const CHECKPOINT_ACCEPTANCE_WINDOWS_MS = Object.freeze({
   T24: Object.freeze({
-    maximumBeforeStartMs: 30 * HOUR_MS,
+    maximumBeforeStartMs: 24 * HOUR_MS,
     minimumBeforeStartMs: 18 * HOUR_MS,
   }),
   T6: Object.freeze({
-    maximumBeforeStartMs: 8 * HOUR_MS,
+    maximumBeforeStartMs: 6 * HOUR_MS,
     minimumBeforeStartMs: 4 * HOUR_MS,
   }),
   T2: Object.freeze({
-    maximumBeforeStartMs: 165 * MINUTE_MS,
+    maximumBeforeStartMs: 2 * HOUR_MS,
     minimumBeforeStartMs: 75 * MINUTE_MS,
   }),
   FINAL: Object.freeze({
@@ -37,6 +41,7 @@ const CHECKPOINT_ACCEPTANCE_WINDOWS_MS = Object.freeze({
 })
 
 const MAX_PROVIDER_RESPONSE_AGE_MS = Object.freeze({
+  CLOSING: 10 * MINUTE_MS,
   T24: 60 * MINUTE_MS,
   T6: 30 * MINUTE_MS,
   T2: 20 * MINUTE_MS,
@@ -146,6 +151,18 @@ const normalizeCheckpoint = (checkpoint, index = 0) => {
     )
   }
 
+  const selectedBookmakerKeys = normalizeSelectedBookmakerKeys(
+    checkpoint.selectedBookmakerKeys ??
+      REQUESTED_BOOKMAKERS.map(({ key }) => key),
+  )
+
+  if (selectedBookmakerKeys.length === 0) {
+    throw new OddsCaptureInputError(
+      'At least one supported selected bookmaker is required.',
+      { code: 'invalid_selected_bookmakers', index },
+    )
+  }
+
   return {
     awayTeamId,
     checkpointKey,
@@ -155,6 +172,7 @@ const normalizeCheckpoint = (checkpoint, index = 0) => {
     provider: ODDS_SNAPSHOT_PROVIDER,
     scheduledStart,
     seasonId,
+    selectedBookmakerKeys,
     snapshotType,
     targetAt,
   }

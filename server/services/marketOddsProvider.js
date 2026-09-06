@@ -409,6 +409,7 @@ const createMarketOddsProvider = ({
   now = () => new Date(),
 } = {}) => {
   const fetchNhlMoneylineOdds = async ({
+    bookmakerKeys,
     commenceTimeFrom,
     commenceTimeTo,
   } = {}) => {
@@ -427,10 +428,30 @@ const createMarketOddsProvider = ({
       `/v4/sports/${encodeURIComponent(config.sport)}/odds`,
       config.baseUrl,
     )
+    const supportedBookmakerKeys = new Set(
+      config.bookmakers.map(({ key }) => key),
+    )
+    const requestedBookmakerKeys = [
+      ...new Set(
+        (Array.isArray(bookmakerKeys) ? bookmakerKeys : config.bookmakers.map(({ key }) => key))
+          .map((key) => String(key ?? '').trim())
+          .filter((key) => supportedBookmakerKeys.has(key)),
+      ),
+    ]
+
+    if (requestedBookmakerKeys.length === 0) {
+      return {
+        events: [],
+        providerFetchedAt: null,
+        quota: null,
+        status: 'no_events',
+      }
+    }
+
     url.searchParams.set('apiKey', config.apiKey)
     url.searchParams.set(
       'bookmakers',
-      config.bookmakers.map(({ key }) => key).join(','),
+      requestedBookmakerKeys.join(','),
     )
     url.searchParams.set('markets', config.market)
     url.searchParams.set('oddsFormat', config.oddsFormat)

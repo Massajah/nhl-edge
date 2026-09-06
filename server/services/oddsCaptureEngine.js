@@ -6,6 +6,7 @@ const {
 } = require('./oddsSnapshotContracts')
 const {
   MAX_PROVIDER_RESPONSE_AGE_MS,
+  OddsCaptureInputError,
   buildCaptureProviderWindow,
   buildOddsCaptureRunIdentity,
   getCheckpointIdentity,
@@ -23,6 +24,15 @@ const {
   STRICT_MATCH_STATUSES,
   matchOddsEventsToNhlGames,
 } = require('./strictMarketOddsMatcher')
+const {
+  CLOSING_OBSERVATION_TYPE,
+  buildClosingWorkKey,
+  isWithinClosingObservationWindow,
+  normalizeSelectedBookmakerKeys,
+} = require('./oddsClosingMarketContracts')
+const {
+  oddsClosingMarketRepository,
+} = require('./oddsClosingMarketRepository')
 
 const STARTED_GAME_STATES = new Set(['CRIT', 'FINAL', 'LIVE', 'OFF', 'POST'])
 const supportedBookmakerKeys = new Set(OddsSnapshot.SUPPORTED_BOOKMAKER_KEYS)
@@ -84,6 +94,40 @@ const toCheckpointResult = (checkpoint, status, reason = '') => ({
   snapshotType: checkpoint.snapshotType,
   status,
 })
+
+const normalizeClosingGame = (work, index = 0) => {
+  const scheduledStart = normalizeDate(work?.scheduledStart)
+  const expectedKey = scheduledStart
+    ? buildClosingWorkKey({ gameId: work?.gameId, scheduledStart })
+    : ''
+
+  if (
+    !work ||
+    typeof work !== 'object' ||
+    Array.isArray(work) ||
+    work.snapshotType !== CLOSING_OBSERVATION_TYPE ||
+    work.checkpointKey !== expectedKey
+  ) {
+    throw new OddsCaptureInputError('Invalid closing observation work.', {
+      code: 'invalid_closing_work',
+      index,
+    })
+  }
+
+  const legacyShape = {
+    ...work,
+    checkpointKey: `FINAL:${scheduledStart.getTime()}`,
+    snapshotType: 'FINAL',
+    targetAt: new Date(scheduledStart.getTime() - 10 * 60 * 1000),
+  }
+  const normalized = validateCheckpointBatch([legacyShape])[0]
+
+  return {
+    ...normalized,
+    checkpointKey: expectedKey,
+    snapshotType: CLOSING_OBSERVATION_TYPE,
+  }
+}
 
 const getGameId = (game) => String(game?.gameId ?? game?.id ?? '').trim()
 
@@ -242,9 +286,15 @@ const filterBookmakerRows = ({
   bookmakers,
   capturedAt,
   finalSafeCutoff,
+  selectedBookmakerKeys,
   snapshotType,
 }) => {
   const rows = Array.isArray(bookmakers) ? bookmakers : []
+  const selected = new Set(
+    normalizeSelectedBookmakerKeys(
+      selectedBookmakerKeys ?? [...supportedBookmakerKeys],
+    ),
+  )
   const keyCounts = rows.reduce((counts, row) => {
     const key = String(row?.key ?? row?.bookmakerKey ?? '').trim()
 
@@ -264,6 +314,7 @@ const filterBookmakerRows = ({
 
     if (
       !supportedBookmakerKeys.has(key) ||
+      !selected.has(key) ||
       keyCounts.get(key) !== 1 ||
       !Number.isFinite(homeOdds) ||
       homeOdds <= 1 ||
@@ -327,6 +378,7 @@ const buildSnapshotCandidate = ({ checkpoint, event, runId }) => {
     bookmakers: event.bookmakers,
     capturedAt,
     finalSafeCutoff,
+    selectedBookmakerKeys: checkpoint.selectedBookmakerKeys,
     snapshotType: checkpoint.snapshotType,
   })
 
@@ -353,10 +405,61 @@ const buildSnapshotCandidate = ({ checkpoint, event, runId }) => {
       providerCommenceTime,
       providerEventId: event.providerEventId,
       scheduledStartAtCapture: checkpoint.scheduledStart,
-      schemaVersion: 1,
+      schemaVersion: checkpoint.snapshotType === 'FINAL' ? 1 : 2,
+      ...(checkpoint.snapshotType === 'FINAL'
+        ? {}
+        : { selectedBookmakerKeys: checkpoint.selectedBookmakerKeys }),
       seasonId: checkpoint.seasonId,
       snapshotType: checkpoint.snapshotType,
       targetAt: checkpoint.targetAt,
+    },
+    reason: filtered.rejectedCount > 0 ? 'bookmaker_rows_filtered' : '',
+    rejectedBookmakerRows: filtered.rejectedCount,
+  }
+}
+
+const buildClosingObservationCandidate = ({ checkpoint, event }) => {
+  const capturedAt = normalizeDate(event?.providerFetchedAt)
+  const providerCommenceTime = normalizeDate(event?.commenceTime)
+
+  if (!capturedAt || !providerCommenceTime) {
+    return { candidate: null, reason: 'invalid_provider_timestamp' }
+  }
+
+  const finalSafeCutoff = getFinalSafeCutoff(
+    checkpoint.scheduledStart,
+    providerCommenceTime,
+  )
+
+  if (
+    capturedAt.getTime() <
+      checkpoint.scheduledStart.getTime() - 30 * 60 * 1000 ||
+    capturedAt.getTime() > finalSafeCutoff.getTime()
+  ) {
+    return { candidate: null, reason: 'final_leakage_cutoff' }
+  }
+
+  const filtered = filterBookmakerRows({
+    bookmakers: event.bookmakers,
+    capturedAt,
+    finalSafeCutoff,
+    selectedBookmakerKeys: checkpoint.selectedBookmakerKeys,
+    snapshotType: 'FINAL',
+  })
+
+  return {
+    candidate: {
+      awayTeamId: checkpoint.awayTeamId,
+      bookmakers: filtered.bookmakers,
+      capturedAt,
+      gameId: checkpoint.gameId,
+      gameType: checkpoint.gameType,
+      homeTeamId: checkpoint.homeTeamId,
+      providerCommenceTime,
+      providerEventId: event.providerEventId,
+      scheduledStartAtCapture: checkpoint.scheduledStart,
+      seasonId: checkpoint.seasonId,
+      selectedBookmakerKeys: checkpoint.selectedBookmakerKeys,
     },
     reason: filtered.rejectedCount > 0 ? 'bookmaker_rows_filtered' : '',
     rejectedBookmakerRows: filtered.rejectedCount,
@@ -407,6 +510,7 @@ const isDuplicateKeyError = (error) => Number(error?.code) === 11000
 const createOddsCaptureEngine = ({
   canSpendCredit = defaultCanSpendCredit,
   captureRunService = oddsCaptureRunService,
+  closingRepository = oddsClosingMarketRepository,
   fetchOdds = (request) => marketOddsService.getNhlOddsCaptureData(request),
   getProviderStatus = () => marketOddsService.getStatus(),
   loadSchedule = loadScheduleGames,
@@ -417,6 +521,7 @@ const createOddsCaptureEngine = ({
 } = {}) => {
   const executeOddsCapture = async ({
     checkpoints = [],
+    closingGames = [],
     intendedAt,
     triggerSource,
   } = {}) => {
@@ -427,16 +532,22 @@ const createOddsCaptureEngine = ({
     }
 
     let normalizedCheckpoints
+    let normalizedClosingGames
     let validationError
 
     try {
       normalizedCheckpoints = validateCheckpointBatch(checkpoints)
+      normalizedClosingGames = closingGames.map(normalizeClosingGame)
     } catch (error) {
       validationError = error
     }
+    const normalizedWork =
+      normalizedCheckpoints && normalizedClosingGames
+        ? [...normalizedCheckpoints, ...normalizedClosingGames]
+        : null
 
     const identity = buildOddsCaptureRunIdentity({
-      checkpoints: normalizedCheckpoints ?? checkpoints,
+      checkpoints: normalizedWork ?? [...checkpoints, ...closingGames],
       intendedAt: intendedAt ?? startedAt,
       triggerSource,
     })
@@ -491,8 +602,8 @@ const createOddsCaptureEngine = ({
     let forcePartial = false
 
     const complete = async (status, extraReasonCounts = {}) => {
-      const checkpointResults = normalizedCheckpoints
-        ? normalizedCheckpoints
+      const checkpointResults = normalizedWork
+        ? normalizedWork
             .map((checkpoint) => resultsByIdentity.get(getCheckpointIdentity(checkpoint)))
             .filter(Boolean)
         : []
@@ -509,7 +620,7 @@ const createOddsCaptureEngine = ({
           actualCreditCost,
           checkpointResults,
           eventsReceived,
-          gamesConsidered: Array.isArray(checkpoints) ? checkpoints.length : 0,
+          gamesConsidered: normalizedWork?.length ?? 0,
           gamesMatched,
           gamesSkipped,
           providerRequestCount,
@@ -550,7 +661,7 @@ const createOddsCaptureEngine = ({
       return complete('FAILED', validationReasonCounts)
     }
 
-    if (normalizedCheckpoints.length === 0) {
+    if (normalizedWork.length === 0) {
       return complete('COMPLETED')
     }
 
@@ -578,8 +689,14 @@ const createOddsCaptureEngine = ({
       )
       return false
     })
+    notPersisted.push(...normalizedClosingGames)
     const withinWindow = notPersisted.filter((checkpoint) => {
-      if (isCheckpointWithinAcceptanceWindow(checkpoint, startedAt)) {
+      const within =
+        checkpoint.snapshotType === CLOSING_OBSERVATION_TYPE
+          ? isWithinClosingObservationWindow(checkpoint.scheduledStart, startedAt)
+          : isCheckpointWithinAcceptanceWindow(checkpoint, startedAt)
+
+      if (within) {
         return true
       }
 
@@ -668,8 +785,14 @@ const createOddsCaptureEngine = ({
     let providerData
 
     try {
+      const bookmakerKeys = normalizeSelectedBookmakerKeys(
+        eligible.flatMap(({ selectedBookmakerKeys = [] }) =>
+          selectedBookmakerKeys,
+        ),
+      )
       providerData = await fetchOdds({
         ...buildCaptureProviderWindow(eligible),
+        bookmakerKeys,
         maximumProviderAgeMs,
         requestSource: quotaDecision.requestSource,
       })
@@ -702,8 +825,16 @@ const createOddsCaptureEngine = ({
       providerData.hasUsableData &&
       providerEvents.length > 0 &&
       capturedAt
+    const closingMarketUnavailableResponse =
+      eligible.some(
+        ({ snapshotType }) => snapshotType === CLOSING_OBSERVATION_TYPE,
+      ) &&
+      providerData.status === 'no_events' &&
+      providerEvents.length > 0 &&
+      capturedAt
     const providerReady =
       ['cached', 'ready'].includes(providerData.status) ||
+      closingMarketUnavailableResponse ||
       usableCacheFallback ||
       (providerData.source === 'provider' &&
         providerData.status === 'quota_exhausted' &&
@@ -736,7 +867,12 @@ const createOddsCaptureEngine = ({
 
     const providerReferenceAt = normalizeDate(now()) ?? startedAt
     const freshCheckpoints = eligible.filter((checkpoint) => {
-      if (!isCheckpointWithinAcceptanceWindow(checkpoint, capturedAt)) {
+      const capturedWithinWindow =
+        checkpoint.snapshotType === CLOSING_OBSERVATION_TYPE
+          ? isWithinClosingObservationWindow(checkpoint.scheduledStart, capturedAt)
+          : isCheckpointWithinAcceptanceWindow(checkpoint, capturedAt)
+
+      if (!capturedWithinWindow) {
         resultsByIdentity.set(
           getCheckpointIdentity(checkpoint),
           toCheckpointResult(
@@ -810,7 +946,9 @@ const createOddsCaptureEngine = ({
     const finalGameIds = [
       ...new Set(
         matchedCheckpoints
-          .filter(({ snapshotType }) => snapshotType === 'FINAL')
+          .filter(({ snapshotType }) =>
+            ['FINAL', CLOSING_OBSERVATION_TYPE].includes(snapshotType),
+          )
           .map(({ gameId }) => gameId),
       ),
     ]
@@ -832,7 +970,11 @@ const createOddsCaptureEngine = ({
     }
 
     const postChecked = matchedCheckpoints.filter((checkpoint) => {
-      if (checkpoint.snapshotType !== 'FINAL') {
+      if (
+        !['FINAL', CLOSING_OBSERVATION_TYPE].includes(
+          checkpoint.snapshotType,
+        )
+      ) {
         return true
       }
 
@@ -867,18 +1009,23 @@ const createOddsCaptureEngine = ({
       return false
     })
     const candidates = []
+    const closingCandidates = []
     const checkpointByCandidateIdentity = new Map()
 
     postChecked.forEach((checkpoint) => {
       const match = matchesByGameId.get(checkpoint.gameId)
-      const transformed = buildSnapshotCandidate({
-        checkpoint,
-        event: {
-          ...match.event,
-          providerFetchedAt: providerData.providerFetchedAt,
-        },
-        runId: startedRun.runId,
-      })
+      const event = {
+        ...match.event,
+        providerFetchedAt: providerData.providerFetchedAt,
+      }
+      const transformed =
+        checkpoint.snapshotType === CLOSING_OBSERVATION_TYPE
+          ? buildClosingObservationCandidate({ checkpoint, event })
+          : buildSnapshotCandidate({
+              checkpoint,
+              event,
+              runId: startedRun.runId,
+            })
 
       if (!transformed.candidate) {
         resultsByIdentity.set(
@@ -888,11 +1035,22 @@ const createOddsCaptureEngine = ({
         return
       }
 
-      candidates.push(transformed.candidate)
-      checkpointByCandidateIdentity.set(
-        getCheckpointIdentity(transformed.candidate),
-        { checkpoint, reason: transformed.reason },
-      )
+      const identityKey = getCheckpointIdentity(checkpoint)
+
+      if (checkpoint.snapshotType === CLOSING_OBSERVATION_TYPE) {
+        closingCandidates.push({
+          candidate: transformed.candidate,
+          checkpoint,
+          identityKey,
+          reason: transformed.reason,
+        })
+      } else {
+        candidates.push(transformed.candidate)
+        checkpointByCandidateIdentity.set(identityKey, {
+          checkpoint,
+          reason: transformed.reason,
+        })
+      }
     })
 
     if (candidates.length > 0) {
@@ -947,7 +1105,36 @@ const createOddsCaptureEngine = ({
       }
     }
 
-    const checkpointResults = normalizedCheckpoints
+    for (const closing of closingCandidates) {
+      try {
+        const outcome = await closingRepository.recordObservation(
+          closing.candidate,
+        )
+        const stored = outcome.observationStored
+
+        if (stored) insertedCount += 1
+        else existingCount += 1
+        resultsByIdentity.set(
+          closing.identityKey,
+          toCheckpointResult(
+            closing.checkpoint,
+            stored ? 'STORED' : 'EXISTING',
+            closing.reason,
+          ),
+        )
+      } catch {
+        resultsByIdentity.set(
+          closing.identityKey,
+          toCheckpointResult(
+            closing.checkpoint,
+            'FAILED',
+            'closing_persistence_failed',
+          ),
+        )
+      }
+    }
+
+    const checkpointResults = normalizedWork
       .map((checkpoint) => resultsByIdentity.get(getCheckpointIdentity(checkpoint)))
       .filter(Boolean)
     const satisfiedCount = checkpointResults.filter(({ status }) =>
@@ -967,7 +1154,46 @@ const createOddsCaptureEngine = ({
     return complete(status)
   }
 
-  return { executeOddsCapture }
+  const finalizeClosingMarkets = async ({
+    games = [],
+    observedAt = now(),
+    selectedBookmakerKeys = [],
+  } = {}) => {
+    const finalizedAt = normalizeDate(observedAt)
+
+    if (!finalizedAt) {
+      throw new TypeError('Closing finalization clock returned an invalid date.')
+    }
+
+    const results = []
+
+    for (const game of games) {
+      try {
+        const result = await closingRepository.finalizeClosingMarket({
+          gameId: game.gameId,
+          observedAt: finalizedAt,
+          reason:
+            game.finalizationReason === 'GAME_STARTED'
+              ? 'GAME_STARTED'
+              : 'CLOSING_WINDOW_ENDED',
+          scheduledStart: game.scheduledStart,
+          selectedBookmakerKeys,
+        })
+        results.push({ gameId: game.gameId, status: result.status })
+      } catch {
+        results.push({ gameId: game.gameId, status: 'FAILED' })
+      }
+    }
+
+    return {
+      failedCount: results.filter(({ status }) => status === 'FAILED').length,
+      finalizedCount: results.filter(({ status }) => status === 'FINALIZED')
+        .length,
+      results,
+    }
+  }
+
+  return { executeOddsCapture, finalizeClosingMarkets }
 }
 
 const oddsCaptureEngine = createOddsCaptureEngine({
@@ -977,6 +1203,7 @@ const oddsCaptureEngine = createOddsCaptureEngine({
 
 module.exports = {
   STARTED_GAME_STATES,
+  buildClosingObservationCandidate,
   buildSnapshotCandidate,
   createOddsCaptureEngine,
   defaultCanSpendCredit,

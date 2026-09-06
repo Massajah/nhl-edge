@@ -155,9 +155,19 @@ test('automatic policy enforces quota modes, target, ceiling, floor and daily ca
   const final = await service.getAutomaticPolicy({
     checkpoints: [{ snapshotType: 'FINAL' }],
   })
+  const closing = await service.getAutomaticPolicy({
+    checkpoints: [{ snapshotType: 'CLOSING' }],
+  })
   assert.equal(intermediate.allowed, false)
   assert.equal(intermediate.mode, 'FINAL_ONLY')
   assert.equal(final.allowed, true)
+  assert.equal(closing.allowed, true)
+
+  setQuota(model, {
+    dailyAutomaticSuccessfulRequestCount: 6,
+    remaining: 500,
+  })
+  assert.equal((await service.getAutomaticPolicy()).allowed, true)
 
   setQuota(model, { remaining: 100 })
   assert.equal((await service.getAutomaticPolicy()).reason, 'automatic_remaining_floor')
@@ -178,7 +188,17 @@ test('automatic policy enforces quota modes, target, ceiling, floor and daily ca
     automaticCreditSpend: 0,
     dailyAutomaticSuccessfulRequestCount: AUTOMATIC_DAILY_SUCCESS_LIMIT,
   })
-  assert.equal((await service.getAutomaticPolicy()).reason, 'automatic_daily_limit')
+  const dailyIntermediate = await service.getAutomaticPolicy({
+    checkpoints: [{ snapshotType: 'T24' }],
+  })
+  const dailyClosing = await service.getAutomaticPolicy({
+    checkpoints: [{ snapshotType: 'CLOSING' }],
+  })
+  assert.equal(dailyIntermediate.allowed, false)
+  assert.equal(dailyIntermediate.mode, 'FINAL_ONLY')
+  assert.equal(dailyIntermediate.reason, 'automatic_daily_limit')
+  assert.equal(dailyClosing.allowed, true)
+  assert.equal(dailyClosing.mode, 'FINAL_ONLY')
 })
 
 test('unknown quota allows one persistent controlled probe per UTC billing window', async () => {

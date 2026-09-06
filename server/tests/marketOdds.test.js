@@ -156,6 +156,28 @@ test('provider constructs the fixed NHL bookmaker h2h decimal request server-sid
   assert.equal(requestUrl.searchParams.get('commenceTimeTo'), window.commenceTimeTo)
 })
 
+test('scheduled capture requests selected bookmakers together in one provider call', async () => {
+  let requestUrl
+  let calls = 0
+  const provider = createMarketOddsProvider({
+    fetchImpl: async (url) => {
+      calls += 1
+      requestUrl = new URL(url)
+      return createResponse({ body: createProviderBody() })
+    },
+    getConfig: () => createConfig(),
+    now: () => new Date(NOW_ISO),
+  })
+
+  await provider.fetchNhlOdds({
+    ...buildCommenceTimeWindow('2026-08-03'),
+    bookmakerKeys: ['pinnacle', 'coolbet', 'unsupported'],
+  })
+
+  assert.equal(calls, 1)
+  assert.equal(requestUrl.searchParams.get('bookmakers'), 'pinnacle,coolbet')
+})
+
 test('requested bookmaker catalog is the verified nine-bookmaker sportsbook set', () => {
   assert.deepEqual(REQUESTED_BOOKMAKERS, [
     { key: 'veikkaus_fi', title: 'Veikkaus' },

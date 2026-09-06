@@ -48,10 +48,13 @@ const buildCommenceTimeWindow = (date) => {
   }
 }
 
-const getMarketOddsCacheKey = (config, window) =>
+const getMarketOddsCacheKey = (config, window, bookmakerKeys) =>
   [
     config.sport,
-    config.bookmakers.map(({ key }) => key).join(','),
+    (Array.isArray(bookmakerKeys)
+      ? [...bookmakerKeys].sort()
+      : config.bookmakers.map(({ key }) => key)
+    ).join(','),
     config.market,
     config.oddsFormat,
     window.commenceTimeFrom,
@@ -255,6 +258,7 @@ const createMarketOddsService = ({
   }
 
   const getProviderData = async ({
+    bookmakerKeys,
     config,
     key,
     refresh,
@@ -361,7 +365,7 @@ const createMarketOddsService = ({
       }
     }
     const request = Promise.resolve()
-      .then(() => fetchProviderOdds.call(provider, window))
+      .then(() => fetchProviderOdds.call(provider, { ...window, bookmakerKeys }))
       .then(async (result) => {
         await recordActualRequest({ quota: result.quota, successful: true })
         const availableBookmakers = collectAvailableBookmakers(result.events)
@@ -469,6 +473,7 @@ const createMarketOddsService = ({
   }
 
   const getNhlOddsCaptureData = async ({
+    bookmakerKeys,
     commenceTimeFrom,
     commenceTimeTo,
     maximumProviderAgeMs,
@@ -510,7 +515,7 @@ const createMarketOddsService = ({
     }
 
     const window = { commenceTimeFrom, commenceTimeTo }
-    const key = getMarketOddsCacheKey(config, window)
+    const key = getMarketOddsCacheKey(config, window, bookmakerKeys)
     const cached = cache.get(key)
     const cachedFetchedAtMs = Date.parse(cached?.data?.providerFetchedAt)
     const cachedAgeMs = now() - cachedFetchedAtMs
@@ -522,6 +527,7 @@ const createMarketOddsService = ({
     )
     const providerData = await getProviderData({
       config,
+      bookmakerKeys,
       key,
       refresh: cachedTooOld,
       requestSource,

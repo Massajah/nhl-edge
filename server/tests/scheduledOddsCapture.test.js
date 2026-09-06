@@ -295,3 +295,56 @@ test('cron entrypoint fails closed before connecting when required server variab
   )
   assert.equal(connected, false)
 })
+
+test('failed closing fetch still finalizes from durable prior observations', async () => {
+  const leaseService = makeLeaseService()
+  const calls = { execute: [], finalize: [] }
+  const service = createScheduledOddsCaptureService({
+    captureEngine: {
+      async executeOddsCapture(request) {
+        calls.execute.push(request)
+        return {
+          actualCreditCost: 1,
+          insertedCount: 0,
+          providerRequestCount: 1,
+          status: 'FAILED',
+        }
+      },
+      async finalizeClosingMarkets(request) {
+        calls.finalize.push(request)
+        return { finalizedCount: 1, results: [{ gameId: '2026020001', status: 'FINALIZED' }] }
+      },
+    },
+    captureRunService: { async recoverStaleStartedRuns() { return 0 } },
+    leaseService,
+    logger: { info() {} },
+    now: () => NOW,
+    planner: {
+      async planDueCheckpoints() {
+        return {
+          dueCheckpointCount: 1,
+          finalizations: [
+            {
+              finalizationReason: 'CLOSING_WINDOW_ENDED',
+              gameId: '2026020001',
+              scheduledStart: new Date('2026-10-08T18:45:00.000Z'),
+            },
+          ],
+          groups: [[{ gameId: '2026020001', snapshotType: 'CLOSING' }]],
+          policy: { mode: 'FULL' },
+          reasonCounts: {},
+          scheduleFailureCount: 0,
+          selectedBookmakerKeys: ['coolbet'],
+          status: 'READY',
+        }
+      },
+    },
+  })
+  const result = await service.runScheduledCapture()
+
+  assert.equal(result.outcome, 'HANDLED_CAPTURE_FAILURE')
+  assert.equal(result.finalizedClosingMarketCount, 1)
+  assert.equal(calls.execute[0].closingGames.length, 1)
+  assert.equal(calls.execute[0].checkpoints.length, 0)
+  assert.equal(calls.finalize.length, 1)
+})

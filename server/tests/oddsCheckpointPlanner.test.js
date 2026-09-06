@@ -4,6 +4,9 @@ const assert = require('node:assert/strict')
 const test = require('node:test')
 const {
   CHECKPOINT_ACCEPTANCE_WINDOWS_MS,
+  LONG_TERM_RETRY_INTERVALS_MS,
+  LONG_TERM_SNAPSHOT_TYPES,
+  buildClosingWork,
   buildDueCheckpoints,
   createOddsCheckpointPlanner,
   getPlanningScheduleDates,
@@ -45,6 +48,7 @@ const makePlanner = ({
   games = [],
   policy = makePolicy(),
   scheduleProvider,
+  selectedBookmakerKeys = ['coolbet', 'pinnacle'],
 } = {}) => {
   const calls = []
   const planner = createOddsCheckpointPlanner({
@@ -56,6 +60,7 @@ const makePlanner = ({
         ? scheduleProvider(date)
         : { date, games: structuredClone(games) }
     },
+    getSelectedBookmakerKeys: async () => selectedBookmakerKeys,
     snapshotRepository: {
       async findExistingCheckpoints(checkpoints) {
         return new Set(
@@ -90,9 +95,8 @@ test('every checkpoint planning window is inclusive at its exact boundaries', ()
   const start = new Date('2026-10-10T20:00:00.000Z')
   const game = makeGame({ scheduledStart: start.toISOString() })
 
-  for (const [snapshotType, window] of Object.entries(
-    CHECKPOINT_ACCEPTANCE_WINDOWS_MS,
-  )) {
+  for (const snapshotType of LONG_TERM_SNAPSHOT_TYPES) {
+    const window = CHECKPOINT_ACCEPTANCE_WINDOWS_MS[snapshotType]
     for (const distance of [
       window.maximumBeforeStartMs,
       window.minimumBeforeStartMs,
@@ -152,7 +156,7 @@ test('live, final, postponed and missed checkpoints are never backfilled', async
   assert.equal(plan.reasonCounts.no_due_checkpoints, 1)
 })
 
-test('FINAL clusters lead, include compatible intermediate work and minimize calls', async () => {
+test('CLOSING work leads, includes compatible intermediate work and minimizes calls', async () => {
   const games = [
     makeGame({ gameId: '2026020001', scheduledStart: '2026-10-08T19:00:00.000Z' }),
     makeGame({
@@ -181,7 +185,7 @@ test('FINAL clusters lead, include compatible intermediate work and minimize cal
   assert.equal(plan.groups.length, 2)
   assert.deepEqual(
     plan.groups[0].map(({ snapshotType }) => snapshotType),
-    ['FINAL', 'FINAL', 'T2'],
+    ['CLOSING', 'CLOSING', 'T2'],
   )
   assert.deepEqual(
     plan.groups[1].map(({ snapshotType }) => snapshotType),
@@ -205,7 +209,7 @@ test('remaining-credit and soft-target policy suppress intermediate checkpoints'
   }).planner.planDueCheckpoints({ observedAt: NOW })
 
   assert.equal(plan.dueCheckpointCount, 1)
-  assert.equal(plan.groups[0][0].snapshotType, 'FINAL')
+  assert.equal(plan.groups[0][0].snapshotType, 'CLOSING')
   assert.equal(plan.reasonCounts.policy_intermediate_suppressed, 1)
 })
 
@@ -225,11 +229,11 @@ test('unknown quota allows only the highest-priority due request group', async (
   }).planner.planDueCheckpoints({ observedAt: NOW })
 
   assert.equal(plan.groups.length, 1)
-  assert.equal(plan.groups[0][0].snapshotType, 'FINAL')
+  assert.equal(plan.groups[0][0].snapshotType, 'CLOSING')
   assert.equal(plan.reasonCounts.deferred_by_request_budget, 1)
 })
 
-test('a fully disabled quota policy avoids even schedule discovery', async () => {
+test('a fully disabled quota policy still discovers schedule for quota-free finalization', async () => {
   const harness = makePlanner({
     policy: makePolicy({
       allowed: false,
@@ -240,6 +244,129 @@ test('a fully disabled quota policy avoids even schedule discovery', async () =>
   const plan = await harness.planner.planDueCheckpoints({ observedAt: NOW })
 
   assert.equal(plan.status, 'BLOCKED')
-  assert.equal(harness.calls.length, 0)
+  assert.equal(harness.calls.length, 4)
   assert.equal(plan.reasonCounts.automatic_remaining_floor, 1)
+})
+
+test('long-term checkpoints begin at their nominal targets and retain late retry tolerance', () => {
+  const start = new Date('2026-10-10T20:00:00.000Z')
+  const game = makeGame({ scheduledStart: start.toISOString() })
+  const offsets = { T24: 24 * 60, T6: 6 * 60, T2: 2 * 60 }
+
+  Object.entries(offsets).forEach(([snapshotType, minutes]) => {
+    const beforeTarget = new Date(start.getTime() - (minutes + 5) * 60 * 1000)
+    const atTarget = new Date(start.getTime() - minutes * 60 * 1000)
+    const retry = new Date(
+      start.getTime() -
+        minutes * 60 * 1000 +
+        LONG_TERM_RETRY_INTERVALS_MS[snapshotType],
+    )
+    const nonRetryTick = new Date(
+      start.getTime() - (minutes - 5) * 60 * 1000,
+    )
+
+    assert.equal(
+      buildDueCheckpoints([game], beforeTarget).checkpoints.some(
+        (work) => work.snapshotType === snapshotType,
+      ),
+      false,
+    )
+    assert.equal(
+      buildDueCheckpoints([game], atTarget).checkpoints.some(
+        (work) => work.snapshotType === snapshotType,
+      ),
+      true,
+    )
+    assert.equal(
+      buildDueCheckpoints([game], retry).checkpoints.some(
+        (work) => work.snapshotType === snapshotType,
+      ),
+      true,
+    )
+    assert.equal(
+      buildDueCheckpoints([game], nonRetryTick).checkpoints.some(
+        (work) => work.snapshotType === snapshotType,
+      ),
+      false,
+    )
+  })
+})
+
+test('closing observations are due on every eligible cron and finalization is quota-free', async () => {
+  const game = makeGame({ scheduledStart: '2026-10-08T19:00:00.000Z' })
+
+  for (const observedAt of [
+    '2026-10-08T18:30:00.000Z',
+    '2026-10-08T18:35:00.000Z',
+    '2026-10-08T18:50:00.000Z',
+  ]) {
+    assert.equal(buildClosingWork([game], observedAt, ['coolbet']).checkpoints.length, 1)
+  }
+  assert.equal(
+    buildClosingWork([game], '2026-10-08T19:00:00.000Z', ['coolbet'])
+      .checkpoints.length,
+    0,
+  )
+
+  const finalTick = await makePlanner({ games: [game] }).planner.planDueCheckpoints({
+    observedAt: new Date('2026-10-08T18:55:01.000Z'),
+  })
+
+  assert.equal(finalTick.groups.length, 0)
+  assert.equal(finalTick.finalizations.length, 1)
+  assert.equal(finalTick.status, 'FINALIZE_ONLY')
+})
+
+test('an early NHL LIVE state blocks closing fetch work but schedules durable finalization', async () => {
+  const game = makeGame({
+    gameState: 'LIVE',
+    scheduledStart: '2026-10-08T19:00:00.000Z',
+    status: 'Live',
+  })
+  const plan = await makePlanner({ games: [game] }).planner.planDueCheckpoints({
+    observedAt: new Date('2026-10-08T18:40:00.000Z'),
+  })
+
+  assert.equal(plan.groups.length, 0)
+  assert.equal(plan.finalizations.length, 1)
+  assert.equal(plan.finalizations[0].finalizationReason, 'GAME_STARTED')
+})
+
+test('closing finalization retries expire after the durable grace window', async () => {
+  const game = makeGame({
+    gameState: 'FINAL',
+    scheduledStart: '2026-10-07T05:00:00.000Z',
+    status: 'Final',
+  })
+  const plan = await makePlanner({ games: [game] }).planner.planDueCheckpoints({
+    observedAt: NOW,
+  })
+
+  assert.equal(plan.finalizations.length, 0)
+})
+
+test('invalid pregame NHL state cannot trigger closing finalization', async () => {
+  const game = makeGame({
+    gameState: 'UNKNOWN',
+    scheduledStart: '2026-10-08T18:45:00.000Z',
+  })
+  const plan = await makePlanner({ games: [game] }).planner.planDueCheckpoints({
+    observedAt: NOW,
+  })
+
+  assert.equal(plan.finalizations.length, 0)
+})
+
+test('daily full-cadence limit preserves closing work for later games', async () => {
+  const game = makeGame({ scheduledStart: '2026-10-08T19:00:00.000Z' })
+  const plan = await makePlanner({
+    games: [game],
+    policy: makePolicy({
+      dailyAutomaticSuccessfulRequestCount: 24,
+      mode: 'FINAL_ONLY',
+    }),
+  }).planner.planDueCheckpoints({ observedAt: NOW })
+
+  assert.equal(plan.groups.length, 1)
+  assert.equal(plan.groups[0][0].snapshotType, 'CLOSING')
 })
