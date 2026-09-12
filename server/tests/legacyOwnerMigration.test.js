@@ -116,6 +116,7 @@ test('migration inventory contains every current user-owned data model', () => {
       'BettingSettings',
       'BookmakerPreferences',
       'GameContext',
+      'ForwardPredictionSnapshot',
       'GoalieAdjustment',
       'Injury',
       'PowerRating',
@@ -128,6 +129,28 @@ test('migration inventory contains every current user-owned data model', () => {
       'TeamLineup',
     ].sort(),
   )
+})
+
+test('legacy migration skips immutable owned predictions and rejects ownerless predictions before mutation', async () => {
+  for (const ownerless of [false, true]) {
+    const harness = createHarness()
+    const rows = [{ _id: 'prediction', userId: ownerless ? null : OWNER_ID }]
+    const predictions = createPrivateModel('ForwardPredictionSnapshot', rows)
+    predictions.legacyOwnerMigrationAllowed = false
+    predictions.updateMany = async () => { assert.fail('Predictions cannot change owner') }
+    harness.models.push(predictions)
+    const run = () => runLegacyOwnerMigration({ confirm: true, email: 'owner@example.com', googleSubject: 'subject' },
+      { ...harness, runTransaction: (work) => work('session') })
+    if (ownerless) {
+      await assert.rejects(run, /original owner/)
+      assert.equal(harness.documents.bets[0].userId, null)
+      assert.equal(harness.markers.length, 0)
+    } else {
+      const result = await run()
+      assert.equal(result.totalChanged, 2)
+      assert.equal(rows[0].userId, OWNER_ID)
+    }
+  }
 })
 
 test('confirmed migration assigns only missing owners, handles legacy index and records marker', async () => {

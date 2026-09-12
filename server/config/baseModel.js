@@ -1,9 +1,11 @@
+const { DEFAULT_PROBABILITY_SCALE } = require('../../shared/predictionCalculation')
+
 const BASE_MODEL_V1 = Object.freeze({
   baseHomeAdvantage: 3.5,
   kFactor: 1.3,
   modelVersion: 'power-rating-v1',
   overtimeMultiplier: 0.4,
-  probabilityScale: 20,
+  probabilityScale: DEFAULT_PROBABILITY_SCALE,
   regulationMultiplier: 1.0,
   shootoutMultiplier: 0.1,
   startingRatings: Object.freeze({

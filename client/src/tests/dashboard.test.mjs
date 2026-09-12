@@ -1051,8 +1051,9 @@ test('Dashboard card render removes model lean and shows value side', () => {
   assert.match(html, /class="schedule-card candidate"/)
   assert.match(html, /Bet Candidate/)
   assert.doesNotMatch(html, /Model lean|Model Lean|Highest EV|Best value/)
-  assert.match(html, /Value Side[\s\S]*Toronto Maple Leafs/)
-  assert.match(html, /EV edge[\s\S]*\+[0-9]+\.[0-9]%/)
+  assert.match(html, /Value side[\s\S]*Toronto Maple Leafs/)
+  assert.match(html, /Edge[\s\S]*\+[0-9]+\.[0-9]{2} pp/)
+  assert.match(html, /EV[\s\S]*\+[0-9]+\.[0-9]%/)
   assert.match(html, /Kelly[\s\S]*(?:€|EUR)/)
   assert.match(html, /class="schedule-card neutral"/)
   assert.match(html, /No current value/)
@@ -1074,10 +1075,17 @@ test('Dashboard renders Add Odds without a value side', () => {
   })
 
   assert.match(html, /class="schedule-card needs-odds"/)
-  assert.match(html, /Add odds/)
-  assert.match(html, /Preliminary probabilities are ready\./)
-  assert.match(html, /Enter market odds to evaluate betting value\./)
-  assert.doesNotMatch(html, /Value Side/)
+  assert.equal(countMatches(html, />Add odds</g), 1)
+  assert.doesNotMatch(html, /<small>Add odds<\/small>/)
+  assert.match(html, /aria-label="Toronto Maple Leafs market odds"[^>]*value=""/)
+  assert.match(html, /aria-label="Boston Bruins market odds"[^>]*value=""/)
+  assert.match(html, /Model[\s\S]*Fair[\s\S]*Market/)
+  assert.match(html, /Preliminary<\/span><small>· Defaults used\./)
+  assert.doesNotMatch(
+    html,
+    /Preliminary probabilities are ready\.|Enter market odds to evaluate betting value\.|Betting decision/,
+  )
+  assert.doesNotMatch(html, /Value side/)
   assertNoInvalidNumbers(html)
 })
 
@@ -1102,10 +1110,46 @@ test('Dashboard renders one-sided no-value odds neutrally', () => {
 
   assert.match(html, /class="schedule-card neutral"/)
   assert.match(html, /No current value/)
-  assert.match(html, /No positive edge at the entered odds\./)
-  assert.match(html, /Only one side evaluated\./)
-  assert.doesNotMatch(html, /Value Side/)
+  assert.doesNotMatch(
+    html,
+    /No positive edge at the entered odds\.|Only one side evaluated\.|Betting decision/,
+  )
+  assert.doesNotMatch(html, /Value side/)
   assertNoInvalidNumbers(html)
+})
+
+test('Dashboard renders one standalone separator between scheduled matchup team rows', () => {
+  const html = renderDashboard({
+    initialBets: [],
+    initialMarketOdds: {},
+    initialPreviousSchedule: {
+      date: '2026-01-14',
+      games: [],
+    },
+    initialSchedule: {
+      date: '2026-01-15',
+      games: [
+        createGame({
+          away: {
+            ...team('CAR', 'Carolina Hurricanes'),
+            logo: '/carolina-hurricanes.svg',
+          },
+          gameId: 'centered-matchup',
+          home: {
+            ...team('PHI', 'Philadelphia Flyers'),
+            logo: '/philadelphia-flyers.svg',
+          },
+        }),
+      ],
+    },
+  })
+
+  assert.match(
+    html,
+    /Carolina Hurricanes logo[\s\S]*Carolina Hurricanes[\s\S]*class="matchup-separator" aria-label="at">@[\s\S]*Philadelphia Flyers logo[\s\S]*Philadelphia Flyers/,
+  )
+  assert.equal(countMatches(html, /class="matchup-separator"/g), 1)
+  assert.doesNotMatch(html, /matchup-location/)
 })
 
 test('Dashboard renders below-minimum value as Worth Reviewing without Kelly amount', () => {
@@ -1133,7 +1177,7 @@ test('Dashboard renders below-minimum value as Worth Reviewing without Kelly amo
 
   assert.match(html, /class="schedule-card attention"/)
   assert.match(html, /Worth reviewing/)
-  assert.match(html, /Value Side[\s\S]*Toronto Maple Leafs/)
+  assert.match(html, /Value side[\s\S]*Toronto Maple Leafs/)
   assert.match(html, /Below 10\.00 pp minimum/)
   assert.doesNotMatch(html, /Kelly[\s\S]*(?:€|EUR)/)
   assertNoInvalidNumbers(html)
@@ -1166,7 +1210,7 @@ test('Dashboard renders preliminary unavailable state without stale value labels
 
   assert.match(html, /Preliminary analysis unavailable/)
   assert.match(html, /Missing core model data/)
-  assert.doesNotMatch(html, /Value Side|Add odds/)
+  assert.doesNotMatch(html, /Value side|Add odds/)
   assertNoInvalidNumbers(html)
 })
 
@@ -1191,7 +1235,7 @@ test('Dashboard validates invalid entered market odds safely', () => {
 
   assert.match(html, /Add odds/)
   assert.match(html, /Market odds must be greater than 1\./)
-  assert.doesNotMatch(html, /Value Side/)
+  assert.doesNotMatch(html, /Value side/)
   assertNoInvalidNumbers(html)
 })
 
@@ -1224,6 +1268,7 @@ test('saved bets have display priority and render stake plus odds', () => {
 
   assert.match(html, /class="schedule-card saved has-saved-bet"/)
   assert.match(html, /Bet Saved/)
+  assert.equal(countMatches(html, /Bet Saved/g), 1)
   assert.match(html, /New York Rangers/)
   assert.match(html, /@ 2\.80/)
   assert.match(html, /View Bet/)
@@ -1414,8 +1459,51 @@ test('scheduled and live Dashboard status labels remain unchanged', () => {
 
   assert.match(html, />Scheduled</)
   assert.match(html, />Live</)
+  const liveCard =
+    html.match(
+      /<article class="schedule-card started compact-started"[\s\S]*?<\/article>/,
+    )?.[0] ?? ''
+
+  assert.match(liveCard, /Carolina Hurricanes[\s\S]*New York Rangers/)
+  assert.doesNotMatch(
+    liveCard,
+    /compact-model-market|Betting decision|Game context exceptions|Preliminary/,
+  )
   assert.doesNotMatch(html, /compact-final|>FINAL(?: OT| SO)?</)
   assertNoInvalidNumbers(html)
+})
+
+test('live saved-bet cards keep actions while suppressing pregame detail', () => {
+  const html = renderDashboard({
+    initialBets: [createBet()],
+    initialPreviousSchedule: { date: '2026-01-14', games: [] },
+    initialSchedule: {
+      date: '2026-01-15',
+      games: [
+        createGame({
+          away: team('CAR', 'Carolina Hurricanes', 1),
+          gameId: 'game-saved',
+          gameState: 'LIVE',
+          home: team('NYR', 'New York Rangers', 2),
+          status: 'Live',
+        }),
+      ],
+    },
+  })
+  const liveCard =
+    html.match(
+      /<article class="schedule-card started compact-started has-saved-bet"[\s\S]*?<\/article>/,
+    )?.[0] ?? ''
+
+  assert.match(liveCard, />Live</)
+  assert.equal(countMatches(liveCard, /Bet Saved/g), 1)
+  assert.match(liveCard, /aria-label="Saved bet"[\s\S]*@ 2\.80/)
+  assert.match(liveCard, /Analyze Game[\s\S]*View Bet/)
+  assert.doesNotMatch(
+    liveCard,
+    /compact-model-market|Betting decision|Game context exceptions|Preliminary/,
+  )
+  assertNoInvalidNumbers(liveCard)
 })
 
 test('Last Night no-bet state still shows completed games', () => {
@@ -1489,9 +1577,29 @@ test('Dashboard responsive CSS preserves primary and secondary columns', () => {
     css,
     /@media \(max-width: 1100px\)[\s\S]*?\.dashboard-daily-layout\s*{[^}]+grid-template-columns:\s*1fr/s,
   )
-  assert.match(css, /\.dashboard-today-games-grid\s*{[^}]+auto-fit/s)
+  assert.match(
+    css,
+    /\.dashboard-today-games-grid\s*{[^}]+repeat\(auto-fit, minmax\(300px, 1fr\)\)/s,
+  )
+  assert.match(
+    css,
+    /\.game-card-actions \.analyze-game-button,[^}]+min-height:\s*38px/s,
+  )
+  assert.match(css, /\.matchup-separator\s*{[^}]+padding-left:\s*48px/s)
+  assert.doesNotMatch(
+    css,
+    /\.matchup-separator\s*{[^}]+place-items:\s*center/s,
+  )
+  assert.match(
+    css,
+    /\.compact-model-market\s*{[^}]+border-bottom:\s*1px solid/s,
+  )
+  assert.doesNotMatch(
+    css,
+    /\.dashboard-context-summary\s*{[^}]+border-top:/s,
+  )
   assert.match(css, /\.last-night-compact-summary\s*{[^}]+repeat\(2/s)
-  assert.match(css, /\.game-market-odds\s*{[^}]+display:\s*grid/s)
+  assert.match(css, /\.compact-model-market\s*{[^}]+display:\s*grid/s)
   assert.match(css, /\.market-odds-table-scroll\s*{[^}]+overflow-x:\s*auto/s)
 })
 
@@ -1813,21 +1921,81 @@ test('Dashboard uses concise schedule-adjustment labels and omits neutral contex
   const adjustedHtml = renderDashboard({
     initialGameContexts: [adjustedContext],
     initialGameContextsStatus: 'success',
+    injurySummaries: {
+      BOS: { totalImpact: 0 },
+      TOR: { totalImpact: -1 },
+    },
   })
   const neutralHtml = renderDashboard({
     initialGameContexts: [neutralContext],
     initialGameContextsStatus: 'success',
   })
 
-  assert.match(adjustedHtml, /aria-label="Schedule adjustments"/)
-  assert.match(adjustedHtml, /aria-label="Stored injury impact"/)
-  assert.match(adjustedHtml, /aria-label="Goalie selections"/)
+  assert.match(adjustedHtml, /aria-label="Game context exceptions"/)
+  assert.doesNotMatch(adjustedHtml, /<strong>Context<\/strong>/)
   assert.match(adjustedHtml, />Analyze Game</)
-  assert.match(adjustedHtml, /Away[\s\S]*B2B \+ Travel \+ Quick Rematch[\s\S]*-1\.00/)
-  assert.match(adjustedHtml, /Home[\s\S]*B2B[\s\S]*-0\.75/)
+  assert.match(adjustedHtml, /TOR injuries -1\.0/)
+  assert.doesNotMatch(adjustedHtml, /BOS injuries/)
+  assert.match(adjustedHtml, /TOR B2B \+ Travel \+ Quick Rematch -1\.00/)
+  assert.match(adjustedHtml, /BOS B2B -0\.75/)
+  assert.match(adjustedHtml, /Both starters unconfirmed/)
+  assert.doesNotMatch(adjustedHtml, /\+0\.00/)
   assert.doesNotMatch(adjustedHtml, /Away context|Home context/)
-  assert.doesNotMatch(neutralHtml, /aria-label="Schedule adjustments"/)
+  assert.doesNotMatch(neutralHtml, /B2B|Travel|Quick Rematch|injuries/)
   assertNoInvalidNumbers(`${adjustedHtml}${neutralHtml}`)
+})
+
+test('Dashboard keeps goalie context compact and omits confirmed neutral starters', () => {
+  const goalieSelection = (
+    displayName,
+    confirmationStatus,
+    effectiveAdjustment,
+    nhlPlayerId,
+  ) => ({
+    confirmationStatus,
+    displayName,
+    effectiveAdjustment,
+    nhlPlayerId,
+    overrideEnabled: false,
+    selectionType: 'provider_goalie',
+    teamDefaultAdjustment: effectiveAdjustment,
+  })
+  const baseContext = {
+    awayContext: { adjustmentBreakdown: [] },
+    awayTeam: { abbreviation: 'TOR', teamId: 'TOR' },
+    gameId: 'game-candidate',
+    goalieSelections: {
+      away: goalieSelection('Joseph Woll', 'confirmed', 0, 8479361),
+      home: goalieSelection('Jeremy Swayman', 'confirmed', 0, 8480280),
+    },
+    homeContext: { adjustmentBreakdown: [] },
+    homeTeam: { abbreviation: 'BOS', teamId: 'BOS' },
+  }
+  const renderSingleGame = (gameContext) =>
+    renderDashboard({
+      initialBets: [],
+      initialGameContexts: [gameContext],
+      initialGameContextsStatus: 'success',
+      initialPreviousSchedule: { date: '2026-01-14', games: [] },
+      initialSchedule: {
+        date: '2026-01-15',
+        games: [todayGames()[0]],
+      },
+      specialTeamsAlertsEnabled: false,
+    })
+  const neutralHtml = renderSingleGame(baseContext)
+  const expectedHtml = renderSingleGame({
+    ...baseContext,
+    goalieSelections: {
+      ...baseContext.goalieSelections,
+      home: goalieSelection('Jeremy Swayman', 'expected', -0.5, 8480280),
+    },
+  })
+
+  assert.doesNotMatch(neutralHtml, /Game context exceptions|Joseph Woll|Jeremy Swayman/)
+  assert.match(expectedHtml, /Jeremy Swayman expected -0\.50/)
+  assert.doesNotMatch(expectedHtml, /Joseph Woll|\+0\.00/)
+  assertNoInvalidNumbers(`${neutralHtml}${expectedHtml}`)
 })
 
 const createMarketOddsResponse = (overrides = {}) => ({
@@ -1890,12 +2058,18 @@ test('Dashboard renders provider best odds, bookmaker sources, and ready status'
   })
 
   assert.match(html, /Ready/)
-  assert.match(html, /Market odds[\s\S]*Best away 2\.30[\s\S]*Bookmaker A/)
-  assert.match(html, /Best home 1\.72[\s\S]*Bookmaker B/)
-  assert.match(html, /Away fair[\s\S]*2\.35/)
-  assert.match(html, /Model 42\.6%[\s\S]*Expected value -2\.1%/)
-  assert.match(html, /Home fair[\s\S]*1\.74/)
-  assert.match(html, /Model 57\.4%[\s\S]*Expected value -1\.2%/)
+  assert.match(
+    html,
+    /aria-label="Toronto Maple Leafs market odds"[^>]*value="2\.3"[\s\S]*Bookmaker A/,
+  )
+  assert.match(
+    html,
+    /aria-label="Boston Bruins market odds"[^>]*value="1\.72"[\s\S]*Bookmaker B/,
+  )
+  assert.match(html, /<span>Model<\/span><strong>42\.6%<\/strong><strong>57\.4%/)
+  assert.match(html, /<span>Fair<\/span><strong>2\.35<\/strong><strong>1\.74/)
+  assert.equal(countMatches(html, /aria-label="Model and market odds"/g), 3)
+  assert.doesNotMatch(html, /class="game-market-odds"/)
   assert.match(html, /View Market Odds/)
   assertNoInvalidNumbers(html)
 })
@@ -1908,8 +2082,14 @@ test('manual Dashboard odds keep priority over refreshed provider values', () =>
     initialMarketOddsResponse: createMarketOddsResponse(),
   })
 
-  assert.match(html, /Market odds[\s\S]*Away 4\.50[\s\S]*Manual/)
-  assert.match(html, /Home 1\.35[\s\S]*Manual/)
+  assert.match(
+    html,
+    /aria-label="Toronto Maple Leafs market odds"[^>]*value="4\.50"[\s\S]*Manual/,
+  )
+  assert.match(
+    html,
+    /aria-label="Boston Bruins market odds"[^>]*value="1\.35"[\s\S]*Manual/,
+  )
 })
 
 test('Dashboard market status covers cache, unavailable, configuration, quota, and low credits', () => {
@@ -1977,8 +2157,11 @@ test('one-sided provider odds leave the other side in Add Odds flow', () => {
     initialMarketOddsResponse: response,
   })
 
-  assert.match(html, /Best away 2\.30/)
-  assert.match(html, /Value side|Worth Reviewing|No positive edge/)
+  assert.match(
+    html,
+    /aria-label="Toronto Maple Leafs market odds"[^>]*value="2\.3"/,
+  )
+  assert.match(html, /Worth reviewing|No current value/)
   assert.match(html, /aria-label="Boston Bruins market odds"[^>]*value=""/)
   assertNoInvalidNumbers(html)
 })
@@ -2090,12 +2273,8 @@ test('Dashboard renders positive and negative Special Teams alerts independently
     initialSpecialTeamsStatus: 'success',
   })
 
-  assert.match(html, /Boston Bruins special teams edge/)
-  assert.match(html, /PP #5 vs TOR PK #29/)
-  assert.match(html, /Strong PP vs Weak PK/)
-  assert.match(html, /Toronto Maple Leafs special teams disadvantage/)
-  assert.match(html, /PP #28 vs BOS PK #4/)
-  assert.match(html, /Weak PP vs Strong PK/)
+  assert.match(html, /BOS Strong PP vs TOR Weak PK/)
+  assert.match(html, /TOR Weak PP vs BOS Strong PK/)
   assert.doesNotMatch(html, /Automatic adjustment/)
 })
 
@@ -2114,9 +2293,9 @@ test('Dashboard keeps neutral, disabled, and missing Special Teams states quiet'
     initialSpecialTeamsStatus: 'success',
   })
 
-  assert.doesNotMatch(neutral, /Dallas Stars special teams edge/)
-  assert.doesNotMatch(disabled, /special teams (edge|disadvantage)/i)
-  assert.doesNotMatch(missing, /special teams (edge|disadvantage)/i)
+  assert.doesNotMatch(neutral, /DAL (?:Strong|Weak) PP/)
+  assert.doesNotMatch(disabled, /(?:Strong|Weak) PP vs/)
+  assert.doesNotMatch(missing, /(?:Strong|Weak) PP vs/)
   assert.match(missing, /Analyze Game/)
 })
 
@@ -2136,11 +2315,13 @@ test('Dashboard threshold changes the signal without changing model probabilitie
     initialSpecialTeamsStatus: 'success',
     specialTeamsRankThreshold: 8,
   })
-  const getModelProbabilities = (html) => html.match(/Model \d+\.\d%/g) ?? []
+  const getModelProbabilities = (html) =>
+    [...html.matchAll(
+      /<div class="compact-model-market-row"><span>Model<\/span><strong>([^<]+)<\/strong><strong>([^<]+)<\/strong>/g,
+    )].flatMap((match) => match.slice(1))
 
-  assert.doesNotMatch(thresholdSix, /Dallas Stars special teams edge/)
-  assert.match(thresholdEight, /Dallas Stars special teams edge/)
-  assert.match(thresholdEight, /PP #7 vs COL PK #25/)
+  assert.doesNotMatch(thresholdSix, /DAL Strong PP vs COL Weak PK/)
+  assert.match(thresholdEight, /DAL Strong PP vs COL Weak PK/)
   assert.deepEqual(
     getModelProbabilities(thresholdEight),
     getModelProbabilities(baseline),
@@ -2159,15 +2340,18 @@ test('Dashboard Automatic mode shows each applied value and updates model output
     specialTeamsAdjustment: 0.5,
     specialTeamsMode: 'automatic',
   })
-  const getModelProbabilities = (html) => html.match(/Model \d+\.\d%/g) ?? []
+  const getModelProbabilities = (html) =>
+    [...html.matchAll(
+      /<div class="compact-model-market-row"><span>Model<\/span><strong>([^<]+)<\/strong><strong>([^<]+)<\/strong>/g,
+    )].flatMap((match) => match.slice(1))
 
   assert.match(
     automatic,
-    /Boston Bruins special teams edge[\s\S]*Automatic adjustment \+0\.50/,
+    /BOS Strong PP vs TOR Weak PK \+0\.50/,
   )
   assert.match(
     automatic,
-    /Toronto Maple Leafs special teams disadvantage[\s\S]*Automatic adjustment -0\.50/,
+    /TOR Weak PP vs BOS Strong PK -0\.50/,
   )
   assert.notDeepEqual(
     getModelProbabilities(automatic),
@@ -2291,13 +2475,10 @@ test('Dashboard and Game Analyzer show consistent signals for the same game', ()
     },
   })
 
-  for (const detail of [
-    'PP #5 vs TOR PK #29',
-    'PP #28 vs BOS PK #4',
-    'Strong PP vs Weak PK',
-    'Weak PP vs Strong PK',
-  ]) {
-    assert.match(dashboard, new RegExp(detail))
-    assert.match(analyzer, new RegExp(detail))
-  }
+  assert.match(dashboard, /BOS Strong PP vs TOR Weak PK/)
+  assert.match(dashboard, /TOR Weak PP vs BOS Strong PK/)
+  assert.match(analyzer, /PP #5 vs TOR PK #29/)
+  assert.match(analyzer, /PP #28 vs BOS PK #4/)
+  assert.match(analyzer, /Strong PP vs Weak PK/)
+  assert.match(analyzer, /Weak PP vs Strong PK/)
 })

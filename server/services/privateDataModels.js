@@ -4,6 +4,7 @@ const Bet = require('../models/Bet')
 const BettingSettings = require('../models/BettingSettings')
 const BookmakerPreferences = require('../models/BookmakerPreferences')
 const GameContext = require('../models/GameContext')
+const ForwardPredictionSnapshot = require('../models/ForwardPredictionSnapshot')
 const GoalieAdjustment = require('../models/GoalieAdjustment')
 const Injury = require('../models/Injury')
 const PowerRating = require('../models/PowerRating')
@@ -22,6 +23,7 @@ const PRIVATE_DATA_MODELS = Object.freeze([
   BettingSettings,
   BookmakerPreferences,
   GameContext,
+  ForwardPredictionSnapshot,
   GoalieAdjustment,
   Injury,
   PowerRating,

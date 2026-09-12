@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Activity,
+  ChartLine,
   ClipboardList,
   FlaskConical,
   LayoutDashboard,
@@ -16,6 +17,7 @@ import Dashboard from "./components/Dashboard.jsx";
 import GameAnalyzer from "./components/GameAnalyzer.jsx";
 import InjuryManager from "./components/InjuryManager.jsx";
 import AppLayout from "./components/layout/AppLayout.jsx";
+import ModelPerformance from "./components/ModelPerformance.jsx";
 import PowerRatings from "./components/PowerRatings.jsx";
 import RatingLab from "./components/RatingLab.jsx";
 import SettingsPage from "./components/Settings.jsx";
@@ -84,6 +86,13 @@ const pages = [
     label: "Power Ratings",
     path: "/power-ratings",
     title: "Power Ratings",
+  },
+  {
+    id: "model-performance",
+    Icon: ChartLine,
+    label: "Model Performance",
+    path: "/model-performance",
+    title: "Model Performance",
   },
   {
     id: "rating-lab",
@@ -735,6 +744,8 @@ function AuthenticatedApp({ authUser, onLogout }) {
           onUpdatePowerRatings={handleUpdatePowerRatings}
           openUpdatePanelRequest={powerRatingsUpdatePanelRequest}
         />
+      ) : activePage === "model-performance" ? (
+        <ModelPerformance onNavigate={navigateToPage} />
       ) : activePage === "rating-lab" ? (
         <RatingLab />
       ) : activePage === "injuries" ? (

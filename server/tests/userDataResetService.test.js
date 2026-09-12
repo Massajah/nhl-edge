@@ -43,6 +43,7 @@ const createModels = (calls, deletedCount = 1) => {
     'BettingSettings',
     'BookmakerPreferences',
     'GameContext',
+    'ForwardPredictionSnapshot',
     'GoalieAdjustment',
     'Injury',
     'PowerRating',
@@ -172,6 +173,8 @@ test('new season reset preserves settings and betting data while clearing season
 
   assert.equal(result.success, true)
   assert.equal(result.seasonId, '20262027')
+  assert.equal(result.preservedForwardPredictions, true)
+  assert.equal(calls.some(({ name }) => name === 'ForwardPredictionSnapshot'), false)
   assert.equal(result.startingRatingScale.min, 42)
   assert.equal(result.startingRatingScale.max, 52)
   assert.equal(ratingReset.userId, USER_ID)
@@ -227,7 +230,8 @@ test('factory reset deletes every user-owned store without touching shared histo
   assert.equal(result.success, true)
   assert.equal(result.defaults.startingRatingScale.min, 42)
   assert.equal(result.defaults.startingRatingScale.max, 50)
-  assert.equal(calls.length, 16)
+  assert.equal(calls.length, 17)
+  assert.equal(calls.some(({ name }) => name === 'ForwardPredictionSnapshot'), true)
   assert.equal(
     calls.some(({ name }) => name === 'RatingLabPromotionAudit'),
     true,

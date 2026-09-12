@@ -255,6 +255,7 @@ test('cron entrypoint connects, runs once, closes MongoDB and propagates fatal e
   const calls = []
   const environment = { MONGODB_URI: 'mongodb://example', THE_ODDS_API_KEY: 'test' }
   const result = await runOddsCaptureCron({
+    predictionService: { async runScheduledCapture() { return { captured: 0 } } },
     closeDatabase: async () => calls.push('close'),
     connectDatabase: async () => calls.push('connect'),
     environment,
@@ -272,12 +273,13 @@ test('cron entrypoint connects, runs once, closes MongoDB and propagates fatal e
   await assert.rejects(
     () =>
       runOddsCaptureCron({
+        predictionService: { async runScheduledCapture() { return { captured: 0 } } },
         closeDatabase: async () => calls.push('close-after-error'),
         connectDatabase: async () => {},
         environment,
         service: { async runScheduledCapture() { throw new Error('fatal') } },
       }),
-    /fatal/,
+    /Scheduled capture failed/,
   )
   assert.equal(calls.at(-1), 'close-after-error')
 })

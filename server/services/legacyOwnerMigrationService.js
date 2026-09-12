@@ -185,6 +185,11 @@ const runLegacyOwnerMigration = async (
 
   if (!confirm) return { ...result, totalChanged: 0 }
 
+  if (models.some((model) => model.legacyOwnerMigrationAllowed === false &&
+    collections.some((item) => item.modelName === model.modelName && item.count > 0))) {
+    throw new LegacyOwnerMigrationError('Immutable prediction records require their original owner; ownership cannot be reassigned.')
+  }
+
   if (existingMarker) {
     if (
       !sameId(existingMarker.ownerUserId, owner.user._id) ||
@@ -212,6 +217,10 @@ const runLegacyOwnerMigration = async (
 
   await runTransaction(async (session) => {
     for (const model of models) {
+      if (model.legacyOwnerMigrationAllowed === false) {
+        collectionResults[model.modelName] = 0
+        continue
+      }
       const update = await model.updateMany(
         LEGACY_OWNER_FILTER,
         { $set: { userId: owner.user._id } },

@@ -1,8 +1,10 @@
+import '../../../shared/predictionCalculation.js'
+
 export const BASE_MODEL_V1 = Object.freeze({
   baseHomeAdvantage: 3.5,
   kFactor: 1.3,
   overtimeMultiplier: 0.4,
-  probabilityScale: 20,
+  probabilityScale: globalThis.__NHL_EDGE_PREDICTION_CALCULATION__.DEFAULT_PROBABILITY_SCALE,
   regulationMultiplier: 1,
   shootoutMultiplier: 0.1,
   startingRatings: Object.freeze({

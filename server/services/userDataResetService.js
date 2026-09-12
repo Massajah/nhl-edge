@@ -5,6 +5,7 @@ const Bet = require('../models/Bet')
 const BettingSettings = require('../models/BettingSettings')
 const BookmakerPreferences = require('../models/BookmakerPreferences')
 const GameContext = require('../models/GameContext')
+const ForwardPredictionSnapshot = require('../models/ForwardPredictionSnapshot')
 const GoalieAdjustment = require('../models/GoalieAdjustment')
 const Injury = require('../models/Injury')
 const PowerRating = require('../models/PowerRating')
@@ -50,6 +51,7 @@ const getModels = (options = {}) => ({
   BookmakerPreferences:
     options.models?.BookmakerPreferences ?? BookmakerPreferences,
   GameContext: options.models?.GameContext ?? GameContext,
+  ForwardPredictionSnapshot: options.models?.ForwardPredictionSnapshot ?? ForwardPredictionSnapshot,
   GoalieAdjustment: options.models?.GoalieAdjustment ?? GoalieAdjustment,
   Injury: options.models?.Injury ?? Injury,
   PowerRating: options.models?.PowerRating ?? PowerRating,
@@ -240,6 +242,7 @@ const resetForNewSeason = async (userId, options = {}) => {
         'providerCaches',
       ],
       resetType: 'new-season',
+      preservedForwardPredictions: true,
       seasonId: season.id,
       startingRatingScale,
       success: true,
@@ -277,6 +280,7 @@ const factoryResetUserData = async (userId, payload = {}, options = {}) => {
         session,
       ),
       bets: await deleteManyForUser(models.Bet, userId, session),
+      forwardPredictions: await deleteManyForUser(models.ForwardPredictionSnapshot, userId, session),
       gameContexts: await deleteManyForUser(
         models.GameContext,
         userId,

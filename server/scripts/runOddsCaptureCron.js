@@ -6,19 +6,17 @@ const { getMarketOddsConfig } = require('../config/marketOdds')
 const {
   scheduledOddsCaptureService,
 } = require('../services/scheduledOddsCaptureService')
+const { scheduledForwardPredictionService } = require('../services/scheduledForwardPredictionService')
 
 const runOddsCaptureCron = async ({
   closeDatabase = () => mongoose.disconnect(),
   connectDatabase = connectDB,
   environment = process.env,
   service = scheduledOddsCaptureService,
+  predictionService = scheduledForwardPredictionService,
 } = {}) => {
   if (!String(environment.MONGODB_URI ?? '').trim()) {
     throw new Error('MONGODB_URI is required for scheduled odds capture.')
-  }
-
-  if (!getMarketOddsConfig(environment).apiKey) {
-    throw new Error('THE_ODDS_API_KEY is required for scheduled odds capture.')
   }
 
   let connectionAttempted = false
@@ -26,7 +24,16 @@ const runOddsCaptureCron = async ({
   try {
     connectionAttempted = true
     await connectDatabase()
-    return await service.runScheduledCapture()
+    // Independent one-shot jobs: neither quota nor an odds-provider failure can suppress predictions.
+    const results = await Promise.allSettled([
+      predictionService.runScheduledCapture(),
+      getMarketOddsConfig(environment).apiKey
+        ? service.runScheduledCapture()
+        : Promise.resolve({ outcome: 'ODDS_NOT_CONFIGURED' }),
+    ])
+    const failures = results.filter(({ status }) => status === 'rejected')
+    if (failures.length) throw new AggregateError(failures.map(({ reason }) => reason), 'Scheduled capture failed.')
+    return { ...results[1].value, forwardPredictions: results[0].value }
   } finally {
     if (connectionAttempted) {
       await closeDatabase()

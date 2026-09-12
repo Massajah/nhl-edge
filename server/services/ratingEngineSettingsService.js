@@ -703,6 +703,7 @@ module.exports = {
   normalizeSettingsPayload,
   normalizeScopedSettingsPayload,
   resetRatingEngineSettings,
+  serializeRatingEngineSettings,
   updateRatingEngineSettings,
   updateRatingEngineModelAdjustments,
   updateRatingEngineParameters,

@@ -63,7 +63,11 @@ import {
   hasNonZeroGameContextAdjustment,
   normalizeGameContext,
 } from '../utils/gameContext.js'
-import { getGoalieSelectionForSide } from '../utils/goalies.js'
+import {
+  GOALIE_CONFIRMATION_STATUSES,
+  GOALIE_SELECTION_TYPES,
+  getGoalieSelectionForSide,
+} from '../utils/goalies.js'
 import { createLatestRequestTracker } from '../utils/requestTracker.js'
 import { AUTOMATIC_POWER_RATING_UPDATE_STATUSES } from '../utils/powerRatingUpdates.js'
 import { teamsDataCoordinator } from '../services/teamsDataCoordinator.js'
@@ -100,9 +104,6 @@ const hasGameScore = (game) => hasScore(game.homeTeam) && hasScore(game.awayTeam
 const formatOdds = (value) =>
   Number.isFinite(value) ? value.toFixed(2) : '--'
 
-const formatRating = (value) =>
-  Number.isFinite(value) ? value.toFixed(1) : '--'
-
 const formatPercent = (value) =>
   Number.isFinite(value) ? `${(value * 100).toFixed(1)}%` : '--'
 
@@ -113,6 +114,15 @@ const formatProbabilityEdge = (value) =>
 
 const formatExpectedValue = (value) =>
   Number.isFinite(value) ? `${value >= 0 ? '+' : ''}${value.toFixed(1)}%` : '--'
+
+const hasMeaningfulAdjustment = (value) =>
+  Number.isFinite(Number(value)) && Math.abs(Number(value)) >= 0.005
+
+const formatSignedAdjustment = (value) => {
+  const adjustment = Number(value)
+
+  return `${adjustment >= 0 ? '+' : ''}${adjustment.toFixed(2)}`
+}
 
 const getGameId = (gameOrBet = {}) =>
   String(gameOrBet.gameId ?? gameOrBet.id ?? '').trim()
@@ -1523,36 +1533,103 @@ function MarketOddsStatus({ requestStatus, result }) {
   )
 }
 
-function GameMarketOdds({ marketOdds }) {
+function CompactModelMarket({
+  analysis,
+  awayTeam,
+  homeTeam,
+  marketOdds,
+  onMarketOddsChange,
+}) {
   const sides = [
-    ['Away', 'away'],
-    ['Home', 'home'],
-  ].filter(([, side]) => parseMarketOdds(marketOdds[side]))
-
-  if (sides.length === 0) {
-    return null
-  }
+    {
+      key: 'away',
+      market: analysis?.awayMarket ?? {},
+      team: awayTeam,
+    },
+    {
+      key: 'home',
+      market: analysis?.homeMarket ?? {},
+      team: homeTeam,
+    },
+  ]
 
   return (
-    <div className="game-market-odds" aria-label="Market odds">
-      <strong>Market odds</strong>
-      {sides.map(([label, side]) => {
-        const metadata = marketOdds.metadata?.[side]
-        const sourceLabel =
-          metadata?.source === 'provider'
-            ? metadata.bookmakerTitle || 'The Odds API'
-            : 'Manual'
-
-        return (
-          <span key={side}>
-            {metadata?.source === 'provider' ? `Best ${label.toLowerCase()}` : label}{' '}
-            {Number(marketOdds[side]).toFixed(2)}
-            <small> · {sourceLabel}</small>
-          </span>
-        )
-      })}
+    <section className="compact-model-market" aria-label="Model and market odds">
+      <div className="compact-model-market-row heading">
+        <span />
+        {sides.map(({ key, team }) => (
+          <strong key={key}>{team.abbreviation || key}</strong>
+        ))}
+      </div>
+      <div className="compact-model-market-row">
+        <span>Model</span>
+        {sides.map(({ key, market }) => (
+          <strong key={key}>{formatPercent(market.modelProbability)}</strong>
+        ))}
+      </div>
+      <div className="compact-model-market-row">
+        <span>Fair</span>
+        {sides.map(({ key, market }) => (
+          <strong key={key}>{formatOdds(market.fairOdds)}</strong>
+        ))}
+      </div>
+      <div className="compact-model-market-row market">
+        <span>Market</span>
+        {sides.map(({ key, team }) => (
+          <CompactMarketInput
+            key={key}
+            marketOdds={marketOdds}
+            onMarketOddsChange={(value) => onMarketOddsChange(key, value)}
+            side={key}
+            team={team}
+          />
+        ))}
+      </div>
+      {analysis?.available ? (
+        <div className="compact-preliminary-note">
+          <span>Preliminary</span>
+          {analysis.usesUnknownInputs ? <small>· Defaults used.</small> : null}
+        </div>
+      ) : null}
       <MarketOddsDetails bookmakers={marketOdds.allBookmakers} />
-    </div>
+    </section>
+  )
+}
+
+function CompactMarketInput({ marketOdds, onMarketOddsChange, side, team }) {
+  const value = marketOdds[side] ?? ''
+  const hasInvalidOdds =
+    value !== '' && value !== null && value !== undefined && !parseMarketOdds(value)
+  const validationId = `dashboard-${team.abbreviation || side}-market-odds-validation`
+  const metadata = marketOdds.metadata?.[side]
+  const sourceLabel =
+    metadata?.source === 'provider'
+      ? metadata.bookmakerTitle || 'The Odds API'
+      : parseMarketOdds(value)
+        ? 'Manual'
+        : ''
+
+  return (
+    <label className="compact-market-input">
+      <input
+        aria-label={`${team.name} market odds`}
+        aria-describedby={hasInvalidOdds ? validationId : undefined}
+        aria-invalid={hasInvalidOdds}
+        inputMode="decimal"
+        min="1.01"
+        placeholder="Odds"
+        step="0.01"
+        type="number"
+        value={value}
+        onChange={(event) => onMarketOddsChange(event.target.value)}
+      />
+      {sourceLabel ? <small>{sourceLabel}</small> : null}
+      {hasInvalidOdds ? (
+        <small className="compact-market-error" id={validationId} role="alert">
+          Market odds must be greater than 1.
+        </small>
+      ) : null}
+    </label>
   )
 }
 
@@ -1616,6 +1693,7 @@ function FinalGameCard({
           currency={currency}
           savedBetSummary={dashboardStatus.savedBetSummary}
           showPendingResult
+          showStatusLabel
         />
       ) : null}
 
@@ -1645,6 +1723,98 @@ function FinalGameCard({
           </button>
         </div>
       ) : null}
+    </article>
+  )
+}
+
+function StartedGameCard({
+  canAnalyze,
+  currency,
+  dashboardStatus,
+  game,
+  gameContext,
+  marketOdds,
+  onAnalyzeGame,
+  onViewBets,
+  savedBets,
+  scheduleDate,
+  specialTeamsContext,
+}) {
+  const showScore = hasGameScore(game)
+  const statusLabel = getDashboardGameStatusLabel(game)
+  const statusTone = getStatusTone(statusLabel)
+  const statusPresentation = dashboardStatus?.statusPresentation ?? {
+    label: '',
+    tone: 'neutral',
+  }
+  const cardClassName = [
+    'schedule-card',
+    'started',
+    'compact-started',
+    savedBets.length > 0 ? 'has-saved-bet' : '',
+  ]
+    .filter(Boolean)
+    .join(' ')
+
+  return (
+    <article className={cardClassName}>
+      <div className="game-card-top">
+        <div className="game-card-status-stack">
+          <span className={`status-pill game-status ${statusTone}`}>
+            {statusLabel}
+          </span>
+          {statusPresentation.label ? (
+            <span className={`dashboard-card-status ${statusPresentation.tone}`}>
+              {statusPresentation.label}
+            </span>
+          ) : null}
+        </div>
+        <time dateTime={game.startTimeUTC}>
+          {formatDashboardStartTime(game.startTimeUTC, scheduleDate)}
+        </time>
+      </div>
+
+      <div className={`schedule-matchup ${showScore ? 'has-score' : ''}`}>
+        <TeamLine showScore={showScore} team={game.awayTeam} />
+        <span className="matchup-separator" aria-label="at">
+          @
+        </span>
+        <TeamLine showScore={showScore} team={game.homeTeam} />
+      </div>
+
+      {savedBets.length > 0 ? (
+        <SavedBetSummary
+          currency={currency}
+          savedBetSummary={dashboardStatus.savedBetSummary}
+        />
+      ) : null}
+
+      <div
+        className={`game-card-actions ${
+          savedBets.length > 0 ? 'with-secondary' : ''
+        }`}
+      >
+        <button
+          className="analyze-game-button"
+          type="button"
+          disabled={!canAnalyze}
+          onClick={() =>
+            onAnalyzeGame(
+              game,
+              marketOdds,
+              gameContext,
+              specialTeamsContext,
+            )
+          }
+        >
+          Analyze Game
+        </button>
+        {savedBets.length > 0 ? (
+          <button className="view-bet-button" type="button" onClick={onViewBets}>
+            View Bet
+          </button>
+        ) : null}
+      </div>
     </article>
   )
 }
@@ -1701,6 +1871,24 @@ function GameCard({
     )
   }
 
+  if (isGameStarted(game)) {
+    return (
+      <StartedGameCard
+        canAnalyze={canAnalyze}
+        currency={currency}
+        dashboardStatus={dashboardStatus}
+        game={game}
+        gameContext={gameContext}
+        marketOdds={marketOdds}
+        onAnalyzeGame={onAnalyzeGame}
+        onViewBets={onViewBets}
+        savedBets={savedBets}
+        scheduleDate={scheduleDate}
+        specialTeamsContext={specialTeamsContext}
+      />
+    )
+  }
+
   const showDashboardStatus =
     Boolean(statusPresentation.label) &&
     dashboardStatus?.status !== DASHBOARD_GAME_STATUSES.FINAL
@@ -1740,24 +1928,21 @@ function GameCard({
 
       <div className={`schedule-matchup ${showScore ? 'has-score' : ''}`}>
         <TeamLine showScore={showScore} team={game.awayTeam} />
-        <div className="matchup-divider">at</div>
+        <span className="matchup-separator" aria-label="at">
+          @
+        </span>
         <TeamLine showScore={showScore} team={game.homeTeam} />
       </div>
 
-      {canUseInjurySummaries ? (
-        <div className="game-injury-summary" aria-label="Stored injury impact">
-          <span>
-            Away injury impact{' '}
-            <strong>{formatInjuryImpact(awayInjurySummary.totalImpact)}</strong>
-          </span>
-          <span>
-            Home injury impact{' '}
-            <strong>{formatInjuryImpact(homeInjurySummary.totalImpact)}</strong>
-          </span>
-        </div>
-      ) : null}
-
-      <DashboardGoalieSummary game={game} gameContext={gameContext} />
+      <CompactModelMarket
+        analysis={preliminaryAnalysis}
+        awayTeam={game.awayTeam}
+        homeTeam={game.homeTeam}
+        marketOdds={marketOdds}
+        onMarketOddsChange={(side, value) =>
+          onMarketOddsChange(game.gameId, side, value)
+        }
+      />
 
       {savedBets.length > 0 ? (
         <SavedBetSummary
@@ -1766,35 +1951,21 @@ function GameCard({
         />
       ) : null}
 
-      <DashboardIntelligenceSummary
+      <DashboardDecisionSummary
         currency={currency}
         dashboardStatus={dashboardStatus}
       />
 
-      <GameContextSummary
+      <DashboardContextSummary
+        awayInjurySummary={awayInjurySummary}
+        canUseInjurySummaries={canUseInjurySummaries}
+        game={game}
         gameContext={gameContext}
         gameContextError={gameContextError}
         gameContextStatus={gameContextStatus}
-      />
-
-      <SpecialTeamsAlertSummary
-        game={game}
+        homeInjurySummary={homeInjurySummary}
         specialTeamsContext={specialTeamsContext}
       />
-
-      <GameMarketOdds marketOdds={marketOdds} />
-
-      {preliminaryAnalysis?.available ? (
-        <PreliminaryAnalysis
-          analysis={preliminaryAnalysis}
-          awayTeam={game.awayTeam}
-          homeTeam={game.homeTeam}
-          marketOdds={marketOdds}
-          onMarketOddsChange={(side, value) =>
-            onMarketOddsChange(game.gameId, side, value)
-          }
-        />
-      ) : null}
 
       <div
         className={`game-card-actions ${
@@ -1830,179 +2001,217 @@ function GameCard({
   )
 }
 
-function SpecialTeamsAlertSummary({
+function DashboardContextSummary({
+  awayInjurySummary,
+  canUseInjurySummaries,
   game,
+  gameContext,
+  gameContextError = '',
+  gameContextStatus = 'idle',
+  homeInjurySummary,
   specialTeamsContext,
 }) {
-  if (
-    !specialTeamsContext ||
-    specialTeamsContext.mode === SPECIAL_TEAMS_MODES.OFF
-  ) {
-    return null
-  }
+  const items = []
 
-  const signals = [
-    {
-      matchup: specialTeamsContext.away,
-      opponent: game.homeTeam,
-      team: game.awayTeam,
-    },
-    {
-      matchup: specialTeamsContext.home,
-      opponent: game.awayTeam,
-      team: game.homeTeam,
-    },
-  ].filter(({ matchup: teamMatchup }) =>
+  if (canUseInjurySummaries) {
     [
-      SPECIAL_TEAMS_MATCHUP_STATUSES.POSITIVE,
-      SPECIAL_TEAMS_MATCHUP_STATUSES.NEGATIVE,
-    ].includes(teamMatchup.status),
-  )
-
-  if (signals.length === 0) {
-    return null
+      [game.awayTeam, awayInjurySummary],
+      [game.homeTeam, homeInjurySummary],
+    ].forEach(([team, summary]) => {
+      if (hasMeaningfulAdjustment(summary?.totalImpact)) {
+        items.push({
+          key: `injury-${team.abbreviation}`,
+          label: `${team.abbreviation} injuries ${formatInjuryImpact(summary.totalImpact)}`,
+          tone: 'warning',
+        })
+      }
+    })
   }
 
-  return (
-    <div
-      className="special-teams-alert-summary"
-      aria-label="Special Teams matchup alerts"
-    >
-      {signals.map(({ matchup: teamMatchup, opponent, team }) => {
-        const isPositive =
-          teamMatchup.status === SPECIAL_TEAMS_MATCHUP_STATUSES.POSITIVE
-
-        return (
-          <div
-            className={`special-teams-alert-row ${teamMatchup.status}`}
-            key={team.abbreviation}
-          >
-            <span>
-              {team.name} special teams{' '}
-              {isPositive ? 'edge' : 'disadvantage'}
-            </span>
-            <strong>
-              PP #{teamMatchup.ppRank} vs {opponent.abbreviation} PK #
-              {teamMatchup.opponentPkRank}
-            </strong>
-            <small>
-              {isPositive
-                ? 'Strong PP vs Weak PK'
-                : 'Weak PP vs Strong PK'}
-            </small>
-            {specialTeamsContext.mode === SPECIAL_TEAMS_MODES.AUTOMATIC ? (
-              <em>
-                Automatic adjustment{' '}
-                {teamMatchup.adjustment > 0 ? '+' : ''}
-                {teamMatchup.adjustment.toFixed(2)}
-              </em>
-            ) : null}
-          </div>
-        )
-      })}
-    </div>
-  )
-}
-
-function DashboardGoalieSummary({ game, gameContext }) {
-  const selections = [
+  const goalieSelections = [
     {
-      label: 'Away',
       selection: getGoalieSelectionForSide(
         gameContext,
         'away',
         game.awayTeam.id ?? game.awayTeam.abbreviation,
       ),
+      team: game.awayTeam,
     },
     {
-      label: 'Home',
       selection: getGoalieSelectionForSide(
         gameContext,
         'home',
         game.homeTeam.id ?? game.homeTeam.abbreviation,
       ),
+      team: game.homeTeam,
     },
   ]
+  const isUnknownGoalie = ({ selection }) =>
+    selection.selectionType === GOALIE_SELECTION_TYPES.UNKNOWN
+  const unknownGoalies = goalieSelections.filter(isUnknownGoalie)
 
-  return (
-    <div className="dashboard-goalie-summary" aria-label="Goalie selections">
-      {selections.map(({ label, selection }) => {
-        const isUnknown = selection.selectionType === 'unknown'
-        let status = 'Unconfirmed'
+  if (unknownGoalies.length === goalieSelections.length) {
+    items.push({
+      key: 'goalies-unconfirmed',
+      label: 'Both starters unconfirmed',
+      tone: 'warning',
+    })
+  } else {
+    goalieSelections.forEach(({ selection, team }) => {
+      const abbreviation = team.abbreviation
+      const goalieName = selection.goalieName || 'starter'
+      const adjustment = selection.effectiveAdjustment
 
-        if (!isUnknown && selection.confirmationStatus === 'confirmed') {
-          status = 'Confirmed'
-        } else if (!isUnknown && selection.confirmationStatus === 'expected') {
-          status = 'Expected'
-        } else if (!isUnknown) {
-          status = 'Selected'
-        }
-        const adjustment = Number(selection.effectiveAdjustment)
-        const formattedAdjustment = `${adjustment >= 0 ? '+' : ''}${adjustment.toFixed(2)}`
+      if (isUnknownGoalie({ selection })) {
+        items.push({
+          key: `goalie-${abbreviation}`,
+          label: `${abbreviation} starter unconfirmed`,
+          tone: 'warning',
+        })
+        return
+      }
 
-        return (
-          <span key={label}>
-            <strong>{label} goalie:</strong>{' '}
-            {isUnknown ? 'Unknown starter' : selection.goalieName || 'Unlisted'}
-            <small>
-              {' '}
-              · {formattedAdjustment} · {status}
-            </small>
-          </span>
-        )
-      })}
-    </div>
-  )
-}
+      if (
+        selection.confirmationStatus === GOALIE_CONFIRMATION_STATUSES.UNKNOWN
+      ) {
+        items.push({
+          key: `goalie-${abbreviation}`,
+          label: `${abbreviation} ${goalieName} unconfirmed${
+            hasMeaningfulAdjustment(adjustment)
+              ? ` ${formatSignedAdjustment(adjustment)}`
+              : ''
+          }`,
+          tone: 'warning',
+        })
+        return
+      }
 
-function GameContextSummary({
-  gameContext,
-  gameContextError = '',
-  gameContextStatus = 'idle',
-}) {
-  if (!gameContext) {
-    if (gameContextStatus === 'error') {
-      return (
-        <div className="game-context-summary neutral" role="status">
-          <span>Context unavailable</span>
-          <small>{gameContextError}</small>
-        </div>
-      )
-    }
+      if (
+        selection.confirmationStatus === GOALIE_CONFIRMATION_STATUSES.EXPECTED
+      ) {
+        items.push({
+          key: `goalie-${abbreviation}`,
+          label: `${abbreviation} ${goalieName} expected${
+            hasMeaningfulAdjustment(adjustment)
+              ? ` ${formatSignedAdjustment(adjustment)}`
+              : ''
+          }`,
+          tone: 'expected',
+        })
+        return
+      }
 
-    return null
+      if (
+        selection.confirmationStatus === GOALIE_CONFIRMATION_STATUSES.SELECTED
+      ) {
+        items.push({
+          key: `goalie-${abbreviation}`,
+          label: `${abbreviation} ${goalieName} selected${
+            hasMeaningfulAdjustment(adjustment)
+              ? ` ${formatSignedAdjustment(adjustment)}`
+              : ''
+          }`,
+          tone: 'warning',
+        })
+        return
+      }
+
+      if (hasMeaningfulAdjustment(adjustment)) {
+        items.push({
+          key: `goalie-${abbreviation}`,
+          label: `${abbreviation} ${goalieName} ${formatSignedAdjustment(adjustment)}`,
+          tone: adjustment > 0 ? 'positive' : 'warning',
+        })
+      }
+    })
   }
 
-  const awayContext = getGameContextForSide(gameContext, 'away')
-  const homeContext = getGameContextForSide(gameContext, 'home')
-  const items = [
-    ['Away', awayContext],
-    ['Home', homeContext],
-  ].filter(([, context]) => hasNonZeroGameContextAdjustment(context))
+  if (gameContext) {
+    [
+      [game.awayTeam, getGameContextForSide(gameContext, 'away')],
+      [game.homeTeam, getGameContextForSide(gameContext, 'home')],
+    ].forEach(([team, context]) => {
+      if (hasNonZeroGameContextAdjustment(context)) {
+        items.push({
+          key: `schedule-${team.abbreviation}`,
+          label: `${team.abbreviation} ${getCompactGameContextAdjustmentLabel(
+            context,
+          )} ${formatSignedGameContextAdjustment(
+            context.totalGameContextAdjustment,
+          )}`,
+          tone: 'warning',
+        })
+      }
+    })
+  } else if (gameContextStatus === 'error') {
+    items.push({
+      key: 'context-unavailable',
+      label: gameContextError
+        ? `Context unavailable · ${gameContextError}`
+        : 'Context unavailable',
+      tone: 'warning',
+    })
+  }
+
+  if (
+    specialTeamsContext &&
+    specialTeamsContext.mode !== SPECIAL_TEAMS_MODES.OFF
+  ) {
+    [
+      {
+        matchup: specialTeamsContext.away,
+        opponent: game.homeTeam,
+        team: game.awayTeam,
+      },
+      {
+        matchup: specialTeamsContext.home,
+        opponent: game.awayTeam,
+        team: game.homeTeam,
+      },
+    ].forEach(({ matchup, opponent, team }) => {
+      if (
+        ![
+          SPECIAL_TEAMS_MATCHUP_STATUSES.POSITIVE,
+          SPECIAL_TEAMS_MATCHUP_STATUSES.NEGATIVE,
+        ].includes(matchup?.status)
+      ) {
+        return
+      }
+
+      const isPositive =
+        matchup.status === SPECIAL_TEAMS_MATCHUP_STATUSES.POSITIVE
+      const automaticAdjustment =
+        specialTeamsContext.mode === SPECIAL_TEAMS_MODES.AUTOMATIC &&
+        hasMeaningfulAdjustment(matchup.adjustment)
+          ? ` ${formatSignedAdjustment(matchup.adjustment)}`
+          : ''
+
+      items.push({
+        key: `special-teams-${team.abbreviation}`,
+        label: `${team.abbreviation} ${
+          isPositive ? 'Strong PP' : 'Weak PP'
+        } vs ${opponent.abbreviation} ${
+          isPositive ? 'Weak PK' : 'Strong PK'
+        }${automaticAdjustment}`,
+        tone: isPositive ? 'positive' : 'warning',
+      })
+    })
+  }
 
   if (items.length === 0) {
     return null
   }
 
   return (
-    <div className="game-context-summary" aria-label="Schedule adjustments">
-      <strong className="game-context-summary-title">
-        Schedule adjustments
-      </strong>
-      <div className="game-context-summary-rows">
-        {items.map(([label, context]) => (
-          <div className="game-context-summary-row" key={label}>
-            <span>{label}</span>
-            <em>{getCompactGameContextAdjustmentLabel(context)}</em>
-            <strong>
-              {formatSignedGameContextAdjustment(
-                context.totalGameContextAdjustment,
-              )}
-            </strong>
-          </div>
+    <section className="dashboard-context-summary" aria-label="Game context exceptions">
+      <div>
+        {items.map((item) => (
+          <span className={item.tone} key={item.key}>
+            {item.label}
+          </span>
         ))}
       </div>
-    </div>
+    </section>
   )
 }
 
@@ -2010,6 +2219,7 @@ function SavedBetSummary({
   currency,
   savedBetSummary,
   showPendingResult = false,
+  showStatusLabel = false,
 }) {
   if (!savedBetSummary?.hasBets) {
     return null
@@ -2031,8 +2241,8 @@ function SavedBetSummary({
   const showResult = showPendingResult || firstBet.result !== 'pending'
 
   return (
-    <div className="saved-bet-summary">
-      <span>Bet Saved</span>
+    <div className="saved-bet-summary" aria-label="Saved bet">
+      {showStatusLabel ? <span>Bet Saved</span> : null}
       <strong>{getBetTeamName(firstBet)}</strong>
       <small>
         {formatDashboardCurrency(firstBet.stake, currency)}{' '}
@@ -2047,7 +2257,7 @@ function SavedBetSummary({
   )
 }
 
-function DashboardIntelligenceSummary({ currency, dashboardStatus }) {
+function DashboardDecisionSummary({ currency, dashboardStatus }) {
   const status = dashboardStatus?.status
   const statusReason = dashboardStatus?.statusReason ?? ''
   const valueSide = dashboardStatus?.valueSide
@@ -2079,15 +2289,17 @@ function DashboardIntelligenceSummary({ currency, dashboardStatus }) {
     }
 
     return (
-      <div className="dashboard-intelligence" aria-label="Dashboard intelligence">
+      <div className="dashboard-decision" aria-label="Betting decision">
         <div className="value-side-row">
-          <span>Value Side</span>
+          <span>Value side</span>
           <strong>{valueSide.team.name}</strong>
         </div>
-        <div className="dashboard-intelligence-metrics">
+        <div className="dashboard-decision-metrics">
+          <span title={PROBABILITY_EDGE_HELP_TEXT}>
+            Edge <strong>{formatProbabilityEdge(valueSide.edge)}</strong>
+          </span>
           <span title="Expected-value edge = (model probability × decimal odds − 1) × 100.">
-            EV edge{' '}
-            <strong>{formatExpectedValue(valueSide.expectedValue)}</strong>
+            EV <strong>{formatExpectedValue(valueSide.expectedValue)}</strong>
           </span>
           {showKelly ? (
             <span>
@@ -2097,36 +2309,20 @@ function DashboardIntelligenceSummary({ currency, dashboardStatus }) {
           ) : null}
         </div>
         {statusReason || oneSideNote ? (
-          <small>{[statusReason, oneSideNote].filter(Boolean).join(' ')}</small>
+          <small className="dashboard-decision-note">
+            {[statusReason, oneSideNote].filter(Boolean).join(' ')}
+          </small>
         ) : null}
-      </div>
-    )
-  }
-
-  if (status === DASHBOARD_GAME_STATUSES.ADD_ODDS) {
-    return (
-      <div className="dashboard-intelligence neutral" aria-label="Dashboard intelligence">
-        <strong>Preliminary probabilities are ready.</strong>
-        <small>Enter market odds to evaluate betting value.</small>
-      </div>
-    )
-  }
-
-  if (status === DASHBOARD_GAME_STATUSES.NO_CURRENT_VALUE) {
-    return (
-      <div className="dashboard-intelligence neutral" aria-label="Dashboard intelligence">
-        <strong>No positive edge at the entered odds.</strong>
-        {oneSideNote ? <small>{oneSideNote}</small> : null}
       </div>
     )
   }
 
   if (status === DASHBOARD_GAME_STATUSES.PRELIMINARY_ANALYSIS_UNAVAILABLE) {
     return (
-      <div className="dashboard-intelligence neutral" aria-label="Dashboard intelligence">
-        <strong>Preliminary analysis unavailable.</strong>
-        {statusReason ? <small>{statusReason}</small> : null}
-      </div>
+      <p className="dashboard-decision-unavailable" role="status">
+        Preliminary analysis unavailable
+        {statusReason ? ` · ${statusReason}` : ''}
+      </p>
     )
   }
 
@@ -2460,119 +2656,6 @@ function RatingEngineSettingsNotice({ errorMessage, onRetry, status }) {
           Try again
         </button>
       ) : null}
-    </div>
-  )
-}
-
-function PreliminaryAnalysis({
-  analysis,
-  awayTeam,
-  homeTeam,
-  marketOdds,
-  onMarketOddsChange,
-}) {
-  return (
-    <div className="preliminary-panel" aria-label="Preliminary model analysis">
-      <div className="preliminary-status-row">
-        <span className="preliminary-badge">Preliminary</span>
-        {analysis.usesUnknownInputs ? (
-          <span className="review-badge">Defaults used</span>
-        ) : null}
-      </div>
-
-      <div className="preliminary-market-grid">
-        <PreliminaryMarketSide
-          label="Away"
-          market={analysis.awayMarket}
-          marketOddsValue={marketOdds.away}
-          onMarketOddsChange={(value) => onMarketOddsChange('away', value)}
-          team={awayTeam}
-        />
-        <PreliminaryMarketSide
-          label="Home"
-          market={analysis.homeMarket}
-          marketOddsValue={marketOdds.home}
-          onMarketOddsChange={(value) => onMarketOddsChange('home', value)}
-          team={homeTeam}
-        />
-      </div>
-
-      <details className="preliminary-details">
-        <summary>Preliminary details</summary>
-        <div className="preliminary-detail-grid">
-          <PreliminaryDetailSide
-            finalRating={analysis.awayFinalRating}
-            label="Away"
-            market={analysis.awayMarket}
-            team={awayTeam}
-          />
-          <PreliminaryDetailSide
-            finalRating={analysis.homeFinalRating}
-            label="Home"
-            market={analysis.homeMarket}
-            team={homeTeam}
-          />
-        </div>
-      </details>
-    </div>
-  )
-}
-
-function PreliminaryMarketSide({
-  label,
-  market,
-  marketOddsValue,
-  onMarketOddsChange,
-  team,
-}) {
-  const hasInvalidOdds =
-    marketOddsValue !== '' &&
-    marketOddsValue !== null &&
-    marketOddsValue !== undefined &&
-    !parseMarketOdds(marketOddsValue)
-  const validationId = `dashboard-${team.abbreviation || label}-market-odds-validation`
-
-  return (
-    <div className="preliminary-market-side">
-      <div>
-        <span>{label} fair</span>
-        <strong>{formatOdds(market.fairOdds)}</strong>
-      </div>
-      <label>
-        <span>Market</span>
-        <input
-          aria-label={`${team.name} market odds`}
-          aria-describedby={hasInvalidOdds ? validationId : undefined}
-          aria-invalid={hasInvalidOdds}
-          inputMode="decimal"
-          min="1.01"
-          placeholder="Odds"
-          step="0.01"
-          type="number"
-          value={marketOddsValue}
-          onChange={(event) => onMarketOddsChange(event.target.value)}
-        />
-        {hasInvalidOdds ? (
-          <small id={validationId} role="alert">
-            Market odds must be greater than 1.
-          </small>
-        ) : null}
-      </label>
-    </div>
-  )
-}
-
-function PreliminaryDetailSide({ finalRating, label, market, team }) {
-  return (
-    <div className="preliminary-detail-side">
-      <strong>{team.abbreviation || label}</strong>
-      <span>Rating {formatRating(finalRating)}</span>
-      <span>Model {formatPercent(market.modelProbability)}</span>
-      <span>Implied {formatPercent(market.impliedProbability)}</span>
-      <span title={PROBABILITY_EDGE_HELP_TEXT}>
-        Probability edge {formatProbabilityEdge(market.edge)}
-      </span>
-      <span>Expected value {formatExpectedValue(market.expectedValue)}</span>
     </div>
   )
 }
