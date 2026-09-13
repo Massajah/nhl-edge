@@ -135,98 +135,124 @@ function AuthPage({ mode, onModeChange, onSuccess }) {
 
   return (
     <main className="auth-page" aria-label={isRegister ? 'Register' : 'Login'}>
-      <section className="auth-card">
-        <div className="auth-brand">
-          <span className="sidebar-brand-mark">NE</span>
-          <div>
-            <p className="eyebrow">NHL Edge</p>
-            <h1>{isRegister ? 'Create account' : 'Sign in'}</h1>
-          </div>
-        </div>
+      <section className="auth-panel" aria-labelledby="auth-heading">
+        <div className="auth-card">
+          <header className="auth-brand">
+            <img
+              className="auth-login-logo"
+              src="/compact_logo.png"
+              alt="NHL Edge"
+            />
+            <h1 id="auth-heading">
+              {isRegister ? 'Create account' : 'Sign in'}
+            </h1>
+            <p className="auth-intro">
+              {isRegister
+                ? 'Create your account to start analyzing.'
+                : 'Welcome back. Continue to your analysis workspace.'}
+            </p>
+          </header>
 
-        {LOCAL_AUTH_ENABLED ? (
-          <form className="auth-form" onSubmit={handleSubmit}>
-          {isRegister ? (
-            <label className="field auth-field" htmlFor="auth-name">
-              <span>Name</span>
-              <input
-                id="auth-name"
-                autoComplete="name"
-                value={values.name}
-                onChange={(event) => handleValueChange('name', event.target.value)}
-              />
-            </label>
+          {LOCAL_AUTH_ENABLED ? (
+            <form className="auth-form" onSubmit={handleSubmit}>
+              {isRegister ? (
+                <label className="field auth-field" htmlFor="auth-name">
+                  <span>Name</span>
+                  <input
+                    id="auth-name"
+                    autoComplete="name"
+                    value={values.name}
+                    onChange={(event) =>
+                      handleValueChange('name', event.target.value)
+                    }
+                  />
+                </label>
+              ) : null}
+
+              <label className="field auth-field" htmlFor="auth-email">
+                <span>Email</span>
+                <input
+                  id="auth-email"
+                  autoComplete="email"
+                  inputMode="email"
+                  type="email"
+                  value={values.email}
+                  onChange={(event) =>
+                    handleValueChange('email', event.target.value)
+                  }
+                />
+              </label>
+
+              <label className="field auth-field" htmlFor="auth-password">
+                <span>Password</span>
+                <input
+                  id="auth-password"
+                  autoComplete={
+                    isRegister ? 'new-password' : 'current-password'
+                  }
+                  type="password"
+                  value={values.password}
+                  onChange={(event) =>
+                    handleValueChange('password', event.target.value)
+                  }
+                />
+              </label>
+
+              <button
+                className="auth-primary-button"
+                type="submit"
+                disabled={isSubmitting || isGoogleSubmitting}
+              >
+                {isSubmitting ? (
+                  <LoaderCircle aria-hidden="true" className="button-spinner" />
+                ) : (
+                  <ShieldCheck aria-hidden="true" size={18} strokeWidth={2.2} />
+                )}
+                {isRegister ? 'Create account' : 'Sign In'}
+              </button>
+            </form>
           ) : null}
 
-          <label className="field auth-field" htmlFor="auth-email">
-            <span>Email</span>
-            <input
-              id="auth-email"
-              autoComplete="email"
-              inputMode="email"
-              type="email"
-              value={values.email}
-              onChange={(event) => handleValueChange('email', event.target.value)}
-            />
-          </label>
+          {LOCAL_AUTH_ENABLED ? (
+            <div className="auth-divider">
+              <span>or</span>
+            </div>
+          ) : null}
 
-          <label className="field auth-field" htmlFor="auth-password">
-            <span>Password</span>
-            <input
-              id="auth-password"
-              autoComplete={isRegister ? 'new-password' : 'current-password'}
-              type="password"
-              value={values.password}
-              onChange={(event) =>
-                handleValueChange('password', event.target.value)
-              }
-            />
-          </label>
-
-          <button
-            className="auth-primary-button"
-            type="submit"
+          <GoogleSignInButton
             disabled={isSubmitting || isGoogleSubmitting}
-          >
-            {isSubmitting ? (
-              <LoaderCircle aria-hidden="true" className="button-spinner" />
-            ) : (
-              <ShieldCheck aria-hidden="true" size={18} strokeWidth={2.2} />
-            )}
-            {isRegister ? 'Create account' : 'Sign In'}
-          </button>
-          </form>
-        ) : null}
+            mode={LOCAL_AUTH_ENABLED ? mode : 'login'}
+            status={googleStatus}
+            onCredential={handleGoogleCredential}
+          />
 
-        {LOCAL_AUTH_ENABLED ? (
-          <div className="auth-divider">
-            <span>or</span>
-          </div>
-        ) : null}
+          {errorMessage || sessionMessage ? (
+            <p className="auth-error" role="alert">
+              {errorMessage || sessionMessage}
+            </p>
+          ) : null}
 
-        <GoogleSignInButton
-          disabled={isSubmitting || isGoogleSubmitting}
-          mode={LOCAL_AUTH_ENABLED ? mode : 'login'}
-          status={googleStatus}
-          onCredential={handleGoogleCredential}
-        />
+          {LOCAL_AUTH_ENABLED ? (
+            <button
+              className="auth-secondary-link"
+              type="button"
+              disabled={isSubmitting || isGoogleSubmitting}
+              onClick={() => onModeChange(isRegister ? 'login' : 'register')}
+            >
+              {isRegister ? 'Already have an account?' : 'Create account'}
+            </button>
+          ) : null}
+        </div>
+      </section>
 
-        {errorMessage || sessionMessage ? (
-          <p className="auth-error" role="alert">
-            {errorMessage || sessionMessage}
-          </p>
-        ) : null}
-
-        {LOCAL_AUTH_ENABLED ? (
-          <button
-            className="auth-secondary-link"
-            type="button"
-            disabled={isSubmitting || isGoogleSubmitting}
-            onClick={() => onModeChange(isRegister ? 'login' : 'register')}
-          >
-            {isRegister ? 'Already have an account?' : 'Create account'}
-          </button>
-        ) : null}
+      <section className="auth-product-copy">
+        <p className="eyebrow">NHL ANALYTICS</p>
+        <h2>Data-driven NHL analysis.</h2>
+        <p className="auth-product-copy-body">
+          Model game probabilities, compare fair odds with the market, identify
+          value and measure performance over time.
+        </p>
+        <p className="auth-product-copy-micro">PREDICT · COMPARE · MEASURE</p>
       </section>
     </main>
   )

@@ -27,6 +27,16 @@ const CAPTURE_HEALTH_GAME_STATES = new Set([
   'PRE',
 ])
 const CAPTURE_HEALTH_STATUSES = Object.freeze({
+  // Legacy constant aliases keep callers source-compatible; response values
+  // use the aggregate HEALTHY/GAPS vocabulary.
+  CAPTURED: 'HEALTHY',
+  GAPS: 'GAPS',
+  HEALTHY: 'HEALTHY',
+  MISSED: 'GAPS',
+  NOT_DUE: 'NOT_DUE',
+  UNAVAILABLE: 'UNAVAILABLE',
+})
+const CAPTURE_HEALTH_OBSERVATION_STATES = Object.freeze({
   CAPTURED: 'CAPTURED',
   MISSED: 'MISSED',
   NOT_DUE: 'NOT_DUE',
@@ -44,14 +54,21 @@ const CAPTURE_HEALTH_REASONS = Object.freeze({
   SCHEDULE_UNAVAILABLE: 'SCHEDULE_UNAVAILABLE',
 })
 const CAPTURE_HEALTH_FILTERS = Object.freeze({
-  missed_official_t2: Object.freeze({
+  officialT2Missing: Object.freeze({
     checkpoint: 'OFFICIAL_T2',
     detailKey: 'officialT2',
   }),
-  missing_t24: Object.freeze({ checkpoint: 'T24', detailKey: 'T24' }),
-  missing_t6: Object.freeze({ checkpoint: 'T6', detailKey: 'T6' }),
-  missing_t2: Object.freeze({ checkpoint: 'T2', detailKey: 'T2' }),
-  missing_final: Object.freeze({ checkpoint: 'FINAL', detailKey: 'FINAL' }),
+  t24Missing: Object.freeze({ checkpoint: 'T24', detailKey: 'T24' }),
+  t6Missing: Object.freeze({ checkpoint: 'T6', detailKey: 'T6' }),
+  t2Missing: Object.freeze({ checkpoint: 'T2', detailKey: 'T2' }),
+  finalMissing: Object.freeze({ checkpoint: 'FINAL', detailKey: 'FINAL' }),
+})
+const LEGACY_CAPTURE_HEALTH_STATUS_FILTERS = Object.freeze({
+  missed_official_t2: CAPTURE_HEALTH_FILTERS.officialT2Missing,
+  missing_t24: CAPTURE_HEALTH_FILTERS.t24Missing,
+  missing_t6: CAPTURE_HEALTH_FILTERS.t6Missing,
+  missing_t2: CAPTURE_HEALTH_FILTERS.t2Missing,
+  missing_final: CAPTURE_HEALTH_FILTERS.finalMissing,
 })
 
 const normalizeDate = (value) => {
@@ -85,13 +102,14 @@ const scheduleQueryBounds = (normalized) => ({
   from: new Date(normalized.start.getTime() - DAY_MS)
     .toISOString()
     .slice(0, 10),
-  to: new Date(normalized.endExclusive.getTime() + DAY_MS)
-    .toISOString()
-    .slice(0, 10),
+  // endExclusive is already the day immediately after the inclusive UI range.
+  // Querying it provides the one-day reschedule/UTC cushion without a second
+  // unnecessary day of provider work.
+  to: normalized.endExclusive.toISOString().slice(0, 10),
 })
 
 const normalizeScheduleCohort = (games, normalized) => {
-  const byIdentity = new Map()
+  const byGameId = new Map()
 
   ;(Array.isArray(games) ? games : []).forEach((game) => {
     const identity = getGameIdentity(game)
@@ -106,24 +124,76 @@ const normalizeScheduleCohort = (games, normalized) => {
       return
     }
 
-    const start = identity.scheduledStartAtCapture
-    if (start < normalized.start || start >= normalized.endExclusive) return
-
-    const key = identityKey(identity)
-    if (!byIdentity.has(key)) {
-      byIdentity.set(key, {
-        ...identity,
-        scheduledStart: start,
-      })
-    }
+    // The canonical NHL schedule is game-scoped. If a provider response contains
+    // both a stale and a current reschedule row, the last canonical row replaces
+    // the earlier identity instead of creating two expected observations.
+    byGameId.set(identity.gameId, {
+      ...identity,
+      scheduledStart: identity.scheduledStartAtCapture,
+    })
   })
 
-  return [...byIdentity.values()].sort(
+  return [...byGameId.values()].filter(
+    ({ scheduledStart }) =>
+      scheduledStart >= normalized.start &&
+      scheduledStart < normalized.endExclusive,
+  ).sort(
     (left, right) =>
       left.scheduledStart.getTime() - right.scheduledStart.getTime() ||
       left.gameId.localeCompare(right.gameId),
   )
 }
+
+const isPotentiallyApplicableScheduleGame = (game, normalized) => {
+  const seasonId = String(game?.season ?? game?.seasonId ?? '')
+  const rawGameType = game?.gameType
+  const gameType = Number(rawGameType)
+  const gameState = String(game?.gameState ?? '').trim().toUpperCase()
+
+  if (
+    !CAPTURE_HEALTH_GAME_STATES.has(gameState) ||
+    isForwardPredictionGameBlocked(game)
+  ) {
+    return false
+  }
+
+  const start = normalizeDate(
+    game?.startTimeUTC ?? game?.scheduledStartAtCapture,
+  )
+  const scheduleDate = String(game?.__replayScheduleDate ?? '')
+  const scheduleDay = /^\d{4}-\d{2}-\d{2}$/.test(scheduleDate)
+    ? normalizeDate(`${scheduleDate}T00:00:00.000Z`)
+    : null
+  const isInRange = start
+    ? start >= normalized.start && start < normalized.endExclusive
+    : scheduleDay
+      ? scheduleDay >= normalized.start && scheduleDay < normalized.endExclusive
+      : true
+
+  if (!isInRange) return false
+  if (seasonId && seasonId !== normalized.season.id) return false
+  if (
+    rawGameType !== null &&
+    rawGameType !== undefined &&
+    rawGameType !== '' &&
+    Number.isInteger(gameType) &&
+    ![2, 3].includes(gameType)
+  ) {
+    return false
+  }
+
+  // The provider was queried only for the selected (padded) schedule range. A
+  // potentially selected game with an incomplete identity cannot be excluded
+  // safely, so its denominator must be unavailable rather than zero.
+  return true
+}
+
+const hasUnsafeScheduleIdentity = (games, normalized) =>
+  (Array.isArray(games) ? games : []).some(
+    (game) =>
+      isPotentiallyApplicableScheduleGame(game, normalized) &&
+      !getGameIdentity(game),
+  )
 
 const isWindowFullyElapsed = (scheduledStart, closeBeforeStartMs, observedAt) =>
   observedAt.getTime() > scheduledStart.getTime() - closeBeforeStartMs
@@ -168,8 +238,8 @@ const isAcceptedFinalMarket = (market) =>
 
 const getCaptureStatus = (expectedCount, missedCount) => {
   if (expectedCount === 0) return CAPTURE_HEALTH_STATUSES.NOT_DUE
-  if (missedCount > 0) return CAPTURE_HEALTH_STATUSES.MISSED
-  return CAPTURE_HEALTH_STATUSES.CAPTURED
+  if (missedCount > 0) return CAPTURE_HEALTH_STATUSES.GAPS
+  return CAPTURE_HEALTH_STATUSES.HEALTHY
 }
 
 const buildCoverage = ({ capturedCount, expectedCount }) => {
@@ -185,14 +255,19 @@ const buildCoverage = ({ capturedCount, expectedCount }) => {
 }
 
 const toMissingGame = (game, checkpoint, reason) => ({
+  awayTeam: game.awayTeamId,
   awayTeamId: game.awayTeamId,
+  checkpoint,
   captureCheckpoint: checkpoint,
-  captureStatus: CAPTURE_HEALTH_STATUSES.MISSED,
+  captureStatus: CAPTURE_HEALTH_OBSERVATION_STATES.MISSED,
   gameId: game.gameId,
+  homeTeam: game.homeTeamId,
   homeTeamId: game.homeTeamId,
   reason,
   scheduledStart: game.scheduledStart,
+  season: game.seasonId,
   seasonId: game.seasonId,
+  state: CAPTURE_HEALTH_OBSERVATION_STATES.MISSED,
 })
 
 const hasMismatchedIdentityForGame = (game, documents = []) => {
@@ -215,6 +290,7 @@ const buildUnavailableCoverage = () => ({
 
 const buildUnavailableCaptureHealth = (
   reason = CAPTURE_HEALTH_REASONS.SCHEDULE_UNAVAILABLE,
+  { observedAt = null, scheduleSource = null, stale = null } = {},
 ) => ({
   marketCheckpoints: {
     FINAL: buildUnavailableCoverage(),
@@ -223,16 +299,21 @@ const buildUnavailableCaptureHealth = (
     T24: buildUnavailableCoverage(),
   },
   missingGames: { FINAL: [], T2: [], T6: [], T24: [], officialT2: [] },
-  observedAt: null,
+  observedAt,
   officialT2: {
+    capturedCount: null,
     capturedOfficialT2: null,
+    coveragePercent: null,
+    expectedCount: null,
     expectedOfficialT2: null,
+    missedCount: null,
     missedOfficialT2: null,
+    missingCount: null,
     officialT2CoveragePercent: null,
     status: CAPTURE_HEALTH_STATUSES.UNAVAILABLE,
   },
   reason,
-  schedule: { source: null, stale: null },
+  schedule: { source: scheduleSource, stale },
   status: CAPTURE_HEALTH_STATUSES.UNAVAILABLE,
 })
 
@@ -248,6 +329,13 @@ const calculateCaptureHealth = ({
   const current = normalizeDate(observedAt)
   if (!current) throw new TypeError('observedAt must be a valid date.')
 
+  if (hasUnsafeScheduleIdentity(scheduleGames, normalized)) {
+    return buildUnavailableCaptureHealth(
+      CAPTURE_HEALTH_REASONS.SCHEDULE_UNAVAILABLE,
+      { observedAt: current, scheduleSource, stale: false },
+    )
+  }
+
   const cohort = normalizeScheduleCohort(scheduleGames, normalized)
   const officialDue = cohort.filter((game) =>
     isWindowFullyElapsed(game.scheduledStart, CLOSE_BEFORE_MS, current),
@@ -262,15 +350,19 @@ const calculateCaptureHealth = ({
     (game) => !capturedPredictionKeys.has(identityKey(game)),
   )
   const capturedOfficialT2 = officialDue.length - missedOfficial.length
+  const officialCoverage = buildCoverage({
+    capturedCount: capturedOfficialT2,
+    expectedCount: officialDue.length,
+  })
   const officialT2 = {
+    ...officialCoverage,
+    // These aliases preserve the Phase 0-3 response while the generic count
+    // fields provide the same contract as every market checkpoint.
     capturedOfficialT2,
     expectedOfficialT2: officialDue.length,
+    missedCount: missedOfficial.length,
     missedOfficialT2: missedOfficial.length,
-    officialT2CoveragePercent: percentage(
-      capturedOfficialT2,
-      officialDue.length,
-    ),
-    status: getCaptureStatus(officialDue.length, missedOfficial.length),
+    officialT2CoveragePercent: officialCoverage.coveragePercent,
   }
   const acceptedSnapshotKeys = new Set(
     snapshots
@@ -345,13 +437,13 @@ const calculateCaptureHealth = ({
 
   const sections = [officialT2, ...Object.values(marketCheckpoints)]
   const status = sections.some(
-    (section) => section.status === CAPTURE_HEALTH_STATUSES.MISSED,
+    (section) => section.status === CAPTURE_HEALTH_STATUSES.GAPS,
   )
-    ? CAPTURE_HEALTH_STATUSES.MISSED
+    ? CAPTURE_HEALTH_STATUSES.GAPS
     : sections.some(
-          (section) => section.status === CAPTURE_HEALTH_STATUSES.CAPTURED,
+          (section) => section.status === CAPTURE_HEALTH_STATUSES.HEALTHY,
         )
-      ? CAPTURE_HEALTH_STATUSES.CAPTURED
+      ? CAPTURE_HEALTH_STATUSES.HEALTHY
       : CAPTURE_HEALTH_STATUSES.NOT_DUE
 
   return {
@@ -402,7 +494,14 @@ const loadCaptureHealth = async ({
     typeof repository?.findCaptureHealthSnapshots !== 'function' ||
     typeof repository?.findCaptureHealthClosingMarkets !== 'function'
   ) {
-    return buildUnavailableCaptureHealth()
+    return buildUnavailableCaptureHealth(
+      CAPTURE_HEALTH_REASONS.SCHEDULE_UNAVAILABLE,
+      {
+        observedAt,
+        scheduleSource: scheduleState?.source ?? null,
+        stale: scheduleState?.stale ?? null,
+      },
+    )
   }
 
   const scheduleGames = normalizeScheduleCohort(
@@ -421,6 +520,11 @@ const loadCaptureHealth = async ({
   } catch {
     return buildUnavailableCaptureHealth(
       CAPTURE_HEALTH_REASONS.CAPTURE_DATA_UNAVAILABLE,
+      {
+        observedAt,
+        scheduleSource: scheduleState.source ?? null,
+        stale: false,
+      },
     )
   }
 
@@ -445,11 +549,14 @@ const serializeCaptureHealth = (captureHealth) => {
 module.exports = {
   CAPTURE_HEALTH_FILTERS,
   CAPTURE_HEALTH_GAME_STATES,
+  CAPTURE_HEALTH_OBSERVATION_STATES,
   CAPTURE_HEALTH_REASONS,
   CAPTURE_HEALTH_STATUSES,
+  LEGACY_CAPTURE_HEALTH_STATUS_FILTERS,
   buildUnavailableCaptureHealth,
   calculateCaptureHealth,
   identityKey,
+  hasUnsafeScheduleIdentity,
   isWindowFullyElapsed,
   loadCaptureHealth,
   normalizeScheduleCohort,

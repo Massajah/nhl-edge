@@ -33,6 +33,7 @@ const { ODDS_SNAPSHOT_TYPES } = require('./oddsSnapshotContracts')
 const { getNhlTeamIdentity } = require('./nhlTeamIdentity')
 const {
   CAPTURE_HEALTH_FILTERS,
+  LEGACY_CAPTURE_HEALTH_STATUS_FILTERS,
   loadCaptureHealth,
   serializeCaptureHealth,
 } = require('./modelPerformanceCaptureHealthService')
@@ -49,8 +50,11 @@ const GAME_STATUS_FILTERS = Object.freeze([
   'pending',
   'missing_market',
   'excluded',
-  ...Object.keys(CAPTURE_HEALTH_FILTERS),
+  ...Object.keys(LEGACY_CAPTURE_HEALTH_STATUS_FILTERS),
 ])
+const CAPTURE_HEALTH_QUERY_FILTERS = Object.freeze(
+  Object.keys(CAPTURE_HEALTH_FILTERS),
+)
 
 class ModelPerformanceError extends Error {
   constructor(message, statusCode = 400, details = undefined) {
@@ -213,6 +217,22 @@ const normalizePerformanceQuery = async (
       supportedValues: GAME_STATUS_FILTERS,
     })
   }
+  const captureHealth = games
+    ? normalizeRawText(query.captureHealth, 'captureHealth')
+    : ''
+  if (games && captureHealth && !CAPTURE_HEALTH_QUERY_FILTERS.includes(captureHealth)) {
+    throw new ModelPerformanceError('captureHealth is not supported.', 400, {
+      field: 'captureHealth',
+      supportedValues: CAPTURE_HEALTH_QUERY_FILTERS,
+    })
+  }
+  if (games && captureHealth && status !== 'all') {
+    throw new ModelPerformanceError(
+      'captureHealth cannot be combined with a status filter.',
+      400,
+      { field: 'captureHealth' },
+    )
+  }
 
   return {
     availableSeasons: (seasonMetadata?.seasons ?? []).map((candidate) => ({
@@ -222,6 +242,7 @@ const normalizePerformanceQuery = async (
       label: candidate.label,
       startDate: candidate.startDate,
     })),
+    captureHealth,
     endExclusive,
     from: from?.toISOString().slice(0, 10) ?? null,
     limit: games
@@ -975,7 +996,9 @@ const rowMatchesStatus = (row, status) => {
 
 const getModelPerformanceGames = async (userId, query = {}, options = {}) => {
   const dataset = await buildDataset(userId, query, options, true)
-  const captureFilter = CAPTURE_HEALTH_FILTERS[dataset.normalized.status]
+  const captureFilter = dataset.normalized.captureHealth
+    ? CAPTURE_HEALTH_FILTERS[dataset.normalized.captureHealth]
+    : LEGACY_CAPTURE_HEALTH_STATUS_FILTERS[dataset.normalized.status]
   const filtered = captureFilter
     ? dataset.captureHealth.missingGames?.[captureFilter.detailKey] ?? []
     : dataset.rows.filter((row) =>
@@ -994,6 +1017,7 @@ const getModelPerformanceGames = async (userId, query = {}, options = {}) => {
     coverage: buildCoverage(dataset),
     dataQuality: buildDataQuality(dataset),
     filters: {
+      captureHealth: dataset.normalized.captureHealth || null,
       from: dataset.normalized.from,
       limit: dataset.normalized.limit,
       modelVersion: dataset.modelVersion,
@@ -1016,6 +1040,7 @@ const getModelPerformanceGames = async (userId, query = {}, options = {}) => {
 }
 
 module.exports = {
+  CAPTURE_HEALTH_QUERY_FILTERS,
   DEFAULT_LIMIT,
   DEFAULT_PAGE,
   GAME_STATUS_FILTERS,

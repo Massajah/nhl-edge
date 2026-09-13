@@ -33,9 +33,14 @@ function Sidebar({
   return (
     <aside className="sidebar" aria-label="Primary navigation">
       <div className="sidebar-brand-row">
-        <div className="sidebar-brand" aria-label="NHL EDGE">
-          <span className="sidebar-brand-mark">NE</span>
-          <span className="sidebar-brand-title">NHL EDGE</span>
+        <div className="sidebar-brand">
+          <picture className="sidebar-brand-logo">
+            <source media="(max-width: 860px)" srcSet="/compact_logo.png" />
+            <img
+              src={isCollapsed ? '/app_icon.png?v=2' : '/compact_logo.png'}
+              alt="NHL Edge"
+            />
+          </picture>
         </div>
         <button
           className="sidebar-mobile-close"

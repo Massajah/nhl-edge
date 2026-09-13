@@ -83,7 +83,25 @@ test('Official T2 is captured only by an exact accepted prediction', () => {
   assert.equal(result.officialT2.capturedOfficialT2, 1)
   assert.equal(result.officialT2.missedOfficialT2, 0)
   assert.equal(result.officialT2.officialT2CoveragePercent, 100)
+  assert.equal(result.officialT2.expectedCount, 1)
+  assert.equal(result.officialT2.capturedCount, 1)
+  assert.equal(result.officialT2.missingCount, 0)
+  assert.equal(result.officialT2.missedCount, 0)
+  assert.equal(result.officialT2.coveragePercent, 100)
   assert.equal(result.officialT2.status, CAPTURE_HEALTH_STATUSES.CAPTURED)
+})
+
+test('Official T2 accepts a prediction captured at the inclusive T-120 boundary', () => {
+  const result = calculate({
+    predictions: [
+      prediction({
+        generatedAt: new Date(START.getTime() - 120 * 60 * 1000),
+      }),
+    ],
+  })
+
+  assert.equal(result.officialT2.capturedCount, 1)
+  assert.equal(result.officialT2.status, CAPTURE_HEALTH_STATUSES.HEALTHY)
 })
 
 test('elapsed Official T2 window without a prediction is missed', () => {
@@ -137,6 +155,47 @@ test('rescheduled identity does not credit the old Official T2 capture', () => {
   )
 })
 
+test('rescheduled current identity is evaluated once and can be captured', () => {
+  const newStart = new Date(START.getTime() + 60 * 60 * 1000)
+  const result = calculate({
+    observedAt: new Date(newStart.getTime() - 74 * 60 * 1000),
+    predictions: [
+      prediction({
+        generatedAt: new Date(newStart.getTime() - 90 * 60 * 1000),
+        scheduledStartAtCapture: newStart,
+      }),
+    ],
+    scheduleGames: [
+      game(),
+      game({ startTimeUTC: newStart }),
+    ],
+  })
+
+  assert.equal(result.officialT2.expectedCount, 1)
+  assert.equal(result.officialT2.capturedCount, 1)
+  assert.equal(result.officialT2.missingCount, 0)
+})
+
+test('reschedule outside the selected dates removes the stale old identity', () => {
+  const result = calculate({
+    scheduleGames: [
+      game(),
+      game({ startTimeUTC: '2026-12-01T19:00:00.000Z' }),
+    ],
+  })
+
+  assert.equal(result.officialT2.expectedCount, 0)
+  assert.equal(result.marketCheckpoints.T24.expectedCount, 0)
+})
+
+test('duplicate predictions cannot inflate Official T2 captured count', () => {
+  const official = prediction()
+  const result = calculate({ predictions: [official, { ...official }] })
+
+  assert.equal(result.officialT2.expectedCount, 1)
+  assert.equal(result.officialT2.capturedCount, 1)
+})
+
 test('postponed, cancelled and unusable schedule games are excluded', () => {
   const result = calculate({
     scheduleGames: [
@@ -148,6 +207,17 @@ test('postponed, cancelled and unusable schedule games are excluded', () => {
 
   assert.equal(result.officialT2.expectedOfficialT2, 0)
   assert.equal(result.marketCheckpoints.T2.expectedCount, 0)
+})
+
+test('an applicable game with an unsafe schedule identity makes denominators unavailable', () => {
+  const result = calculate({
+    scheduleGames: [game({ startTimeUTC: 'not-a-date' })],
+  })
+
+  assert.equal(result.status, CAPTURE_HEALTH_STATUSES.UNAVAILABLE)
+  assert.equal(result.reason, 'SCHEDULE_UNAVAILABLE')
+  assert.equal(result.officialT2.expectedCount, null)
+  assert.equal(result.marketCheckpoints.T24.expectedCount, null)
 })
 
 test('schedule cohort enforces exact season and date isolation', () => {
@@ -167,7 +237,7 @@ test('schedule cohort enforces exact season and date isolation', () => {
 test('schedule queries pad both bounds before exact scheduled-start filtering', () => {
   assert.deepEqual(scheduleQueryBounds(normalized), {
     from: '2026-09-30',
-    to: '2026-11-02',
+    to: '2026-11-01',
   })
 })
 
@@ -216,6 +286,54 @@ test('FINAL is not due at its inclusive close and uses a valid finalized market'
   assert.equal(captured.marketCheckpoints.FINAL.coveragePercent, 100)
 })
 
+test('checkpoint denominators are based on each window rather than all games', () => {
+  const result = calculate({
+    observedAt: new Date(START.getTime() - 3 * 60 * 60 * 1000),
+  })
+
+  assert.equal(result.marketCheckpoints.T24.expectedCount, 1)
+  assert.equal(result.marketCheckpoints.T6.expectedCount, 1)
+  assert.equal(result.marketCheckpoints.T2.expectedCount, 0)
+  assert.equal(result.marketCheckpoints.FINAL.expectedCount, 0)
+  assert.equal(result.marketCheckpoints.T2.status, CAPTURE_HEALTH_STATUSES.NOT_DUE)
+  assert.equal(result.marketCheckpoints.FINAL.status, CAPTURE_HEALTH_STATUSES.NOT_DUE)
+})
+
+test('latest safe bookmakers do not satisfy FINAL without finalized bookmakers', () => {
+  const result = calculate({
+    closingMarkets: [
+      closing({
+        finalBookmakers: [],
+        latestSafeBookmakers: [
+          { awayOdds: 1.9, homeOdds: 2.1, key: 'pinnacle' },
+        ],
+      }),
+    ],
+    observedAt: new Date(START.getTime() - 5 * 60 * 1000 + 1),
+  })
+
+  assert.equal(result.marketCheckpoints.FINAL.capturedCount, 0)
+  assert.equal(result.marketCheckpoints.FINAL.missingCount, 1)
+})
+
+test('wrong-identity and duplicate closing rows cannot inflate FINAL', () => {
+  const accepted = closing()
+  const result = calculate({
+    closingMarkets: [
+      accepted,
+      { ...accepted },
+      closing({
+        scheduledStartAtCapture: new Date(START.getTime() + 60 * 60 * 1000),
+      }),
+    ],
+    observedAt: new Date(START.getTime() - 5 * 60 * 1000 + 1),
+  })
+
+  assert.equal(result.marketCheckpoints.FINAL.expectedCount, 1)
+  assert.equal(result.marketCheckpoints.FINAL.capturedCount, 1)
+  assert.equal(result.marketCheckpoints.FINAL.missingCount, 0)
+})
+
 test('duplicate snapshots do not inflate captured checkpoint count', () => {
   const t2 = snapshot('T2', 90)
   const result = calculate({ snapshots: [t2, { ...t2 }] })
@@ -258,6 +376,28 @@ test('schedule provider failure returns unavailable null counts without reposito
   assert.equal(result.officialT2.expectedOfficialT2, null)
   assert.equal(result.marketCheckpoints.T24.expectedCount, null)
   assert.equal(repositoryReads, 0)
+})
+
+test('stale schedule data is unavailable and never creates missed observations', async () => {
+  const result = await loadCaptureHealth({
+    normalized,
+    predictions: [],
+    repository: {
+      async findCaptureHealthClosingMarkets() { return [] },
+      async findCaptureHealthSnapshots() { return [] },
+    },
+    scheduleProvider: async () => ({
+      games: [game()],
+      source: 'season_stale_cache',
+      stale: true,
+    }),
+  })
+
+  assert.equal(result.status, CAPTURE_HEALTH_STATUSES.UNAVAILABLE)
+  assert.equal(result.officialT2.expectedCount, null)
+  assert.equal(result.officialT2.missingCount, null)
+  assert.equal(result.schedule.source, 'season_stale_cache')
+  assert.equal(result.schedule.stale, true)
 })
 
 test('capture repository failure returns unavailable without breaking the aggregate', async () => {

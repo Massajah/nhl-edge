@@ -2299,39 +2299,28 @@
 }
 
 .sidebar-brand {
-  display: grid;
-  grid-template-columns: 40px minmax(0, 1fr);
-  gap: 10px;
+  display: flex;
   align-items: center;
+  flex: 1;
   min-width: 0;
-  min-height: 46px;
+  min-height: 52px;
   padding: 0 8px;
   color: var(--text-strong);
 }
 
-.sidebar-brand-mark {
-  display: inline-flex;
+.sidebar-brand-logo {
+  display: flex;
+  width: min(188px, 100%);
+  min-width: 0;
   align-items: center;
-  justify-content: center;
-  width: 38px;
-  height: 38px;
-  border: 1px solid rgba(35, 211, 182, 0.42);
-  border-radius: 8px;
-  color: #06120f;
-  background: var(--accent);
-  font-size: 0.82rem;
-  font-weight: 950;
-  letter-spacing: 0;
 }
 
-.sidebar-brand-title {
-  overflow: hidden;
-  color: var(--text-strong);
-  font-size: 0.9rem;
-  font-weight: 950;
-  letter-spacing: 0.08em;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.sidebar-brand-logo img {
+  display: block;
+  width: 100%;
+  height: 52px;
+  object-fit: contain;
+  object-position: left center;
 }
 
 .sidebar-mobile-close,
@@ -2556,12 +2545,20 @@
 }
 
 .app-layout.sidebar-collapsed .sidebar-brand {
-  grid-template-columns: 1fr;
-  justify-items: center;
+  justify-content: center;
   padding: 0;
 }
 
-.app-layout.sidebar-collapsed .sidebar-brand-title,
+.app-layout.sidebar-collapsed .sidebar-brand-logo {
+  width: 44px;
+}
+
+.app-layout.sidebar-collapsed .sidebar-brand-logo img {
+  height: 44px;
+  border-radius: 9px;
+  object-position: center;
+}
+
 .app-layout.sidebar-collapsed .nav-item-label,
 .app-layout.sidebar-collapsed .sidebar-collapse-label,
 .app-layout.sidebar-collapsed .sidebar-user-copy,
@@ -2605,40 +2602,123 @@
   display: none;
 }
 
-.auth-page,
-.auth-loading-screen {
+.auth-page {
+  position: relative;
   display: grid;
   min-height: 100vh;
+  min-height: 100svh;
   place-items: center;
-  padding: 28px 16px;
+  overflow-x: hidden;
+  padding: clamp(24px, 4vw, 48px) 16px;
+  background: url('/login_hero.png') center bottom / cover no-repeat;
+  isolation: isolate;
+}
+
+.auth-page::before {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
   background:
-    linear-gradient(180deg, rgba(35, 211, 182, 0.08), transparent 320px),
-    var(--bg);
+    radial-gradient(circle at center, rgba(4, 11, 20, 0.05), rgba(3, 8, 15, 0.34)),
+    linear-gradient(180deg, rgba(3, 8, 15, 0.16), rgba(3, 8, 15, 0.38));
+  content: '';
+  pointer-events: none;
+}
+
+.auth-panel {
+  display: grid;
+  width: min(432px, 100%);
+  min-width: 0;
+  place-items: center;
+}
+
+.auth-product-copy {
+  position: absolute;
+  bottom: clamp(36px, 6vh, 64px);
+  left: clamp(36px, 4vw, 64px);
+  z-index: 1;
+  width: min(480px, calc(50vw - 290px));
+  color: var(--text-muted);
+  text-shadow: 0 2px 16px rgba(0, 0, 0, 0.72);
+}
+
+.auth-product-copy .eyebrow {
+  margin-bottom: 10px;
+  color: #75d7ff;
+}
+
+.auth-product-copy h2 {
+  margin: 0 0 12px;
+  color: #f6fbff;
+  font-size: clamp(1.75rem, 2.3vw, 2.25rem);
+  font-weight: 900;
+  letter-spacing: -0.035em;
+  line-height: 1.08;
+}
+
+.auth-product-copy-body {
+  margin: 0;
+  color: rgba(224, 235, 247, 0.78);
+  font-size: 0.94rem;
+  font-weight: 650;
+  line-height: 1.6;
+}
+
+.auth-product-copy-micro {
+  margin: 16px 0 0;
+  color: rgba(117, 215, 255, 0.72);
+  font-size: 0.68rem;
+  font-weight: 850;
+  letter-spacing: 0.18em;
+}
+
+@media (max-width: 1100px) {
+  .auth-product-copy {
+    display: none;
+  }
 }
 
 .auth-card {
   display: grid;
-  width: min(432px, 100%);
+  width: 100%;
   gap: 18px;
-  border: 1px solid rgba(35, 211, 182, 0.18);
-  border-radius: 8px;
-  padding: 24px;
-  background: rgba(17, 25, 34, 0.96);
-  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.32);
+  border: 1px solid rgba(74, 183, 255, 0.2);
+  border-radius: 12px;
+  padding: clamp(24px, 3vw, 34px);
+  background: rgba(8, 15, 25, 0.88);
+  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.48);
+  backdrop-filter: blur(8px);
 }
 
 .auth-brand {
   display: grid;
-  grid-template-columns: 42px minmax(0, 1fr);
-  gap: 12px;
-  align-items: center;
+  gap: 8px;
+  justify-items: center;
+  text-align: center;
+}
+
+.auth-login-logo {
+  display: block;
+  width: min(300px, 90%);
+  height: auto;
+  margin: -4px auto 6px;
+  filter: drop-shadow(0 12px 24px rgba(0, 0, 0, 0.3));
 }
 
 .auth-brand h1 {
   margin: 0;
   color: var(--text-strong);
-  font-size: 2rem;
-  line-height: 1;
+  font-size: clamp(2rem, 3.4vw, 2.75rem);
+  letter-spacing: -0.035em;
+  line-height: 1.02;
+}
+
+.auth-intro {
+  margin: 2px 0 0;
+  color: var(--text-muted);
+  font-size: 0.88rem;
+  font-weight: 650;
+  line-height: 1.55;
 }
 
 .auth-form {
@@ -2789,9 +2869,18 @@
 }
 
 .auth-loading-screen {
+  display: grid;
+  min-height: 100vh;
+  min-height: 100svh;
+  place-content: center;
+  align-items: center;
   gap: 12px;
   grid-template-columns: 42px auto;
+  padding: 28px 16px;
   color: var(--text-strong);
+  background:
+    linear-gradient(180deg, rgba(35, 211, 182, 0.08), transparent 320px),
+    var(--bg);
   font-size: 0.94rem;
   font-weight: 900;
 }
@@ -9731,19 +9820,21 @@ button.coverage-item {
   font-size: 0.66rem;
 }
 
-.capture-health-state.captured {
+.capture-health-state.captured,
+.capture-health-state.healthy {
   color: var(--accent);
   background: rgba(35, 211, 182, 0.09);
 }
 
-.capture-health-state.missed {
+.capture-health-state.missed,
+.capture-health-state.gaps {
   color: var(--accent-warm);
   background: rgba(255, 181, 71, 0.09);
 }
 
 .capture-health-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 8px;
 }
 
@@ -15196,12 +15287,31 @@ optgroup {
 
   .app-layout.sidebar-collapsed .sidebar-brand,
   .sidebar-brand {
-    grid-template-columns: 40px minmax(0, 1fr);
-    justify-items: stretch;
+    justify-content: flex-start;
     padding: 0 8px;
   }
 
-  .app-layout.sidebar-collapsed .sidebar-brand-title,
+  .app-layout.sidebar-collapsed .sidebar-brand-logo,
+  .sidebar-brand-logo {
+    width: min(188px, 100%);
+  }
+
+  .app-layout.sidebar-collapsed .sidebar-brand-logo img,
+  .sidebar-brand-logo img {
+    height: 52px;
+    border-radius: 0;
+    object-position: left center;
+  }
+
+  .auth-page {
+    padding: 24px 18px;
+    background-position: 72% bottom;
+  }
+
+  .auth-login-logo {
+    width: min(280px, 78vw);
+  }
+
   .app-layout.sidebar-collapsed .nav-item-label,
   .app-layout.sidebar-collapsed .sidebar-user-copy,
   .app-layout.sidebar-collapsed .sidebar-logout-button span {
@@ -15324,6 +15434,15 @@ optgroup {
 
   .auth-card {
     padding: 18px;
+  }
+
+  .auth-page {
+    padding: 18px 12px;
+    background-position: 72% bottom;
+  }
+
+  .auth-login-logo {
+    width: min(250px, 76vw);
   }
 
   .power-update-form {

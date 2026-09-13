@@ -526,6 +526,10 @@ test('capture health uses the authenticated prediction cohort and exact schedule
   assert.equal(result.captureHealth.officialT2.expectedOfficialT2, 2)
   assert.equal(result.captureHealth.officialT2.capturedOfficialT2, 1)
   assert.equal(result.captureHealth.officialT2.missedOfficialT2, 1)
+  assert.equal(result.captureHealth.officialT2.expectedCount, 2)
+  assert.equal(result.captureHealth.officialT2.capturedCount, 1)
+  assert.equal(result.captureHealth.officialT2.missingCount, 1)
+  assert.equal(result.captureHealth.officialT2.coveragePercent, 50)
   assert.equal(Object.hasOwn(result.captureHealth, 'missingGames'), false)
 })
 
@@ -557,16 +561,22 @@ test('games endpoint paginates compact missing-capture drill-down rows', async (
   }
   const official = await getModelPerformanceGames(
     USER_ID,
-    { status: 'missed_official_t2' },
+    { captureHealth: 'officialT2Missing' },
     options,
   )
   const t24 = await getModelPerformanceGames(
     USER_ID,
-    { status: 'missing_t24' },
+    { captureHealth: 't24Missing' },
     options,
   )
 
   assert.equal(official.pagination.totalItems, 1)
+  assert.equal(official.filters.captureHealth, 'officialT2Missing')
+  assert.equal(official.items[0].checkpoint, 'OFFICIAL_T2')
+  assert.equal(official.items[0].state, 'MISSED')
+  assert.equal(official.items[0].season, SEASON.id)
+  assert.equal(official.items[0].awayTeam, 'COL')
+  assert.equal(official.items[0].homeTeam, 'BOS')
   assert.equal(official.items[0].captureCheckpoint, 'OFFICIAL_T2')
   assert.equal(official.items[0].reason, 'OFFICIAL_T2_CAPTURE_MISSED')
   assert.equal(t24.pagination.totalItems, 1)
@@ -594,6 +604,16 @@ test('invalid filters fail before repository access', async () => {
   await assert.rejects(
     () => normalizePerformanceQuery({ modelVersion: '$bad' }, options),
     (error) => error.statusCode === 400,
+  )
+  await assert.rejects(
+    () =>
+      normalizePerformanceQuery(
+        { captureHealth: 'futureMissing' },
+        options,
+        { games: true },
+      ),
+    (error) =>
+      error.statusCode === 400 && error.details?.field === 'captureHealth',
   )
 
   const playoffRange = await normalizePerformanceQuery(

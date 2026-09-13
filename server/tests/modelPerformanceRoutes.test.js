@@ -89,6 +89,35 @@ test('games route returns pagination and preserves validated filter inputs', asy
   assert.equal(received.query.limit, '10')
 })
 
+test('games route forwards capture-health filters without granting client identity authority', async () => {
+  const original = modelPerformanceService.getModelPerformanceGames
+  const token = authSessionService.createTestAuthSession('capture-health-owner')
+  let received = null
+
+  modelPerformanceService.getModelPerformanceGames = async (userId, query) => {
+    received = { query, userId }
+    return {
+      items: [],
+      pagination: { page: 1, pageSize: 20, totalItems: 0, totalPages: 0 },
+    }
+  }
+
+  try {
+    const response = await request(
+      '/api/model-performance/games?captureHealth=finalMissing&userId=attacker',
+      { headers: { Cookie: `nhl_edge_session=${token}` } },
+    )
+
+    assert.equal(response.status, 200)
+  } finally {
+    modelPerformanceService.getModelPerformanceGames = original
+  }
+
+  assert.equal(received.userId, 'capture-health-owner')
+  assert.equal(received.query.captureHealth, 'finalMissing')
+  assert.notEqual(received.userId, received.query.userId)
+})
+
 test('validation errors use the existing safe API error contract', async () => {
   const original = modelPerformanceService.getModelPerformance
   const token = authSessionService.createTestAuthSession('validation-owner')

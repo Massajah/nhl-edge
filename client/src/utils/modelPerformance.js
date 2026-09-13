@@ -10,20 +10,35 @@ export const GAME_STATUS_OPTIONS = Object.freeze([
   { value: 'pending', label: 'Pending' },
   { value: 'missing_market', label: 'Missing market' },
   { value: 'excluded', label: 'Excluded' },
-  { value: 'missed_official_t2', label: 'Missed Official T2' },
-  { value: 'missing_t24', label: 'Missing T24' },
-  { value: 'missing_t6', label: 'Missing T6' },
-  { value: 'missing_t2', label: 'Missing T2' },
-  { value: 'missing_final', label: 'Missing FINAL' },
+  { value: 'officialT2Missing', label: 'Missed Official T2' },
+  { value: 't24Missing', label: 'Missing T24' },
+  { value: 't6Missing', label: 'Missing T6' },
+  { value: 't2Missing', label: 'Missing T2' },
+  { value: 'finalMissing', label: 'Missing FINAL' },
 ])
 
 export const CAPTURE_HEALTH_FILTER_BY_CHECKPOINT = Object.freeze({
-  FINAL: 'missing_final',
-  OFFICIAL_T2: 'missed_official_t2',
-  T2: 'missing_t2',
-  T6: 'missing_t6',
-  T24: 'missing_t24',
+  FINAL: 'finalMissing',
+  OFFICIAL_T2: 'officialT2Missing',
+  T2: 't2Missing',
+  T6: 't6Missing',
+  T24: 't24Missing',
 })
+const LEGACY_CAPTURE_HEALTH_FILTERS = Object.freeze({
+  missed_official_t2: 'officialT2Missing',
+  missing_final: 'finalMissing',
+  missing_t2: 't2Missing',
+  missing_t24: 't24Missing',
+  missing_t6: 't6Missing',
+})
+
+const normalizeCaptureHealthFilter = (value) => {
+  const normalized = String(value ?? '').trim()
+
+  return Object.values(CAPTURE_HEALTH_FILTER_BY_CHECKPOINT).includes(normalized)
+    ? normalized
+    : LEGACY_CAPTURE_HEALTH_FILTERS[normalized] ?? ''
+}
 
 export const createModelPerformanceFilters = () => ({
   from: '',
@@ -37,8 +52,20 @@ export const buildModelPerformanceQueryString = (
   { games = false } = {},
 ) => {
   const search = new URLSearchParams()
+  const captureHealthFilter = games
+    ? normalizeCaptureHealthFilter(filters.status) ||
+      normalizeCaptureHealthFilter(filters.captureHealth)
+    : ''
   const keys = games
-    ? ['season', 'from', 'to', 'modelVersion', 'status', 'page', 'limit']
+    ? [
+        'season',
+        'from',
+        'to',
+        'modelVersion',
+        ...(captureHealthFilter ? [] : ['status']),
+        'page',
+        'limit',
+      ]
     : ['season', 'from', 'to', 'modelVersion']
 
   keys.forEach((key) => {
@@ -48,6 +75,8 @@ export const buildModelPerformanceQueryString = (
       search.set(key, String(value).trim())
     }
   })
+
+  if (captureHealthFilter) search.set('captureHealth', captureHealthFilter)
 
   const query = search.toString()
 
@@ -265,12 +294,16 @@ export const buildPriceTimelinePoints = (bet) => {
 }
 
 export const isCaptureHealthStatusFilter = (value) =>
-  Object.values(CAPTURE_HEALTH_FILTER_BY_CHECKPOINT).includes(value)
+  Boolean(normalizeCaptureHealthFilter(value))
 
 export const getCaptureHealthLabel = (captureHealth = {}) => {
-  if (captureHealth.status === 'MISSED') return 'Capture gaps detected'
-  if (captureHealth.status === 'CAPTURED') return 'Capture health OK'
-  if (captureHealth.status === 'NOT_DUE') return 'No checkpoints due yet'
+  if (['GAPS', 'MISSED'].includes(captureHealth.status)) {
+    return 'Capture gaps detected'
+  }
+  if (['HEALTHY', 'CAPTURED'].includes(captureHealth.status)) {
+    return 'Capture health OK'
+  }
+  if (captureHealth.status === 'NOT_DUE') return 'No captures due yet'
   return 'Capture health unavailable'
 }
 

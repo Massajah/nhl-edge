@@ -1,10 +1,15 @@
 import assert from 'node:assert/strict'
-import { readFile } from 'node:fs/promises'
+import { access, readFile, stat } from 'node:fs/promises'
 import { after, before, test } from 'node:test'
+import React from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
 import { createServer } from 'vite'
 
 let apiClient
 let authApi
+let AuthPage
+let AuthProvider
+let Sidebar
 let vite
 
 before(async () => {
@@ -16,6 +21,13 @@ before(async () => {
   })
   apiClient = await vite.ssrLoadModule('/src/services/apiClient.js')
   authApi = await vite.ssrLoadModule('/src/services/authApi.js')
+  ;({ default: AuthPage } = await vite.ssrLoadModule(
+    '/src/components/auth/AuthPage.jsx',
+  ))
+  ;({ AuthProvider } = await vite.ssrLoadModule('/src/context/AuthContext.jsx'))
+  ;({ default: Sidebar } = await vite.ssrLoadModule(
+    '/src/components/layout/Sidebar.jsx',
+  ))
 })
 
 after(async () => {
@@ -108,4 +120,95 @@ test('authentication sources contain no JavaScript token persistence', async () 
   assert.equal(combined.includes('localStorage'), false)
   assert.equal(combined.includes('Bearer '), false)
   assert.equal(combined.includes('setAuthToken'), false)
+})
+
+test('login renders centered branding while preserving the authentication path', async () => {
+  const markup = renderToStaticMarkup(
+    React.createElement(
+      AuthProvider,
+      null,
+      React.createElement(AuthPage, {
+        mode: 'login',
+        onModeChange: () => {},
+        onSuccess: () => {},
+      }),
+    ),
+  )
+  const [authPageSource, css] = await Promise.all([
+    readFile(new URL('../components/auth/AuthPage.jsx', import.meta.url), 'utf8'),
+    readFile(new URL('../App.css', import.meta.url), 'utf8'),
+  ])
+  const authPageCss = css.match(/\.auth-page\s*\{([^}]*)\}/)?.[1] ?? ''
+
+  assert.match(markup, /class="auth-page"/)
+  assert.match(markup, /class="auth-login-logo"/)
+  assert.match(markup, /src="\/compact_logo\.png"/)
+  assert.match(markup, /alt="NHL Edge"/)
+  assert.match(markup, /<h1 id="auth-heading">Sign in<\/h1>/)
+  assert.match(markup, /<h2>Data-driven NHL analysis\.<\/h2>/)
+  assert.match(
+    markup,
+    /Model game probabilities, compare fair odds with the market, identify value and measure performance over time\./,
+  )
+  assert.match(markup, /PREDICT · COMPARE · MEASURE/)
+  assert.match(markup, /class="google-auth-shell/)
+  assert.doesNotMatch(authPageSource, /auth-hero/)
+  assert.match(authPageCss, /place-items: center;/)
+  assert.match(authPageCss, /url\('\/login_hero\.png'\)/)
+  assert.doesNotMatch(authPageCss, /grid-template-columns/)
+  assert.match(
+    css,
+    /@media \(max-width: 1100px\)\s*\{\s*\.auth-product-copy\s*\{\s*display: none;/,
+  )
+  assert.match(authPageSource, /<GoogleSignInButton/)
+  assert.match(authPageSource, /<form className="auth-form" onSubmit=\{handleSubmit\}>/)
+  assert.match(authPageSource, /id="auth-email"/)
+  assert.match(authPageSource, /id="auth-password"/)
+  assert.match(authPageSource, /await login\(values\)/)
+  assert.match(authPageSource, /await register\(values\)/)
+  assert.match(authPageSource, /await googleLogin\(credential\)/)
+  assert.match(authPageSource, /onSuccess\(\)/)
+})
+
+test('brand assets resolve and shell branding adapts without changing sidebar behavior', async () => {
+  const assetNames = [
+    'app_icon.png',
+    'compact_logo.png',
+    'login_hero.png',
+    'master_logo.png',
+    'primary_logo.png',
+  ]
+
+  for (const assetName of assetNames) {
+    const assetUrl = new URL(`../../public/${assetName}`, import.meta.url)
+    await access(assetUrl)
+    assert.ok((await stat(assetUrl)).size > 0)
+  }
+
+  const sidebarProps = {
+    activePage: 'dashboard',
+    authUser: { email: 'owner@example.com', name: 'Owner' },
+    onCloseMobile: () => {},
+    onLogout: () => {},
+    onNavigate: () => {},
+    onToggleCollapse: () => {},
+    primaryItems: [],
+  }
+  const expandedMarkup = renderToStaticMarkup(
+    React.createElement(Sidebar, { ...sidebarProps, isCollapsed: false }),
+  )
+  const collapsedMarkup = renderToStaticMarkup(
+    React.createElement(Sidebar, { ...sidebarProps, isCollapsed: true }),
+  )
+  const [css, indexHtml] = await Promise.all([
+    readFile(new URL('../App.css', import.meta.url), 'utf8'),
+    readFile(new URL('../../index.html', import.meta.url), 'utf8'),
+  ])
+
+  assert.match(expandedMarkup, /src="\/compact_logo\.png"/)
+  assert.match(collapsedMarkup, /src="\/app_icon\.png\?v=2"/)
+  assert.match(expandedMarkup, /media="\(max-width: 860px\)"/)
+  assert.match(css, /url\('\/login_hero\.png'\)/)
+  assert.match(css, /@media \(max-width: 860px\)[\s\S]*\.auth-page \{[^}]*background-position: 72% bottom;/)
+  assert.match(indexHtml, /type="image\/png" href="\/app_icon\.png\?v=2"/)
 })

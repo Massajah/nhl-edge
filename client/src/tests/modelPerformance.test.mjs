@@ -33,7 +33,7 @@ const calibration = [
 const checkpointCoverage = (
   capturedCount,
   expectedCount,
-  status = capturedCount === expectedCount ? 'CAPTURED' : 'MISSED',
+  status = capturedCount === expectedCount ? 'HEALTHY' : 'GAPS',
 ) => ({
   capturedCount,
   coveragePercent:
@@ -52,15 +52,16 @@ const captureHealthFixture = (overrides = {}) => ({
   },
   observedAt: '2026-10-09T00:00:00.000Z',
   officialT2: {
-    capturedOfficialT2: 412,
-    expectedOfficialT2: 412,
-    missedOfficialT2: 0,
-    officialT2CoveragePercent: 100,
-    status: 'CAPTURED',
+    capturedCount: 412,
+    coveragePercent: 100,
+    expectedCount: 412,
+    missedCount: 0,
+    missingCount: 0,
+    status: 'HEALTHY',
   },
   reason: null,
   schedule: { source: 'fixture', stale: false },
-  status: 'CAPTURED',
+  status: 'HEALTHY',
   ...overrides,
 })
 
@@ -343,22 +344,23 @@ const gamesFixture = (items = [gameFixture()]) => ({
 const captureGapGamesFixture = () => ({
   captureHealth: captureHealthFixture(),
   filters: {
+    captureHealth: 't24Missing',
     limit: 20,
     modelVersion: 'power-rating-v1',
     page: 1,
     season: '20262027',
-    status: 'missing_t24',
+    status: 'all',
   },
   items: [
     {
-      awayTeamId: 'COL',
-      captureCheckpoint: 'T24',
-      captureStatus: 'MISSED',
+      awayTeam: 'COL',
+      checkpoint: 'T24',
       gameId: '2026020001',
-      homeTeamId: 'BOS',
+      homeTeam: 'BOS',
       reason: 'MISSING_T24_MARKET',
       scheduledStart: '2026-10-08T19:00:00.000Z',
-      seasonId: '20262027',
+      season: '20262027',
+      state: 'MISSED',
     },
   ],
   pagination: {
@@ -453,7 +455,7 @@ test('API query builders send only supported filters and no user identity', asyn
       limit: 20,
       page: 2,
       season: '20262027',
-      status: 'missing_t24',
+      status: 't24Missing',
       userId: 'attacker',
     })
   } finally {
@@ -466,7 +468,7 @@ test('API query builders send only supported filters and no user identity', asyn
   )
   assert.equal(
     requests[1],
-    '/api/model-performance/games?season=20262027&status=missing_t24&page=2&limit=20',
+    '/api/model-performance/games?season=20262027&page=2&limit=20&captureHealth=t24Missing',
   )
   assert.equal(requests.some((url) => url.includes('userId')), false)
 })
@@ -535,7 +537,7 @@ test('coverage uses backend counts and presents missing coverage neutrally', () 
   assert.match(html, /397 \/ 412/)
   assert.match(html, /389 \/ 412/)
   assert.match(html, /27 \/ 37 bets/)
-  assert.match(html, /Market checkpoint coverage/)
+  assert.match(html, /Capture health/)
   assert.match(html, />400 \/ 400</)
   assert.match(html, />404 \/ 404</)
   assert.match(html, />405 \/ 405</)
@@ -555,10 +557,11 @@ test('not-due and unavailable capture health render without false failures', () 
       T24: notDueCoverage,
     },
     officialT2: {
-      capturedOfficialT2: 0,
-      expectedOfficialT2: 0,
-      missedOfficialT2: 0,
-      officialT2CoveragePercent: null,
+      capturedCount: 0,
+      coveragePercent: null,
+      expectedCount: 0,
+      missedCount: 0,
+      missingCount: 0,
       status: 'NOT_DUE',
     },
     status: 'NOT_DUE',
@@ -578,10 +581,11 @@ test('not-due and unavailable capture health render without false failures', () 
       T24: unavailableCoverage,
     },
     officialT2: {
-      capturedOfficialT2: null,
-      expectedOfficialT2: null,
-      missedOfficialT2: null,
-      officialT2CoveragePercent: null,
+      capturedCount: null,
+      coveragePercent: null,
+      expectedCount: null,
+      missedCount: null,
+      missingCount: null,
       status: 'UNAVAILABLE',
     },
     reason: 'SCHEDULE_UNAVAILABLE',
@@ -594,12 +598,13 @@ test('not-due and unavailable capture health render without false failures', () 
     initialAggregate: aggregateFixture({ captureHealth: unavailable }),
   })
 
-  assert.match(notDueHtml, /No checkpoints due yet/)
-  assert.equal((notDueHtml.match(/>Not due</g) ?? []).length, 4)
+  assert.match(notDueHtml, /No captures due yet/)
+  assert.match(notDueHtml, /Not due yet/)
+  assert.equal((notDueHtml.match(/>Not due</g) ?? []).length, 5)
   assert.doesNotMatch(notDueHtml, /capture-health-item missed/)
   assert.match(unavailableHtml, /Capture health unavailable/)
   assert.match(unavailableHtml, /<strong>—<\/strong>/)
-  assert.equal((unavailableHtml.match(/>Unavailable</g) ?? []).length, 5)
+  assert.equal((unavailableHtml.match(/>Unavailable</g) ?? []).length, 6)
   assert.doesNotMatch(unavailableHtml, /capture-health-item missed/)
 })
 
@@ -612,13 +617,14 @@ test('overdue captures render a compact warning with actionable checkpoints', ()
       T24: checkpointCoverage(47, 50),
     },
     officialT2: {
-      capturedOfficialT2: 14,
-      expectedOfficialT2: 15,
-      missedOfficialT2: 1,
-      officialT2CoveragePercent: 93.3333333333,
-      status: 'MISSED',
+      capturedCount: 14,
+      coveragePercent: 93.3333333333,
+      expectedCount: 15,
+      missedCount: 1,
+      missingCount: 1,
+      status: 'GAPS',
     },
-    status: 'MISSED',
+    status: 'GAPS',
   })
   const html = renderPerformance({
     initialAggregate: aggregateFixture({ captureHealth }),
@@ -627,7 +633,7 @@ test('overdue captures render a compact warning with actionable checkpoints', ()
   assert.match(html, /Capture gaps detected/)
   assert.match(html, />14 \/ 15</)
   assert.match(html, /93\.3% · 1 missed/)
-  assert.equal((html.match(/capture-health-item missed/g) ?? []).length, 4)
+  assert.equal((html.match(/capture-health-item missed/g) ?? []).length, 5)
   assert.equal((html.match(/coverage-item actionable/g) ?? []).length, 1)
   assert.match(html, />47 \/ 50</)
   assert.match(html, /94\.0% · 3 missing/)

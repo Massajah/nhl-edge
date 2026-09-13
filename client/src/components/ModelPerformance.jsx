@@ -76,7 +76,9 @@ function ModelPerformance({
     initialGames?.pagination?.page ?? 1,
   )
   const [gameStatusFilter, setGameStatusFilter] = useState(
-    initialGames?.filters?.status ?? 'all',
+    initialGames?.filters?.captureHealth ??
+      initialGames?.filters?.status ??
+      'all',
   )
   const [expandedGameIds, setExpandedGameIds] = useState(
     () => new Set(initialExpandedGameIds),
@@ -425,9 +427,16 @@ function CoverageBanner({ aggregate, onInspectCaptureGap }) {
   const relevantBets = bets.totalRelevantBets ?? 0
   const captureHealth = aggregate.captureHealth ?? {}
   const officialT2 = captureHealth.officialT2 ?? {}
-  const expectedOfficial = officialT2.expectedOfficialT2
-  const capturedOfficial = officialT2.capturedOfficialT2
-  const missedOfficial = officialT2.missedOfficialT2
+  const expectedOfficial =
+    officialT2.expectedCount ?? officialT2.expectedOfficialT2
+  const capturedOfficial =
+    officialT2.capturedCount ?? officialT2.capturedOfficialT2
+  const missedOfficial =
+    officialT2.missingCount ??
+    officialT2.missedCount ??
+    officialT2.missedOfficialT2
+  const officialCoveragePercent =
+    officialT2.coveragePercent ?? officialT2.officialT2CoveragePercent
   const officialCaptureAvailable =
     expectedOfficial !== null && expectedOfficial !== undefined
 
@@ -447,13 +456,15 @@ function CoverageBanner({ aggregate, onInspectCaptureGap }) {
           label="Official T2 captures"
           onClick={
             Number(missedOfficial) > 0
-              ? () => onInspectCaptureGap?.('missed_official_t2')
+              ? () => onInspectCaptureGap?.('officialT2Missing')
               : null
           }
           supporting={
-            officialCaptureAvailable
-              ? `${formatPercent(officialT2.officialT2CoveragePercent)} · ${missedOfficial} missed`
-              : 'Unavailable'
+            !officialCaptureAvailable
+              ? 'Unavailable'
+              : officialT2.status === 'NOT_DUE' || expectedOfficial === 0
+                ? 'Not due yet'
+                : `${formatPercent(officialCoveragePercent)} · ${missedOfficial} missed`
           }
           value={
             officialCaptureAvailable
@@ -514,25 +525,50 @@ function CoverageItem({ label, onClick, supporting = '', value }) {
 function CaptureHealthPanel({ captureHealth, onInspectCaptureGap }) {
   const checkpoints = captureHealth?.marketCheckpoints ?? {}
   const status = captureHealth?.status ?? 'UNAVAILABLE'
+  const officialT2 = captureHealth?.officialT2 ?? {}
+  const rows = [
+    {
+      checkpoint: 'OFFICIAL_T2',
+      coverage: {
+        capturedCount:
+          officialT2.capturedCount ?? officialT2.capturedOfficialT2,
+        coveragePercent:
+          officialT2.coveragePercent ??
+          officialT2.officialT2CoveragePercent,
+        expectedCount:
+          officialT2.expectedCount ?? officialT2.expectedOfficialT2,
+        missingCount:
+          officialT2.missingCount ??
+          officialT2.missedCount ??
+          officialT2.missedOfficialT2,
+        status: officialT2.status,
+      },
+      label: 'Official T2',
+    },
+    ...['T24', 'T6', 'T2', 'FINAL'].map((checkpoint) => ({
+      checkpoint,
+      coverage: checkpoints[checkpoint] ?? {},
+      label: `${checkpoint} Market`,
+    })),
+  ]
 
   return (
-    <section className="capture-health-panel" aria-label="Market checkpoint coverage">
+    <section className="capture-health-panel" aria-label="Capture health">
       <div className="capture-health-heading">
-        <span>Market checkpoint coverage</span>
+        <span>Capture health</span>
         <strong className={`capture-health-state ${status.toLowerCase()}`}>
           {getCaptureHealthLabel(captureHealth)}
         </strong>
       </div>
       <div className="capture-health-grid">
-        {['T24', 'T6', 'T2', 'FINAL'].map((checkpoint) => {
-          const coverage = checkpoints[checkpoint] ?? {}
+        {rows.map(({ checkpoint, coverage, label }) => {
           const missing = coverage.missingCount
           const available =
             coverage.expectedCount !== null &&
             coverage.expectedCount !== undefined
           const content = (
             <>
-              <span>{checkpoint}</span>
+              <span>{label}</span>
               <strong>
                 {formatCaptureCoverage(
                   coverage.capturedCount,
@@ -1037,10 +1073,10 @@ function CaptureGapList({ rows }) {
           </thead>
           <tbody>
             {rows.map((row) => (
-              <tr key={`${row.gameId}-${row.scheduledStart}-${row.captureCheckpoint}`}>
+              <tr key={`${row.gameId}-${row.scheduledStart}-${row.checkpoint ?? row.captureCheckpoint}`}>
                 <td>{formatGameDate(row.scheduledStart)}</td>
-                <th scope="row">{row.awayTeamId} @ {row.homeTeamId}</th>
-                <td><strong>{row.captureCheckpoint}</strong></td>
+                <th scope="row">{row.awayTeam ?? row.awayTeamId} @ {row.homeTeam ?? row.homeTeamId}</th>
+                <td><strong>{row.checkpoint ?? row.captureCheckpoint}</strong></td>
                 <td>{formatPerformanceReason(row.reason)}</td>
               </tr>
             ))}
@@ -1051,11 +1087,11 @@ function CaptureGapList({ rows }) {
         {rows.map((row) => (
           <article
             className="performance-game-card capture-gap-card"
-            key={`${row.gameId}-${row.scheduledStart}-${row.captureCheckpoint}`}
+            key={`${row.gameId}-${row.scheduledStart}-${row.checkpoint ?? row.captureCheckpoint}`}
           >
             <small>{formatGameDate(row.scheduledStart)}</small>
-            <strong>{row.awayTeamId} @ {row.homeTeamId}</strong>
-            <span>{row.captureCheckpoint}</span>
+            <strong>{row.awayTeam ?? row.awayTeamId} @ {row.homeTeam ?? row.homeTeamId}</strong>
+            <span>{row.checkpoint ?? row.captureCheckpoint}</span>
             <p>{formatPerformanceReason(row.reason)}</p>
           </article>
         ))}
