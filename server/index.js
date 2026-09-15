@@ -3,12 +3,14 @@ require('dotenv').config()
 const app = require('./app')
 const connectDB = require('./config/db')
 const { assertAuthConfig } = require('./config/auth')
+const { assertDemoSandboxConfig } = require('./config/demoSandbox')
 
 const PORT = process.env.PORT || 5000
 const HOST = '0.0.0.0'
 
 async function startServer() {
   assertAuthConfig()
+  assertDemoSandboxConfig()
   await connectDB()
 
   app.listen(PORT, HOST, () => {

@@ -5,8 +5,14 @@ const { calculateAutomaticPrediction } = require('./automaticPredictionService')
 const { forwardPredictionRepository } = require('./forwardPredictionRepository')
 const { getCronSlot, scheduledJobLeaseService } = require('./scheduledJobLeaseService')
 const { PREDICTION_DEFINITION, OPEN_BEFORE_MS, getGameIdentity, getT2Eligibility } = require('./forwardPredictionContracts')
+const { getProductionAccountFilter } = require('../config/accountTypes')
 
-const ACTIVE_USER_FILTER = { $or: [{ status: 'active' }, { status: { $exists: false } }] }
+const ACTIVE_USER_FILTER = {
+  $and: [
+    { $or: [{ status: 'active' }, { status: { $exists: false } }] },
+    getProductionAccountFilter(),
+  ],
+}
 const JOB_NAME = 'nhl-edge-forward-prediction-t2'
 const getScheduleDates = (now) => [-1, 0, 1].map((offset) =>
   new Date(+now + offset * 86400000).toISOString().slice(0, 10))

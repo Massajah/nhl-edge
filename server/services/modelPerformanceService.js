@@ -1,4 +1,7 @@
 const { BASE_MODEL_V1 } = require('../config/baseModel')
+const {
+  MODEL_PERFORMANCE_DATA_MODES,
+} = require('../config/modelPerformanceDataModes')
 const nhlSeasonService = require('./nhlSeasonService')
 const {
   CALCULATION_CONTRACT_VERSION,
@@ -33,7 +36,9 @@ const { ODDS_SNAPSHOT_TYPES } = require('./oddsSnapshotContracts')
 const { getNhlTeamIdentity } = require('./nhlTeamIdentity')
 const {
   CAPTURE_HEALTH_FILTERS,
+  CAPTURE_HEALTH_REASONS,
   LEGACY_CAPTURE_HEALTH_STATUS_FILTERS,
+  buildUnavailableCaptureHealth,
   loadCaptureHealth,
   serializeCaptureHealth,
 } = require('./modelPerformanceCaptureHealthService')
@@ -549,10 +554,18 @@ const buildDataset = async (userId, rawQuery, options = {}, games = false) => {
   }
 
   const repository = options.repository ?? modelPerformanceRepository
+  const calculationContractVersion =
+    options.calculationContractVersion ?? CALCULATION_CONTRACT_VERSION
+  const dataMode =
+    options.dataMode ?? MODEL_PERFORMANCE_DATA_MODES.PRODUCTION
+  const predictionDefinition =
+    options.predictionDefinition ?? PREDICTION_DEFINITION
+  const predictionValidator =
+    options.predictionValidator ?? validateOfficialPrediction
   const normalized = await normalizePerformanceQuery(rawQuery, options, { games })
   const predictionFilter = {
     endExclusive: normalized.endExclusive,
-    predictionDefinition: PREDICTION_DEFINITION,
+    predictionDefinition,
     seasonId: normalized.season.id,
     start: normalized.start,
     userId,
@@ -566,7 +579,10 @@ const buildDataset = async (userId, rawQuery, options = {}, games = false) => {
       : Promise.resolve([]),
   ])
   const modelVersion =
-    normalized.modelVersion ?? latestModelVersion ?? BASE_MODEL_V1.modelVersion
+    normalized.modelVersion ??
+    latestModelVersion ??
+    options.defaultModelVersion ??
+    BASE_MODEL_V1.modelVersion
   const availableModelVersions = [...new Set([
     ...discoveredModelVersions,
     modelVersion,
@@ -581,19 +597,27 @@ const buildDataset = async (userId, rawQuery, options = {}, games = false) => {
   ])
   const invalidPredictionReasons = []
   const predictions = candidatePredictions.filter((prediction) => {
-    const reason = validateOfficialPrediction(prediction)
+    const reason = predictionValidator(prediction)
     if (reason) invalidPredictionReasons.push(reason)
     return !reason
   })
-  const captureHealthPromise = loadCaptureHealth({
-    normalized,
-    now: options.captureHealthNow,
-    predictions,
-    repository,
-    scheduleProvider:
-      options.captureHealthScheduleProvider ??
-      repository.captureHealthScheduleProvider,
-  })
+  const captureHealthPromise = options.captureHealthProvider
+    ? options.captureHealthProvider({ normalized, predictions, repository })
+    : options.productionCaptureEligible === false
+      ? Promise.resolve(
+          buildUnavailableCaptureHealth(
+            CAPTURE_HEALTH_REASONS.PRODUCTION_ACCOUNT_INELIGIBLE,
+          ),
+        )
+      : loadCaptureHealth({
+          normalized,
+          now: options.captureHealthNow,
+          predictions,
+          repository,
+          scheduleProvider:
+            options.captureHealthScheduleProvider ??
+            repository.captureHealthScheduleProvider,
+        })
   const predictionGameIds = predictions.map(({ gameId }) => String(gameId))
   const allGameIds = [
     ...new Set([
@@ -726,13 +750,19 @@ const buildDataset = async (userId, rawQuery, options = {}, games = false) => {
   return {
     availableModelVersions,
     bets,
+    calculationContractVersion,
     captureHealth,
     closingMarkets,
     clvByBet,
+    dataMode,
+    datasetVersion: options.datasetVersion ?? null,
     invalidPredictionReasons,
     modelVersion,
     normalized,
+    predictionDefinition,
     predictions,
+    resultResolution:
+      options.resultResolution ?? 'read_time_exact_identity',
     rows,
   }
 }
@@ -753,7 +783,9 @@ const buildMetadata = (dataset) => {
   return {
     availableModelVersions: dataset.availableModelVersions,
     availableSeasons: dataset.normalized.availableSeasons,
-    calculationContractVersion: CALCULATION_CONTRACT_VERSION,
+    calculationContractVersion: dataset.calculationContractVersion,
+    dataMode: dataset.dataMode,
+    datasetVersion: dataset.datasetVersion,
     dateRange: {
       effectiveFrom: dataset.normalized.start.toISOString().slice(0, 10),
       effectiveTo: new Date(
@@ -765,7 +797,7 @@ const buildMetadata = (dataset) => {
     mixedSettings: fingerprints.size > 1,
     modelVersion: dataset.modelVersion,
     officialPredictionCount: dataset.predictions.length,
-    predictionDefinition: PREDICTION_DEFINITION,
+    predictionDefinition: dataset.predictionDefinition,
     season: dataset.normalized.season,
     settingsFingerprintCount: fingerprints.size,
   }
@@ -936,11 +968,12 @@ const getModelPerformance = async (userId, query = {}, options = {}) => {
     captureHealth: serializeCaptureHealth(dataset.captureHealth),
     clv: summarizeClv(clvRows, dataset.bets.length),
     cohortDefinition: {
-      authenticatedOwnerOnly: true,
-      calculationContractVersion: CALCULATION_CONTRACT_VERSION,
+      authenticatedOwnerOnly:
+        dataset.dataMode === MODEL_PERFORMANCE_DATA_MODES.PRODUCTION,
+      calculationContractVersion: dataset.calculationContractVersion,
       modelVersion: dataset.modelVersion,
-      predictionDefinition: PREDICTION_DEFINITION,
-      resultResolution: 'read_time_exact_identity',
+      predictionDefinition: dataset.predictionDefinition,
+      resultResolution: dataset.resultResolution,
       t2Window: {
         closeMinutesBeforeStart: 75,
         inclusiveBoundaries: true,
@@ -948,6 +981,7 @@ const getModelPerformance = async (userId, query = {}, options = {}) => {
       },
     },
     coverage: buildCoverage(dataset),
+    dataMode: dataset.dataMode,
     dataQuality: buildDataQuality(dataset),
     forwardOverview: {
       accuracy: calculateAccuracy(
@@ -1012,9 +1046,10 @@ const getModelPerformanceGames = async (userId, query = {}, options = {}) => {
     captureHealth: serializeCaptureHealth(dataset.captureHealth),
     cohortDefinition: {
       modelVersion: dataset.modelVersion,
-      predictionDefinition: PREDICTION_DEFINITION,
+      predictionDefinition: dataset.predictionDefinition,
     },
     coverage: buildCoverage(dataset),
+    dataMode: dataset.dataMode,
     dataQuality: buildDataQuality(dataset),
     filters: {
       captureHealth: dataset.normalized.captureHealth || null,

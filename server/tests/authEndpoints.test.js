@@ -6,8 +6,12 @@ const test = require('node:test')
 const mongoose = require('mongoose')
 const app = require('../app')
 const AuthSession = require('../models/AuthSession')
+const User = require('../models/User')
+const { ACCOUNT_TYPES } = require('../config/accountTypes')
+const googleAuthService = require('../services/googleAuthService')
 const authService = require('../services/authService')
 const authSessionService = require('../services/authSessionService')
+const powerRatingsService = require('../services/powerRatingsService')
 
 const request = async (path, options = {}) => {
   const server = app.listen(0)
@@ -69,6 +73,123 @@ test('Google endpoint creates a hashed session cookie and returns no bearer toke
   assert.equal(JSON.stringify(storedSession).includes(rawSessionToken), false)
   assert.equal(JSON.stringify(storedSession).includes('temporary-google-id-token'), false)
   assert.equal(setCookie.includes(storedSession.tokenHash), false)
+})
+
+test('historical raw User without accountType completes Google login, session restoration and later saves', async (t) => {
+  const userId = new mongoose.Types.ObjectId()
+  const rawUsers = new Map()
+  let storedSession = null
+  let userUpdateCount = 0
+
+  t.mock.method(User.collection, 'insertOne', async (document) => {
+    rawUsers.set(String(document._id), { ...document })
+    return { acknowledged: true, insertedId: document._id }
+  })
+  t.mock.method(User.collection, 'updateOne', async (filter, update) => {
+    const key = String(filter._id)
+    const stored = rawUsers.get(key)
+
+    if (!stored) return { acknowledged: true, matchedCount: 0, modifiedCount: 0 }
+
+    Object.assign(stored, update.$set ?? {})
+    Object.keys(update.$unset ?? {}).forEach((path) => delete stored[path])
+    userUpdateCount += 1
+    return { acknowledged: true, matchedCount: 1, modifiedCount: 1 }
+  })
+  t.mock.method(User, 'findOne', async (filter) => {
+    const stored = [...rawUsers.values()].find((candidate) => {
+      if (filter.googleId && candidate.googleId !== filter.googleId) return false
+      if (filter._id && String(candidate._id) !== String(filter._id)) return false
+      return candidate.status !== 'disabled'
+    })
+
+    return stored ? User.hydrate({ ...stored }) : null
+  })
+  t.mock.method(googleAuthService, 'verifyGoogleIdToken', async () => ({
+    email: 'historical@example.com',
+    googleId: 'historical-google-subject',
+    name: 'Historical User',
+    profileImage: '',
+  }))
+  t.mock.method(
+    powerRatingsService,
+    'initializeDefaultPowerRatings',
+    async () => ({ insertedCount: 0, totalTeams: 32 }),
+  )
+  t.mock.method(AuthSession, 'create', async (payload) => {
+    storedSession = {
+      _id: new mongoose.Types.ObjectId(),
+      ...payload,
+      revokedAt: null,
+    }
+    return storedSession
+  })
+  t.mock.method(AuthSession, 'findOne', async (filter) =>
+    storedSession?.tokenHash === filter.tokenHash ? storedSession : null,
+  )
+
+  // Raw collection insertion deliberately bypasses the current schema default
+  // and represents a User persisted before accountType existed.
+  await User.collection.insertOne({
+    _id: userId,
+    authProvider: 'google',
+    createdAt: new Date('2025-01-01T00:00:00.000Z'),
+    email: 'historical@example.com',
+    googleId: 'historical-google-subject',
+    name: 'Historical User',
+    profileImage: '',
+    role: 'user',
+    status: 'active',
+    updatedAt: new Date('2025-01-01T00:00:00.000Z'),
+  })
+  assert.equal(
+    Object.hasOwn(rawUsers.get(String(userId)), 'accountType'),
+    false,
+  )
+
+  const loginResponse = await request('/api/auth/google', {
+    body: JSON.stringify({ credential: 'verified-google-id-token' }),
+    headers: {
+      'Content-Type': 'application/json',
+      Origin: 'http://localhost:5173',
+    },
+    method: 'POST',
+  })
+  const loginBody = await loginResponse.json()
+  const cookie = loginResponse.headers.get('set-cookie')
+  const sessionToken = /^nhl_edge_session=([^;]+)/.exec(cookie)?.[1]
+  const storedUser = rawUsers.get(String(userId))
+
+  assert.equal(loginResponse.status, 200)
+  assert.equal(loginBody.user.id, String(userId))
+  assert.equal(loginBody.user.accountType, ACCOUNT_TYPES.NORMAL)
+  assert.equal(storedUser.accountType, ACCOUNT_TYPES.NORMAL)
+  assert.equal(userUpdateCount, 1)
+  assert.ok(storedUser.lastLoginAt instanceof Date)
+  assert.equal(storedSession.userId.toString(), String(userId))
+  assert.equal(storedSession.tokenHash.length, 64)
+  assert.ok(
+    storedSession.expiresAt.getTime() - storedSession.lastSeenAt.getTime() >
+      29 * 24 * 60 * 60 * 1000,
+  )
+
+  const meResponse = await request('/api/auth/me', {
+    headers: { Cookie: `nhl_edge_session=${sessionToken}` },
+  })
+  const meBody = await meResponse.json()
+
+  assert.equal(meResponse.status, 200)
+  assert.equal(meBody.user.id, String(userId))
+  assert.equal(meBody.user.accountType, ACCOUNT_TYPES.NORMAL)
+  assert.equal(Object.hasOwn(meBody.user, 'expiresAt'), false)
+
+  const reloadedUser = await User.findOne({ _id: userId })
+  reloadedUser.name = 'Updated Historical User'
+  await reloadedUser.save()
+
+  assert.equal(userUpdateCount, 2)
+  assert.equal(storedUser.accountType, ACCOUNT_TYPES.NORMAL)
+  assert.equal(storedUser.name, 'Updated Historical User')
 })
 
 test('/me restores the current User from a valid cookie session', async () => {

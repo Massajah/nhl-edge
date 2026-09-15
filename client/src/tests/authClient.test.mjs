@@ -9,6 +9,7 @@ let apiClient
 let authApi
 let AuthPage
 let AuthProvider
+let AppLayout
 let Sidebar
 let vite
 
@@ -27,6 +28,9 @@ before(async () => {
   ;({ AuthProvider } = await vite.ssrLoadModule('/src/context/AuthContext.jsx'))
   ;({ default: Sidebar } = await vite.ssrLoadModule(
     '/src/components/layout/Sidebar.jsx',
+  ))
+  ;({ default: AppLayout } = await vite.ssrLoadModule(
+    '/src/components/layout/AppLayout.jsx',
   ))
 })
 
@@ -110,6 +114,37 @@ test('session restore uses /me and logout posts to the backend', async () => {
   ])
 })
 
+test('Explore Demo starts a cookie-authenticated sandbox session', async () => {
+  const originalFetch = globalThis.fetch
+  let captured = null
+  globalThis.fetch = async (url, options = {}) => {
+    captured = { method: options.method, url }
+    return new Response(
+      JSON.stringify({
+        user: {
+          accountType: 'DEMO_SANDBOX',
+          authProvider: 'demo',
+          id: 'demo-owner',
+        },
+      }),
+      { headers: { 'Content-Type': 'application/json' }, status: 201 },
+    )
+  }
+
+  try {
+    const result = await authApi.startDemoSandbox()
+
+    assert.equal(result.user.accountType, 'DEMO_SANDBOX')
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+
+  assert.deepEqual(captured, {
+    method: 'POST',
+    url: '/api/auth/demo',
+  })
+})
+
 test('authentication sources contain no JavaScript token persistence', async () => {
   const [apiClientSource, authContextSource] = await Promise.all([
     readFile(new URL('../services/apiClient.js', import.meta.url), 'utf8'),
@@ -167,7 +202,48 @@ test('login renders centered branding while preserving the authentication path',
   assert.match(authPageSource, /await login\(values\)/)
   assert.match(authPageSource, /await register\(values\)/)
   assert.match(authPageSource, /await googleLogin\(credential\)/)
+  assert.match(markup, />Explore Demo</)
+  assert.match(markup, /No account required · Temporary sandbox/)
+  assert.match(authPageSource, /await exploreDemo\(\)/)
   assert.match(authPageSource, /onSuccess\(\)/)
+})
+
+test('demo indicators render only for DEMO_SANDBOX users', () => {
+  const baseProps = {
+    activePage: 'dashboard',
+    children: React.createElement('section', null, 'Dashboard content'),
+    currentPage: { title: 'Dashboard' },
+    onLogout: () => {},
+    onNavigate: () => {},
+    primaryItems: [],
+    utilityItems: [],
+  }
+  const demoMarkup = renderToStaticMarkup(
+    React.createElement(AppLayout, {
+      ...baseProps,
+      authUser: {
+        accountType: 'DEMO_SANDBOX',
+        authProvider: 'demo',
+        name: 'Demo Sandbox',
+      },
+    }),
+  )
+  const normalMarkup = renderToStaticMarkup(
+    React.createElement(AppLayout, {
+      ...baseProps,
+      authUser: {
+        accountType: 'NORMAL',
+        email: 'owner@example.com',
+        name: 'Owner',
+      },
+    }),
+  )
+
+  assert.match(demoMarkup, /class="demo-sandbox-badge">Demo Sandbox/)
+  assert.match(demoMarkup, /class="demo-sandbox-banner"/)
+  assert.match(demoMarkup, /Changes are temporary and automatically removed/)
+  assert.doesNotMatch(normalMarkup, /demo-sandbox-badge/)
+  assert.doesNotMatch(normalMarkup, /demo-sandbox-banner/)
 })
 
 test('brand assets resolve and shell branding adapts without changing sidebar behavior', async () => {

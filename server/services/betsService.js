@@ -1380,10 +1380,14 @@ const createBet = async (userId, payload, options = {}) => {
   const normalizedPayload = normalizeCreatePayload(payload)
 
   if (normalizedPayload.placementId) {
-    const existingBet = await Bet.findOne({
+    let existingQuery = Bet.findOne({
       placementId: normalizedPayload.placementId,
       userId,
     })
+    if (options.session && typeof existingQuery.session === 'function') {
+      existingQuery = existingQuery.session(options.session)
+    }
+    const existingBet = await existingQuery
 
     if (existingBet) {
       return serializeBet(existingBet)
@@ -1448,10 +1452,14 @@ const createBet = async (userId, payload, options = {}) => {
     }, options)
   } catch (error) {
     if (error?.code === 11000 && normalizedPayload.placementId) {
-      const existingBet = await Bet.findOne({
+      let existingQuery = Bet.findOne({
         placementId: normalizedPayload.placementId,
         userId,
       })
+      if (options.session && typeof existingQuery.session === 'function') {
+        existingQuery = existingQuery.session(options.session)
+      }
+      const existingBet = await existingQuery
 
       if (existingBet) {
         return serializeBet(existingBet)

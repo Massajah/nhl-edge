@@ -2,6 +2,10 @@ const crypto = require('node:crypto')
 const AuthSession = require('../models/AuthSession')
 const User = require('../models/User')
 const { getSessionCookieConfig } = require('../config/auth')
+const {
+  isDemoSandboxAccount,
+  isProductionAccount,
+} = require('../config/accountTypes')
 
 const SESSION_TOKEN_BYTES = 32
 const testSessions = new Map()
@@ -45,11 +49,30 @@ const getSessionTokenFromRequest = (request, environment = process.env) => {
 
 const createAuthSession = async (
   userId,
-  { environment = process.env, now = new Date(), sessionModel = AuthSession } = {},
+  {
+    environment = process.env,
+    maxExpiresAt = null,
+    now = new Date(),
+    sessionModel = AuthSession,
+  } = {},
 ) => {
   const { ttlMs } = getSessionCookieConfig(environment)
   const createdAt = new Date(now)
-  const expiresAt = new Date(createdAt.getTime() + ttlMs)
+  const configuredExpiresAt = new Date(createdAt.getTime() + ttlMs)
+  const expirationCap = maxExpiresAt ? new Date(maxExpiresAt) : null
+
+  if (expirationCap && !Number.isFinite(expirationCap.getTime())) {
+    throw new TypeError('Session expiration cap must be a valid date.')
+  }
+
+  const expiresAt =
+    expirationCap && expirationCap < configuredExpiresAt
+      ? expirationCap
+      : configuredExpiresAt
+
+  if (expiresAt <= createdAt) {
+    throw new Error('Session expiration must be in the future.')
+  }
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const token = createRawSessionToken()
@@ -103,6 +126,19 @@ const resolveAuthSession = async (
   })
 
   if (!user) return null
+
+  if (!isProductionAccount(user) && !isDemoSandboxAccount(user)) return null
+
+  if (isDemoSandboxAccount(user)) {
+    const demoExpiresAt = new Date(user.expiresAt)
+
+    if (
+      !Number.isFinite(demoExpiresAt.getTime()) ||
+      demoExpiresAt.getTime() <= current.getTime()
+    ) {
+      return null
+    }
+  }
 
   const lastSeenAt = new Date(session.lastSeenAt ?? 0)
   if (current.getTime() - lastSeenAt.getTime() >= 15 * 60 * 1000) {

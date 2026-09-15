@@ -1,6 +1,10 @@
 const BookmakerPreferences = require('../models/BookmakerPreferences')
 const User = require('../models/User')
 const { getMarketOddsConfig } = require('../config/marketOdds')
+const {
+  getProductionAccountFilter,
+  isProductionAccount,
+} = require('../config/accountTypes')
 
 const toPlainRows = async (query) =>
   typeof query?.lean === 'function' ? query.lean() : query
@@ -13,7 +17,13 @@ const createOddsCaptureBookmakerSelectionService = ({
   const getSelectedBookmakerKeys = async () => {
     const supported = getConfig().bookmakers.map(({ key }) => key)
     const [users, preferences] = await Promise.all([
-      toPlainRows(userModel.find({}, { _id: 1, status: 1 })),
+      toPlainRows(
+        userModel.find(getProductionAccountFilter(), {
+          _id: 1,
+          accountType: 1,
+          status: 1,
+        }),
+      ),
       toPlainRows(
         preferencesModel.find({}, { disabledBookmakerKeys: 1, userId: 1 }),
       ),
@@ -21,7 +31,9 @@ const createOddsCaptureBookmakerSelectionService = ({
 
     const activeUserIds = new Set(
       (Array.isArray(users) ? users : [])
-        .filter((user) => user.status !== 'disabled')
+        .filter(
+          (user) => user.status !== 'disabled' && isProductionAccount(user),
+        )
         .map((user) => String(user._id)),
     )
     const selected = new Set()

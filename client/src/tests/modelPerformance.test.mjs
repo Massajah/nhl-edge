@@ -66,6 +66,7 @@ const captureHealthFixture = (overrides = {}) => ({
 })
 
 const aggregateFixture = (overrides = {}) => ({
+  dataMode: 'PRODUCTION',
   betPerformance: {
     averageDecimalOdds: 2.08,
     losses: 13,
@@ -429,6 +430,27 @@ test('global filters render season, date range, model version, apply and reset',
   assert.match(html, /power-rating-v2/)
   assert.match(html, />Apply<\/button>/)
   assert.match(html, />Reset<\/button>/)
+})
+
+test('Demo Dataset labeling is authoritative, compact, and demo-only', () => {
+  const production = renderPerformance()
+  const demoAggregate = aggregateFixture({ dataMode: 'DEMO_SAMPLE' })
+  demoAggregate.forwardOverview.modelBrier.sampleSize = 150
+  const demo = renderPerformance({
+    initialAggregate: demoAggregate,
+  })
+
+  assert.doesNotMatch(production, /Demo Dataset/)
+  assert.match(production, /Production measurement/)
+  assert.match(demo, /Demo Dataset/)
+  assert.match(
+    demo,
+    /Sample data for portfolio demonstration\. Not production forward results\./,
+  )
+  assert.doesNotMatch(demo, /Production measurement/)
+  assert.doesNotMatch(demo, /immutable official pregame predictions/)
+  assert.match(demo, /Developing/)
+  assert.match(demo, /n=150 resolved sample predictions/)
 })
 
 test('API query builders send only supported filters and no user identity', async () => {

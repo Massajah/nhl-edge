@@ -678,6 +678,7 @@ test('first Google login creates a User bound to the verified subject', async ()
       const result = await authService.authenticateGoogleUser({ credential: 'valid' })
 
       assert.equal(findCall, 2)
+      assert.equal(createdPayload.accountType, 'NORMAL')
       assert.equal(createdPayload.googleId, 'stable-google-subject')
       assert.equal(createdPayload.authProvider, 'google')
       assert.equal(result.user.id, createdId.toString())

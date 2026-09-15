@@ -39,6 +39,16 @@ export const loginWithGoogle = async (credential) =>
     },
   )
 
+export const startDemoSandbox = async () =>
+  apiRequest(
+    '/api/auth/demo',
+    { method: 'POST' },
+    {
+      fallbackMessage: 'Unable to start a demo sandbox.',
+      skipAuth: true,
+    },
+  )
+
 export const fetchCurrentUser = async () => {
   const data = await apiRequest('/api/auth/me', undefined, {
     fallbackMessage: 'Unable to restore your session.',

@@ -96,6 +96,7 @@ for (const odds of ['unconfigured', 'quota blocked', 'failed']) {
   test(`prediction job runs independently with odds ${odds}`, async () => {
     const calls = []
     const run = runOddsCaptureCron({
+      cleanupService: { async cleanupExpiredDemoSandboxes() { calls.push('cleanup'); return { removed: 0 } } },
       connectDatabase: async () => calls.push('connect'), closeDatabase: async () => calls.push('close'),
       environment: { MONGODB_URI: 'mock', ...(odds === 'unconfigured' ? {} : { THE_ODDS_API_KEY: 'mock' }) },
       predictionService: { async runScheduledCapture() { calls.push('prediction'); return { captured: 1 } } },
@@ -108,6 +109,7 @@ for (const odds of ['unconfigured', 'quota blocked', 'failed']) {
     if (odds === 'failed') await assert.rejects(() => run, /Scheduled capture failed/)
     else assert.equal((await run).forwardPredictions.captured, 1)
     assert.ok(calls.includes('prediction'))
+    assert.ok(calls.includes('cleanup'))
     assert.equal(calls.at(-1), 'close')
     if (odds === 'unconfigured') assert.equal(calls.includes('odds'), false)
   })
@@ -116,6 +118,7 @@ for (const odds of ['unconfigured', 'quota blocked', 'failed']) {
 test('prediction failure still permits odds capture and always closes the database', async () => {
   const calls = []
   await assert.rejects(() => runOddsCaptureCron({
+    cleanupService: { async cleanupExpiredDemoSandboxes() { return { removed: 0 } } },
     environment: { MONGODB_URI: 'mock', THE_ODDS_API_KEY: 'mock' },
     connectDatabase: async () => {}, closeDatabase: async () => calls.push('close'),
     predictionService: { async runScheduledCapture() { throw new Error('prediction failed') } },

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import MobileHeader from './MobileHeader.jsx'
 import Sidebar from './Sidebar.jsx'
+import { isDemoSandboxUser } from '../../utils/accountTypes.js'
 
 const SIDEBAR_COLLAPSED_STORAGE_KEY = 'nhl-edge-sidebar-collapsed'
 
@@ -22,6 +23,7 @@ function AppLayout({
   primaryItems,
   utilityItems,
 }) {
+  const isDemoSandbox = isDemoSandboxUser(authUser)
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false)
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(
     getStoredSidebarState,
@@ -115,9 +117,19 @@ function AppLayout({
       <div className="app-content-region">
         <MobileHeader
           currentPageTitle={currentPage.title}
+          isDemoSandbox={isDemoSandbox}
           onOpenSidebar={() => setIsMobileSidebarOpen(true)}
         />
         <main className="app-shell">
+          {isDemoSandbox && activePage === 'dashboard' ? (
+            <aside
+              className="demo-sandbox-banner"
+              aria-label="Demo sandbox notice"
+            >
+              <strong>Demo Sandbox</strong>
+              <span>Changes are temporary and automatically removed.</span>
+            </aside>
+          ) : null}
           <header className="page-header">
             <div>
               <p className="eyebrow">NHL Edge</p>

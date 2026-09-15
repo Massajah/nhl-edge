@@ -4,6 +4,7 @@ const {
   filterMarketOddsForBookmakers,
 } = require('../services/bookmakerOddsFilter')
 const nhlApiService = require('../services/nhlApiService')
+const { isProductionAccount } = require('../config/accountTypes')
 
 const getNhlMarketOdds = async (request, response, next) => {
   const date = String(request.query.date ?? '')
@@ -18,6 +19,7 @@ const getNhlMarketOdds = async (request, response, next) => {
 
   try {
     const publicResult = await marketOddsService.getNhlMarketOdds({
+      allowProviderRequest: isProductionAccount(request.authUser),
       date,
       refresh: request.query.refresh === 'true',
     })

@@ -258,6 +258,7 @@ const createMarketOddsService = ({
   }
 
   const getProviderData = async ({
+    allowProviderRequest = true,
     bookmakerKeys,
     config,
     key,
@@ -276,7 +277,10 @@ const createMarketOddsService = ({
       config.minimumRefreshIntervalMs
     const forcedRecently = refresh && requestedRecently
 
-    if (hasFreshCache && (!refresh || forcedRecently || lowQuota)) {
+    if (
+      hasFreshCache &&
+      (!allowProviderRequest || !refresh || forcedRecently || lowQuota)
+    ) {
       logDevelopment('Market odds cache hit', { key })
       const cacheStatus =
         latestProviderState.status === 'quota_exhausted'
@@ -314,6 +318,17 @@ const createMarketOddsService = ({
     if (inFlightRequests.has(key)) {
       logDevelopment('Market odds request reused', { key })
       return inFlightRequests.get(key)
+    }
+
+    if (!allowProviderRequest) {
+      return {
+        events: [],
+        providerFetchedAt: null,
+        requestAttempted: false,
+        requestQuota: null,
+        source: 'cache',
+        status: 'not_checked',
+      }
     }
 
     const recentlyFailed =
@@ -547,7 +562,11 @@ const createMarketOddsService = ({
     }
   }
 
-  const getNhlMarketOdds = async ({ date, refresh = false }) => {
+  const getNhlMarketOdds = async ({
+    allowProviderRequest = true,
+    date,
+    refresh = false,
+  }) => {
     const window = buildCommenceTimeWindow(date)
 
     if (!window) {
@@ -592,6 +611,7 @@ const createMarketOddsService = ({
       }
     } else {
       providerData = await getProviderData({
+        allowProviderRequest,
         config,
         key,
         refresh,

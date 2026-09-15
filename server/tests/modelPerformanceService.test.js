@@ -284,6 +284,8 @@ test('aggregate is owner/version scoped, surfaces mixed settings, and uses paire
   )
 
   assert.equal(result.metadata.modelVersion, 'power-rating-v1')
+  assert.equal(result.dataMode, 'PRODUCTION')
+  assert.equal(result.metadata.dataMode, 'PRODUCTION')
   assert.deepEqual(result.metadata.availableModelVersions, [
     'power-rating-v1',
     'power-rating-v2',
@@ -371,6 +373,35 @@ test('empty cohort returns null metrics rather than misleading zero performance'
   assert.equal(result.clv.averageClvPercent, null)
   assert.equal(result.coverage.forward.resultCoveragePercent, 0)
   assert.equal(result.dataQuality.status, 'unavailable')
+})
+
+test('capture health has no production expectations for an ineligible demo account', async () => {
+  const repository = createRepository()
+  let scheduleCalls = 0
+  repository.captureHealthScheduleProvider = async () => {
+    scheduleCalls += 1
+    throw new Error('demo must not request capture-health schedule data')
+  }
+
+  const result = await getModelPerformance(USER_ID, {}, {
+    productionCaptureEligible: false,
+    repository,
+    seasonMetadata: SEASON_METADATA,
+  })
+
+  assert.equal(scheduleCalls, 0)
+  assert.equal(result.captureHealth.status, 'UNAVAILABLE')
+  assert.equal(
+    result.captureHealth.reason,
+    'PRODUCTION_ACCOUNT_INELIGIBLE',
+  )
+  assert.equal(result.captureHealth.officialT2.expectedCount, null)
+  assert.equal(
+    repository.calls.some(([name]) =>
+      name.startsWith('findCaptureHealth'),
+    ),
+    false,
+  )
 })
 
 test('games endpoint paginates compact rows and supports resolved/missing-market filters', async () => {

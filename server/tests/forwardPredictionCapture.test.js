@@ -1,8 +1,12 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
 const Snapshot = require('../models/ForwardPredictionSnapshot')
+const { isProductionAccount } = require('../config/accountTypes')
 const { createForwardPredictionRepository } = require('../services/forwardPredictionRepository')
-const { createScheduledForwardPredictionService } = require('../services/scheduledForwardPredictionService')
+const {
+  ACTIVE_USER_FILTER,
+  createScheduledForwardPredictionService,
+} = require('../services/scheduledForwardPredictionService')
 const { calculateAutomaticPrediction } = require('../services/automaticPredictionService')
 const { getT2Eligibility, getGameIdentity, resolveForwardPredictionResult, PREDICTION_DEFINITION } =
   require('../services/forwardPredictionContracts')
@@ -36,12 +40,22 @@ const harness = (options = {}) => {
   repository.ensureReady = async () => {}
   const userModel = {
     find(filter) {
-      assert.deepEqual(filter, { $or: [{ status: 'active' }, { status: { $exists: false } }] })
+      assert.deepEqual(filter, ACTIVE_USER_FILTER)
       return { lean: () => ({ cursor: async function * () {
-        for (const id of options.users ?? [USER_ID]) if (active) yield { _id: id }
+        for (const candidate of options.users ?? [USER_ID]) {
+          const user = typeof candidate === 'object'
+            ? candidate
+            : { _id: candidate }
+
+          if (active && isProductionAccount(user)) yield user
+        }
       } }) }
     },
-    async exists(filter) { assert.ok(filter._id); return active },
+    async exists(filter) {
+      assert.ok(filter._id)
+      assert.deepEqual(filter.$and, ACTIVE_USER_FILTER.$and)
+      return active
+    },
   }
   const provider = { async getScheduleForDate() {
     scheduleCalls += 1
@@ -145,6 +159,31 @@ test('owners receive independent snapshots with no market/bookmaker dependencies
   assert.ok(h.filters.every((filter) => [USER_ID, OTHER_USER_ID].includes(filter.userId)))
   await assert.rejects(() => h.repository.exists({ gameId: '2026020001' }), /owner/)
   await assert.rejects(() => h.repository.insertOnce({ ...snapshot(), userId: null }), /owner/)
+})
+
+test('Official T2 includes historical and explicit normal accounts only', async () => {
+  const loadedOwners = []
+  const explicitNormalId = '507f1f77bcf86cd799439013'
+  const invalidAccountId = '507f1f77bcf86cd799439014'
+  const h = harness({
+    onLoad: ({ userId }) => loadedOwners.push(String(userId)),
+    users: [
+      { _id: USER_ID },
+      { _id: explicitNormalId, accountType: 'NORMAL' },
+      { _id: OTHER_USER_ID, accountType: 'DEMO_SANDBOX' },
+      { _id: invalidAccountId, accountType: 'UNEXPECTED' },
+    ],
+  })
+
+  const result = await h.service.runScheduledCapture()
+
+  assert.equal(result.users, 2)
+  assert.equal(result.captured, 2)
+  assert.deepEqual(loadedOwners, [USER_ID, explicitNormalId])
+  assert.deepEqual(
+    [...h.documents.values()].map(({ userId }) => String(userId)),
+    [USER_ID, explicitNormalId],
+  )
 })
 
 test('stale schedule and unavailable/pregame-invalid games cannot capture', async () => {

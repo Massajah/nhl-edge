@@ -575,6 +575,46 @@ test('service does not spend provider credits when every schedule game has start
   assert.equal(result.games[0].oddsStatus, 'started')
 })
 
+test('demo market odds are cache-only and never initiate a provider request', async () => {
+  let calls = 0
+  const service = createMarketOddsService({
+    getConfig: () => createConfig(),
+    getGamesForDate: async () => createSchedule(),
+    now: () => Date.parse(NOW_ISO),
+    provider: {
+      async fetchNhlOdds() {
+        calls += 1
+        return {
+          events: createNormalizedEvents(),
+          providerFetchedAt: NOW_ISO,
+          quota: null,
+          status: 'ready',
+        }
+      },
+    },
+  })
+
+  const coldDemo = await service.getNhlMarketOdds({
+    allowProviderRequest: false,
+    date: '2026-08-03',
+  })
+
+  assert.equal(calls, 0)
+  assert.equal(coldDemo.status, 'not_checked')
+  assert.equal(coldDemo.games[0].marketOdds, null)
+
+  await service.getNhlMarketOdds({ date: '2026-08-03' })
+  const warmDemo = await service.getNhlMarketOdds({
+    allowProviderRequest: false,
+    date: '2026-08-03',
+    refresh: true,
+  })
+
+  assert.equal(calls, 1)
+  assert.equal(warmDemo.source, 'cache')
+  assert.ok(warmDemo.games[0].marketOdds)
+})
+
 test('cache is shared, expires, keys include windows, and forced refresh is bounded', async () => {
   let nowMs = Date.parse(NOW_ISO)
   let calls = 0

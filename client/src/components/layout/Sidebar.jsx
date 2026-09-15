@@ -1,5 +1,6 @@
 import { LogOut, PanelLeftClose, PanelLeftOpen, X } from 'lucide-react'
 import NavItem from './NavItem.jsx'
+import { isDemoSandboxUser } from '../../utils/accountTypes.js'
 
 const getInitials = (user) => {
   const source = user?.name || user?.email || 'NE'
@@ -30,6 +31,8 @@ function Sidebar({
   primaryItems,
   utilityItems = [],
 }) {
+  const isDemoSandbox = isDemoSandboxUser(authUser)
+
   return (
     <aside className="sidebar" aria-label="Primary navigation">
       <div className="sidebar-brand-row">
@@ -95,7 +98,11 @@ function Sidebar({
             )}
             <div className="sidebar-user-copy">
               <strong>{authUser?.name || 'NHL Edge user'}</strong>
-              <span>{authUser?.email || 'Signed in'}</span>
+              {isDemoSandbox ? (
+                <span className="demo-sandbox-badge">Demo Sandbox</span>
+              ) : (
+                <span>{authUser?.email || 'Signed in'}</span>
+              )}
             </div>
           </div>
 

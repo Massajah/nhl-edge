@@ -5,6 +5,7 @@ const test = require('node:test')
 const app = require('../app')
 const authSessionService = require('../services/authSessionService')
 const modelPerformanceService = require('../services/modelPerformanceService')
+const demoModelPerformanceService = require('../services/demoModelPerformanceService')
 
 const request = async (path, options = {}) => {
   const server = app.listen(0)
@@ -37,14 +38,14 @@ test('aggregate route uses only authenticated identity and forwards supported qu
   const token = authSessionService.createTestAuthSession('authenticated-owner')
   let received = null
 
-  modelPerformanceService.getModelPerformance = async (userId, query) => {
-    received = { query, userId }
+  modelPerformanceService.getModelPerformance = async (userId, query, options) => {
+    received = { options, query, userId }
     return { metadata: { modelVersion: 'power-rating-v1' } }
   }
 
   try {
     const response = await request(
-      '/api/model-performance?season=20262027&userId=attacker',
+      '/api/model-performance?season=20262027&userId=attacker&demo=true',
       { headers: { Cookie: `nhl_edge_session=${token}` } },
     )
 
@@ -56,6 +57,7 @@ test('aggregate route uses only authenticated identity and forwards supported qu
 
   assert.equal(received.userId, 'authenticated-owner')
   assert.equal(received.query.season, '20262027')
+  assert.deepEqual(received.options, { productionCaptureEligible: true })
   assert.notEqual(received.userId, received.query.userId)
 })
 
@@ -141,4 +143,112 @@ test('validation errors use the existing safe API error contract', async () => {
   } finally {
     modelPerformanceService.getModelPerformance = original
   }
+})
+
+test('demo Model Performance is explicitly ineligible for production capture health', async () => {
+  const original = demoModelPerformanceService.getDemoModelPerformance
+  const token = authSessionService.createTestAuthSession('demo-owner', {
+    user: {
+      _id: 'demo-owner',
+      accountType: 'DEMO_SANDBOX',
+      role: 'user',
+      status: 'active',
+    },
+  })
+  let receivedOptions = null
+
+  demoModelPerformanceService.getDemoModelPerformance = async (
+    userId,
+    query,
+  ) => {
+    receivedOptions = { query, userId }
+    return { dataMode: 'DEMO_SAMPLE' }
+  }
+
+  try {
+    const response = await request('/api/model-performance', {
+      headers: { Cookie: `nhl_edge_session=${token}` },
+    })
+
+    assert.equal(response.status, 200)
+  } finally {
+    demoModelPerformanceService.getDemoModelPerformance = original
+  }
+
+  assert.equal(receivedOptions.userId, 'demo-owner')
+  assert.deepEqual({ ...receivedOptions.query }, {})
+})
+
+test('demo games route is selected by authenticated account type, not query input', async () => {
+  const original = demoModelPerformanceService.getDemoModelPerformanceGames
+  const token = authSessionService.createTestAuthSession('demo-games-owner', {
+    user: {
+      _id: 'demo-games-owner',
+      accountType: 'DEMO_SANDBOX',
+      role: 'user',
+      status: 'active',
+    },
+  })
+  let received = null
+
+  demoModelPerformanceService.getDemoModelPerformanceGames = async (
+    userId,
+    query,
+  ) => {
+    received = { query: { ...query }, userId }
+    return {
+      dataMode: 'DEMO_SAMPLE',
+      items: [],
+      pagination: { page: 1, pageSize: 20, totalItems: 0, totalPages: 0 },
+    }
+  }
+
+  try {
+    const response = await request(
+      '/api/model-performance/games?demo=false&page=1',
+      { headers: { Cookie: `nhl_edge_session=${token}` } },
+    )
+
+    assert.equal(response.status, 200)
+    assert.equal(response.body.dataMode, 'DEMO_SAMPLE')
+  } finally {
+    demoModelPerformanceService.getDemoModelPerformanceGames = original
+  }
+
+  assert.equal(received.userId, 'demo-games-owner')
+  assert.equal(received.query.demo, 'false')
+})
+
+test('invalid account type fails closed for Model Performance capture health', async () => {
+  const original = modelPerformanceService.getModelPerformance
+  const token = authSessionService.createTestAuthSession('invalid-owner', {
+    user: {
+      _id: 'invalid-owner',
+      accountType: 'UNEXPECTED',
+      role: 'user',
+      status: 'active',
+    },
+  })
+  let receivedOptions = null
+
+  modelPerformanceService.getModelPerformance = async (
+    _userId,
+    _query,
+    options,
+  ) => {
+    receivedOptions = options
+    return { captureHealth: { status: 'UNAVAILABLE' } }
+  }
+
+  try {
+    const response = await request('/api/model-performance', {
+      headers: { Cookie: `nhl_edge_session=${token}` },
+    })
+
+    assert.equal(response.status, 200)
+  } finally {
+    modelPerformanceService.getModelPerformance = original
+  }
+
+  assert.deepEqual(receivedOptions, { productionCaptureEligible: false })
 })

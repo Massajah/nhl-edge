@@ -1,7 +1,7 @@
 const express = require('express')
 const authController = require('../controllers/authController')
 const authenticate = require('../middleware/authenticate')
-const { authRateLimit } = require('../middleware/rateLimit')
+const { authRateLimit, demoAuthRateLimit } = require('../middleware/rateLimit')
 
 const router = express.Router()
 
@@ -13,6 +13,7 @@ router.use((_request, response, next) => {
 router.post('/register', authRateLimit, authController.register)
 router.post('/login', authRateLimit, authController.login)
 router.post('/google', authRateLimit, authController.google)
+router.post('/demo', demoAuthRateLimit, authController.demo)
 router.get('/me', authenticate, authController.me)
 router.post('/logout', authController.logout)
 

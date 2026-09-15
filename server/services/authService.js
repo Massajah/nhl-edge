@@ -1,6 +1,11 @@
 const mongoose = require('mongoose')
 const User = require('../models/User')
 const { isLocalAuthEnabled } = require('../config/auth')
+const {
+  ACCOUNT_TYPES,
+  getAccountType,
+  isDemoSandboxAccount,
+} = require('../config/accountTypes')
 const googleAuthService = require('./googleAuthService')
 const powerRatingsService = require('./powerRatingsService')
 const { hashPassword, verifyPassword } = require('../utils/password')
@@ -27,8 +32,14 @@ const serializeUser = (user) => {
           ...user,
           id: user._id?.toString() ?? user.id?.toString(),
         }
+  const accountType = getAccountType(plainUser)
+
+  if (!accountType) {
+    throw new AuthError('Authentication required.', 401)
+  }
 
   return {
+    accountType,
     id: plainUser.id ?? plainUser._id?.toString(),
     email: plainUser.email,
     name: plainUser.name ?? '',
@@ -37,6 +48,9 @@ const serializeUser = (user) => {
     role: plainUser.role ?? 'user',
     createdAt: plainUser.createdAt,
     lastLoginAt: plainUser.lastLoginAt ?? null,
+    ...(isDemoSandboxAccount(plainUser)
+      ? { expiresAt: plainUser.expiresAt ?? null }
+      : {}),
   }
 }
 
@@ -105,6 +119,7 @@ const registerLocalUser = async (
 
   try {
     user = await User.create({
+      accountType: ACCOUNT_TYPES.NORMAL,
       authProvider: 'local',
       email,
       lastLoginAt: new Date(),
@@ -173,6 +188,7 @@ const authenticateGoogleUser = async (payload = {}) => {
 
   try {
     user = await User.create({
+      accountType: ACCOUNT_TYPES.NORMAL,
       authProvider: 'google',
       email: claims.email,
       googleId: claims.googleId,

@@ -52,13 +52,17 @@ const loadGoogleScript = () => {
 
 function AuthPage({ mode, onModeChange, onSuccess }) {
   const isRegister = LOCAL_AUTH_ENABLED && mode === 'register'
-  const { googleLogin, login, register, sessionMessage } = useAuth()
+  const { exploreDemo, googleLogin, login, register, sessionMessage } = useAuth()
   const [values, setValues] = useState(getInitialValues)
   const [errorMessage, setErrorMessage] = useState('')
   const [status, setStatus] = useState('idle')
   const [googleStatus, setGoogleStatus] = useState('idle')
+  const [demoStatus, setDemoStatus] = useState('idle')
   const isSubmitting = status === 'saving'
   const isGoogleSubmitting = googleStatus === 'saving'
+  const isDemoSubmitting = demoStatus === 'saving'
+  const isAnySubmitting =
+    isSubmitting || isGoogleSubmitting || isDemoSubmitting
 
   const validate = () => {
     if (isRegister && !values.name.trim()) {
@@ -124,6 +128,20 @@ function AuthPage({ mode, onModeChange, onSuccess }) {
     },
     [googleLogin, onSuccess],
   )
+
+  const handleExploreDemo = async () => {
+    setDemoStatus('saving')
+    setErrorMessage('')
+
+    try {
+      await exploreDemo()
+      setDemoStatus('success')
+      onSuccess()
+    } catch (error) {
+      setDemoStatus('error')
+      setErrorMessage(error.message)
+    }
+  }
 
   const handleValueChange = (field, value) => {
     setValues((currentValues) => ({
@@ -201,7 +219,7 @@ function AuthPage({ mode, onModeChange, onSuccess }) {
               <button
                 className="auth-primary-button"
                 type="submit"
-                disabled={isSubmitting || isGoogleSubmitting}
+                disabled={isAnySubmitting}
               >
                 {isSubmitting ? (
                   <LoaderCircle aria-hidden="true" className="button-spinner" />
@@ -220,11 +238,30 @@ function AuthPage({ mode, onModeChange, onSuccess }) {
           ) : null}
 
           <GoogleSignInButton
-            disabled={isSubmitting || isGoogleSubmitting}
+            disabled={isAnySubmitting}
             mode={LOCAL_AUTH_ENABLED ? mode : 'login'}
             status={googleStatus}
             onCredential={handleGoogleCredential}
           />
+
+          <div className="auth-divider">
+            <span>or</span>
+          </div>
+
+          <div className="auth-demo-action">
+            <button
+              className="auth-demo-button"
+              type="button"
+              disabled={isAnySubmitting}
+              onClick={handleExploreDemo}
+            >
+              {isDemoSubmitting ? (
+                <LoaderCircle aria-hidden="true" className="button-spinner" />
+              ) : null}
+              {isDemoSubmitting ? 'Starting Demo' : 'Explore Demo'}
+            </button>
+            <small>No account required · Temporary sandbox</small>
+          </div>
 
           {errorMessage || sessionMessage ? (
             <p className="auth-error" role="alert">
@@ -236,7 +273,7 @@ function AuthPage({ mode, onModeChange, onSuccess }) {
             <button
               className="auth-secondary-link"
               type="button"
-              disabled={isSubmitting || isGoogleSubmitting}
+              disabled={isAnySubmitting}
               onClick={() => onModeChange(isRegister ? 'login' : 'register')}
             >
               {isRegister ? 'Already have an account?' : 'Create account'}

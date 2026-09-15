@@ -83,6 +83,7 @@ function ModelPerformance({
   const [expandedGameIds, setExpandedGameIds] = useState(
     () => new Set(initialExpandedGameIds),
   )
+  const isDemoSample = aggregate?.dataMode === 'DEMO_SAMPLE'
   const skipInitialAggregateLoad = useRef(Boolean(initialAggregate))
   const skipInitialGamesLoad = useRef(Boolean(initialGames))
 
@@ -221,10 +222,18 @@ function ModelPerformance({
     <section className="model-performance-page" aria-label="Model Performance">
       <div className="model-performance-intro">
         <div>
-          <p className="eyebrow">Production measurement</p>
-          <h2>Forward performance, without hindsight</h2>
+          <p className="eyebrow">
+            {isDemoSample ? 'Portfolio sample' : 'Production measurement'}
+          </p>
+          <h2>
+            {isDemoSample
+              ? 'Forward-performance workflow'
+              : 'Forward performance, without hindsight'}
+          </h2>
           <p>
-            Based on immutable official pregame predictions captured at T2.
+            {isDemoSample
+              ? 'Deterministic sample observations shown through the real analytics workflow.'
+              : 'Based on immutable official pregame predictions captured at T2.'}
           </p>
         </div>
         <button
@@ -236,6 +245,16 @@ function ModelPerformance({
           <ArrowRight aria-hidden="true" size={16} />
         </button>
       </div>
+
+      {isDemoSample ? (
+        <div className="model-performance-demo-banner" role="status">
+          <strong>Demo Dataset</strong>
+          <span>
+            Sample data for portfolio demonstration. Not production forward
+            results.
+          </span>
+        </div>
+      ) : null}
 
       <PerformanceFilters
         aggregate={aggregate}
@@ -620,12 +639,15 @@ function ForwardModelTab({ aggregate }) {
   const modelSample = overview.modelBrier?.sampleSize ?? 0
   const sampleState = getSampleState(modelSample)
   const official = aggregate.coverage?.forward?.officialPredictions ?? 0
+  const isDemoSample = aggregate.dataMode === 'DEMO_SAMPLE'
 
   return (
     <div className="model-performance-content">
       <div className={`model-performance-sample-state ${sampleState.id}`}>
         <strong>{sampleState.label}</strong>
-        <span>n={modelSample} resolved official predictions</span>
+        <span>
+          n={modelSample} resolved {isDemoSample ? 'sample' : 'official'} predictions
+        </span>
       </div>
 
       {official === 0 ? (
@@ -657,7 +679,7 @@ function ForwardModelTab({ aggregate }) {
             emphasis="primary"
             label="Model Brier"
             sampleSize={overview.modelBrier?.sampleSize}
-            supporting="Official T2 model"
+            supporting={isDemoSample ? 'Sample T2 model' : 'Official T2 model'}
             value={formatNumber(overview.modelBrier?.value)}
           />
           <MetricCard

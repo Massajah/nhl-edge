@@ -5,6 +5,7 @@
   "main": "index.js",
   "scripts": {
     "cleanup:pre-auth-data": "node scripts/cleanupPreAuthData.js",
+    "cleanup:demo-sandboxes": "node scripts/runDemoCleanup.js",
     "migrate:assign-legacy-owner": "node scripts/assignLegacyOwner.js",
     "backfill:bankroll-settlements": "node scripts/backfillBankrollSettlements.js",
     "cron:odds-capture": "node scripts/runOddsCaptureCron.js",

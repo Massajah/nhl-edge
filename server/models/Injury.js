@@ -89,6 +89,12 @@ const injurySchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    demoSeedKey: {
+      type: String,
+      trim: true,
+      default: null,
+      select: false,
+    },
   },
   {
     timestamps: true,
@@ -98,6 +104,7 @@ const injurySchema = new mongoose.Schema(
         returnedObject.userId = returnedObject.userId?.toString()
         delete returnedObject._id
         delete returnedObject.__v
+        delete returnedObject.demoSeedKey
       },
     },
   },
@@ -105,6 +112,15 @@ const injurySchema = new mongoose.Schema(
 
 injurySchema.index({ userId: 1, active: -1, teamName: 1, playerName: 1 })
 injurySchema.index({ userId: 1, teamId: 1, active: -1, playerName: 1 })
+injurySchema.index(
+  { userId: 1, demoSeedKey: 1 },
+  {
+    partialFilterExpression: {
+      demoSeedKey: { $exists: true, $type: 'string' },
+    },
+    unique: true,
+  },
+)
 
 module.exports = mongoose.model('Injury', injurySchema)
 module.exports.INJURY_STATUSES = INJURY_STATUSES

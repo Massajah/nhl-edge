@@ -78,3 +78,25 @@ test('all-disabled and disabled-user preferences do not expand capture', async (
 
   assert.deepEqual(await service.getSelectedBookmakerKeys(), [])
 })
+
+test('only historical and explicit normal preferences expand production capture', async () => {
+  const service = createService({
+    preferences: [
+      { userId: 'normal', disabledBookmakerKeys: ['coolbet', 'unibet_fi'] },
+      { userId: 'historical', disabledBookmakerKeys: ['pinnacle', 'unibet_fi'] },
+      { userId: 'demo', disabledBookmakerKeys: [] },
+      { userId: 'invalid', disabledBookmakerKeys: [] },
+    ],
+    users: [
+      { _id: 'normal', accountType: 'NORMAL', status: 'active' },
+      { _id: 'historical', status: 'active' },
+      { _id: 'demo', accountType: 'DEMO_SANDBOX', status: 'active' },
+      { _id: 'invalid', accountType: 'UNEXPECTED', status: 'active' },
+    ],
+  })
+
+  assert.deepEqual(await service.getSelectedBookmakerKeys(), [
+    'coolbet',
+    'pinnacle',
+  ])
+})

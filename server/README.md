@@ -11,6 +11,10 @@ Production interactive authentication is Google-only unless local auth is
 explicitly enabled. See `../AUTH_DEPLOYMENT.md` for the complete Vercel,
 Railway, Google Console, cookie, CORS and operator configuration.
 
+`POST /api/auth/demo` creates an isolated four-hour demo sandbox using the same
+session-cookie and owner-scoping architecture. Its lifecycle, cleanup inventory
+and production-capture exclusions are documented in `../DEMO_SANDBOX.md`.
+
 Required environment variables:
 
 - `MONGODB_URI`

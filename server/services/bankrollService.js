@@ -82,6 +82,10 @@ const canUseMongooseTransactions = () =>
   typeof mongoose.startSession === 'function'
 
 const runWithOptionalTransaction = async (callback, options = {}) => {
+  if (options.session) {
+    return callback(options.session)
+  }
+
   const shouldUseTransactions =
     options.useTransactions ?? canUseMongooseTransactions()
 
@@ -1278,6 +1282,7 @@ const syncBetSettlementForBet = async (userId, bet = {}, options = {}) => {
     update,
     {
       new: true,
+      session: options.session,
       setDefaultsOnInsert: true,
       upsert: true,
     },

@@ -396,6 +396,11 @@ const serializeInjury = (injury) => {
 
 const getInjuryModel = (options = {}) => options.injuryModel ?? Injury
 
+const applySession = (query, session) =>
+  session && query && typeof query.session === 'function'
+    ? query.session(session)
+    : query
+
 const resolveMaximumPlayerInjuryPenalty = async (userId, options = {}) => {
   if (Number.isFinite(Number(options.maximumPlayerInjuryPenalty))) {
     return Number(options.maximumPlayerInjuryPenalty)
@@ -455,20 +460,21 @@ const buildActiveDuplicateQuery = ({
 const assertNoActiveDuplicate = async (
   injuryModel,
   injury,
-  { excludeId, userId } = {},
+  { excludeId, session, userId } = {},
 ) => {
   if (!injury.active || injury.status === 'healthy') {
     return
   }
 
-  const duplicate = await injuryModel.findOne(
-    buildActiveDuplicateQuery({
+  const duplicate = await applySession(
+    injuryModel.findOne(buildActiveDuplicateQuery({
       excludeId,
       playerName: injury.playerName,
       providerPlayerId: injury.providerPlayerId,
       teamId: injury.teamId,
       userId,
-    }),
+    })),
+    session,
   )
 
   if (duplicate) {
@@ -520,14 +526,19 @@ const createInjury = async (userId, payload, options = {}) => {
     maximumPlayerInjuryPenalty,
   })
 
-  await assertNoActiveDuplicate(injuryModel, normalizedPayload, { userId })
-
-  const injury = new injuryModel({
-    ...normalizedPayload,
+  await assertNoActiveDuplicate(injuryModel, normalizedPayload, {
+    session: options.session,
     userId,
   })
 
-  await injury.save()
+  const injury = new injuryModel({
+    ...normalizedPayload,
+    demoSeedKey: options.demoSeedKey ?? null,
+    userId,
+  })
+
+  if (options.session) await injury.save({ session: options.session })
+  else await injury.save()
 
   return serializeInjury(injury)
 }

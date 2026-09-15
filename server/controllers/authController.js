@@ -1,13 +1,40 @@
 const authService = require('../services/authService')
 const authSessionService = require('../services/authSessionService')
+const demoSandboxService = require('../services/demoSandboxService')
 
-const establishSession = async (request, response, result, statusCode = 200) => {
+const establishSession = async (
+  request,
+  response,
+  result,
+  statusCode = 200,
+  { maxExpiresAt = null } = {},
+) => {
   const { expiresAt, token } = await authSessionService.createAuthSession(
     result.userId,
+    { maxExpiresAt },
   )
 
   authSessionService.setSessionCookie(response, token, { expiresAt })
   response.status(statusCode).json({ user: result.user })
+}
+
+const demo = async (_request, response, next) => {
+  try {
+    const result = await demoSandboxService.createDemoSandbox()
+
+    await establishSession(
+      null,
+      response,
+      {
+        user: authService.serializeUser(result.user),
+        userId: result.userId,
+      },
+      201,
+      { maxExpiresAt: result.expiresAt },
+    )
+  } catch (error) {
+    next(error)
+  }
 }
 
 const register = async (request, response, next) => {
@@ -54,6 +81,7 @@ const logout = async (request, response, next) => {
 }
 
 module.exports = {
+  demo,
   google,
   login,
   logout,

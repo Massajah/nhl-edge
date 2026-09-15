@@ -12,6 +12,7 @@ import {
   loginWithGoogle,
   logoutUser,
   registerUser,
+  startDemoSandbox,
 } from '../services/authApi.js'
 import { subscribeToUnauthorized } from '../services/apiClient.js'
 
@@ -129,6 +130,17 @@ export function AuthProvider({ children }) {
     [applyAuthResult],
   )
 
+  const exploreDemo = useCallback(async () => {
+    try {
+      return applyAuthResult(await startDemoSandbox())
+    } catch (error) {
+      throw new Error(
+        getAuthMessage(error, 'Unable to start a demo sandbox.'),
+        { cause: error },
+      )
+    }
+  }, [applyAuthResult])
+
   const logout = useCallback(async () => {
     try {
       await logoutUser()
@@ -139,6 +151,7 @@ export function AuthProvider({ children }) {
 
   const value = useMemo(
     () => ({
+      exploreDemo,
       googleLogin,
       isAuthenticated: Boolean(user),
       loading,
@@ -150,6 +163,7 @@ export function AuthProvider({ children }) {
       user,
     }),
     [
+      exploreDemo,
       googleLogin,
       loading,
       login,

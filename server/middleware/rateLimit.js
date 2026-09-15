@@ -1,5 +1,6 @@
 const DEFAULT_AUTH_RATE_LIMIT = 20
 const DEFAULT_AUTH_RATE_WINDOW_MS = 15 * 60 * 1000
+const DEFAULT_DEMO_AUTH_RATE_LIMIT = 10
 const MAX_TRACKED_KEYS = 10000
 
 const toPositiveInteger = (value, fallback) => {
@@ -58,9 +59,22 @@ const authRateLimit = createRateLimiter({
   ),
 })
 
+const demoAuthRateLimit = createRateLimiter({
+  limit: toPositiveInteger(
+    process.env.DEMO_AUTH_RATE_LIMIT,
+    DEFAULT_DEMO_AUTH_RATE_LIMIT,
+  ),
+  windowMs: toPositiveInteger(
+    process.env.DEMO_AUTH_RATE_WINDOW_MS,
+    DEFAULT_AUTH_RATE_WINDOW_MS,
+  ),
+})
+
 module.exports = {
   DEFAULT_AUTH_RATE_LIMIT,
   DEFAULT_AUTH_RATE_WINDOW_MS,
+  DEFAULT_DEMO_AUTH_RATE_LIMIT,
   authRateLimit,
   createRateLimiter,
+  demoAuthRateLimit,
 }
