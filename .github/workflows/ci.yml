@@ -92,9 +92,15 @@ jobs:
         with:
           node-version: "24"
           cache: npm
-          cache-dependency-path: client/package-lock.json
+          cache-dependency-path: |
+            server/package-lock.json
+            client/package-lock.json
 
-      - name: Install dependencies
+      - name: Install server dependencies
+        working-directory: server
+        run: npm ci
+
+      - name: Install client dependencies
         run: npm ci
 
       - name: Install Chromium and system dependencies

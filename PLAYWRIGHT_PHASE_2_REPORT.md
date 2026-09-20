@@ -2,7 +2,11 @@
 
 ## 1. Executive verdict
 
-The Phase 2 GitHub Actions integration is implementation-ready. A separate `E2E` job now runs the proven Phase 1 Chromium suite on `ubuntu-latest` without changing the tests, application startup, production code, or Docker image. Hosted execution remains unverified until the user commits and pushes the changes.
+The Phase 2 GitHub Actions integration is ready for a hosted retry. A separate `E2E` job runs the proven Phase 1 Chromium suite on `ubuntu-latest` without changing the tests, application startup, production code, or Docker image. Hosted run #1 exposed a missing server dependency-install step; the workflow now installs both package trees deterministically.
+
+## Hosted CI Run #1
+
+Server, Client, and Docker image passed, while E2E failed before browser interaction with `Cannot find module 'dotenv'` from `server/index.js`. The E2E fixture correctly starts the real server, but the clean runner had installed only `client/node_modules`; local runs had masked the missing CI step because both package trees were already installed. The E2E job now runs `npm ci` in `server/` before running `npm ci` in `client/`, and its setup-node cache key covers both lockfiles. The fixture, tests, retry policy, browser setup, and application code are unchanged. Hosted verification remains pending until the corrected workflow runs.
 
 ## 2. Existing CI architecture discovered
 
@@ -10,7 +14,7 @@ The existing `.github/workflows/ci.yml` is validation-only and runs on ordinary 
 
 ## 3. E2E job design
 
-One independent job with display name `E2E` was added alongside Server, Client, and Docker image. Its run-step working directory is `client/`. It checks out the repository, configures Node and the client npm cache, runs `npm ci`, installs Chromium and its Ubuntu system dependencies, runs the existing suite, and uploads diagnostics only after a failure. It has no `needs` relationship.
+One independent job with display name `E2E` was added alongside Server, Client, and Docker image. Its default run-step working directory is `client/`. It checks out the repository, configures Node and the npm cache from both lockfiles, installs server dependencies from `server/`, installs client dependencies from `client/`, installs Chromium and its Ubuntu system dependencies, runs the existing suite, and uploads diagnostics only after a failure. It has no `needs` relationship.
 
 ## 4. GitHub runner
 
@@ -22,7 +26,7 @@ Node 24, matching both existing npm CI jobs and the production Dockerfile strate
 
 ## 6. npm install strategy
 
-The job runs deterministic `npm ci` from `client/`. `actions/setup-node@v7` enables the existing npm cache convention with `client/package-lock.json` as the dependency path. A local `npm ci --dry-run --ignore-scripts` consistency check passed.
+The job runs deterministic `npm ci` first from `server/` and then from `client/`. `actions/setup-node@v7` uses a supported multiline `cache-dependency-path` containing both `server/package-lock.json` and `client/package-lock.json`. No dependencies are hoisted or duplicated between packages.
 
 ## 7. Chromium install strategy
 
@@ -122,7 +126,7 @@ Passed at the established baseline: 466/466 tests. Playwright remains a separate
 
 ## 29. Other files modified
 
-- `PLAYWRIGHT_PHASE_2_REPORT.md` was added.
+- `PLAYWRIGHT_PHASE_2_REPORT.md` was added during Phase 2 and updated with hosted run #1.
 
 No Phase 1 E2E source, production application source, package manifest, lockfile, Docker file, Railway configuration, or prior report was changed by Phase 2. Pre-existing unrelated working-tree changes remain preserved.
 
@@ -132,15 +136,15 @@ No Phase 1 E2E source, production application source, package manifest, lockfile
 
 ## 31. Hosted GitHub Actions verification status
 
-**NOT YET VERIFIED.** Local success establishes implementation readiness, not proof of execution on a GitHub-hosted runner.
+**NOT YET VERIFIED.** Hosted run #1 failed before browser interaction because server dependencies were absent. The root cause is corrected locally, but the corrected workflow has not yet run on a GitHub-hosted runner.
 
 ## 32. Exact first hosted CI verification checklist
 
 After reviewing, committing, and pushing the changes:
 
 1. Confirm the run contains four parallel jobs named Server, Client, E2E, and Docker image.
-2. Confirm E2E runs on `ubuntu-latest`, sets up Node 24, and restores or creates the client npm cache.
-3. Confirm `npm ci` succeeds from `client/`.
+2. Confirm E2E runs on `ubuntu-latest`, sets up Node 24, and restores or creates an npm cache keyed by both lockfiles.
+3. Confirm `npm ci` succeeds first from `server/` and then from `client/`.
 4. Confirm the install log mentions Chromium and required Linux dependencies only, with no Firefox or WebKit installation.
 5. Confirm `mongodb-memory-server` downloads or reuses a MongoDB binary and starts the loopback replica set without requesting a secret or service container.
 6. Confirm Express starts on port 5001 and Vite on port 5174 through the existing fixture.
@@ -155,7 +159,7 @@ Open the failed GitHub Actions run and inspect the E2E step that first failed. I
 
 ## 34. Known limitations
 
-- Hosted GitHub execution has not yet occurred.
+- The corrected workflow has not yet completed on a GitHub-hosted runner.
 - Chromium and the MongoDB test binary depend on permitted infrastructure downloads on a fresh runner.
 - The suite intentionally covers Chromium and five critical flows only.
 - The first runner download will be slower than the approximately ten-second prepared local suite.
@@ -164,4 +168,4 @@ Open the failed GitHub Actions run and inspect the E2E step that first failed. I
 
 ## 35. Recommended next step
 
-Review the focused workflow diff and this report, then commit and push when ready. Watch the first GitHub Actions run against the checklist above. If all four jobs pass and E2E reports five passing tests without an artifact, Phase 2 is hosted-CI verified.
+Review the focused workflow diff and this report, then commit and push when ready. Watch the hosted retry against the checklist above. If all four jobs pass and E2E reports five passing tests without an artifact, Phase 2 is hosted-CI verified.
