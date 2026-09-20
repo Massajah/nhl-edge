@@ -474,6 +474,24 @@ test('games expose only durable saved-bet audit values and exact same-book price
         result: 'win',
         scheduledStart: prediction.scheduledStartAtCapture,
         selectedSide: { homeAway: 'home', teamId: 'BOS' },
+        startingGoaliesAtBet: {
+          away: {
+            adjustment: -0.5,
+            displayName: 'Away Selected',
+            nhlPlayerId: 2,
+            selectionType: 'provider_goalie',
+            sourceType: 'MANUAL',
+            teamId: 'COL',
+          },
+          home: {
+            adjustment: -1.5,
+            displayName: 'Home Selected',
+            nhlPlayerId: 3,
+            selectionType: 'provider_goalie',
+            sourceType: 'MANUAL',
+            teamId: 'BOS',
+          },
+        },
         stake: 10,
         userId: USER_ID,
       },
@@ -484,6 +502,20 @@ test('games expose only durable saved-bet audit values and exact same-book price
     timelineSnapshots: [t24, t6, t2],
   })
   const result = await getModelPerformanceGames(USER_ID, {}, {
+    actualStartingGoalieProvider: async () => ({
+      actualStartingGoalies: {
+        away: { name: 'Away Selected', playerId: 2, teamId: 'COL' },
+        home: { name: 'Home Actual', playerId: 4, teamId: 'BOS' },
+      },
+      awayTeam: { abbreviation: 'COL', score: 2 },
+      gameId: prediction.gameId,
+      gameState: 'FINAL',
+      gameType: prediction.gameType,
+      homeTeam: { abbreviation: 'BOS', score: 3 },
+      season: prediction.seasonId,
+      startTimeUTC: prediction.scheduledStartAtCapture,
+      status: 'Final',
+    }),
     repository,
     seasonMetadata: SEASON_METADATA,
   })
@@ -493,6 +525,10 @@ test('games expose only durable saved-bet audit values and exact same-book price
   assert.equal(repository.calls.some(([name]) => name === 'findT2Snapshots'), false)
   assert.equal(detail.modelAtBet.probability, 0.515)
   assert.equal(detail.modelAtBet.fairOdds, 1.94)
+  assert.equal(detail.modelAtBet.startingGoalies.home.displayName, 'Home Selected')
+  assert.equal(detail.goalieComparison.away, 'MATCH')
+  assert.equal(detail.goalieComparison.home, 'MISMATCH')
+  assert.equal(result.items[0].actualStartingGoalies.home.name, 'Home Actual')
   assert.equal(detail.marketOdds, 2.18)
   assert.equal(detail.priceTimeline.earliestCaptured.odds, 2.3)
   assert.equal(detail.priceTimeline.earliestCaptured.snapshotType, 'T24')
@@ -502,6 +538,38 @@ test('games expose only durable saved-bet audit values and exact same-book price
   assert.equal(detail.closingComparison.sameBookFinalOdds, 1.9)
   assert.equal(detail.closingComparison.bestFinalOdds, 1.9)
   assert.equal(Object.hasOwn(detail, 'userId'), false)
+})
+
+test('games without a goalie-at-bet snapshot never fetch or fabricate actual starters', async () => {
+  const prediction = makePrediction(0)
+  let providerCalls = 0
+  const repository = createRepository({
+    bets: [{
+      _id: 'legacy-bet',
+      fairOdds: 2,
+      gameId: prediction.gameId,
+      marketOdds: 2,
+      modelProbability: 0.5,
+      scheduledStart: prediction.scheduledStartAtCapture,
+      selectedSide: { homeAway: 'home', teamId: 'BOS' },
+      stake: 1,
+      userId: USER_ID,
+    }],
+    historicalGames: [makeHistoricalGame(prediction)],
+    predictions: [prediction],
+  })
+  const result = await getModelPerformanceGames(USER_ID, {}, {
+    actualStartingGoalieProvider: async () => {
+      providerCalls += 1
+      throw new Error('must not run')
+    },
+    repository,
+    seasonMetadata: SEASON_METADATA,
+  })
+
+  assert.equal(providerCalls, 0)
+  assert.equal(result.items[0].betDetails[0].modelAtBet.startingGoalies, null)
+  assert.equal(Object.hasOwn(result.items[0], 'actualStartingGoalies'), false)
 })
 
 test('capture health uses the authenticated prediction cohort and exact schedule range', async () => {

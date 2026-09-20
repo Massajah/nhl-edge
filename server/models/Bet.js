@@ -248,6 +248,58 @@ const goalieSelectionSnapshotSchema = new mongoose.Schema(
   { _id: false },
 )
 
+const startingGoalieAtBetSchema = new mongoose.Schema(
+  {
+    adjustment: {
+      type: Number,
+      min: -5,
+      max: 5,
+      required: true,
+    },
+    displayName: {
+      type: String,
+      trim: true,
+      maxlength: 120,
+      default: '',
+    },
+    nhlPlayerId: {
+      type: Number,
+      default: null,
+    },
+    selectionType: {
+      type: String,
+      enum: ['provider_goalie', 'custom'],
+      required: true,
+    },
+    sourceType: {
+      type: String,
+      enum: ['MANUAL'],
+      required: true,
+    },
+    teamId: {
+      type: String,
+      trim: true,
+      uppercase: true,
+      required: true,
+    },
+  },
+  { _id: false },
+)
+
+const startingGoaliesAtBetSchema = new mongoose.Schema(
+  {
+    away: {
+      type: startingGoalieAtBetSchema,
+      default: null,
+    },
+    home: {
+      type: startingGoalieAtBetSchema,
+      default: null,
+    },
+  },
+  { _id: false },
+)
+
 const bettingSettingsSnapshotSchema = new mongoose.Schema(
   {
     bankrollBasis: {
@@ -558,6 +610,10 @@ const betSchema = new mongoose.Schema(
     },
     goalieSelectionSnapshot: {
       type: goalieSelectionSnapshotSchema,
+      default: null,
+    },
+    startingGoaliesAtBet: {
+      type: startingGoaliesAtBetSchema,
       default: null,
     },
     stake: {

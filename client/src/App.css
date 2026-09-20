@@ -10473,6 +10473,56 @@ button.coverage-item {
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
+.performance-goalie-audit {
+  margin-top: 1rem;
+}
+
+.performance-goalie-audit h5 {
+  margin: 0 0 0.65rem;
+  color: var(--text-strong);
+  font-size: 0.82rem;
+}
+
+.performance-goalie-audit-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.65rem;
+}
+
+.performance-goalie-audit-grid section {
+  display: grid;
+  gap: 0.25rem;
+  min-width: 0;
+  padding: 0.7rem;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 0.65rem;
+  background: rgba(15, 23, 42, 0.35);
+}
+
+.performance-goalie-audit-grid span,
+.performance-goalie-audit-grid small {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+}
+
+.performance-goalie-audit-grid span:not(:first-of-type) {
+  margin-top: 0.35rem;
+}
+
+.performance-goalie-audit-grid b {
+  overflow-wrap: anywhere;
+  color: var(--text-strong);
+  font-size: 0.8rem;
+}
+
+.performance-goalie-audit-grid .goalie-match-status.match {
+  color: #71dfad;
+}
+
+.performance-goalie-audit-grid .goalie-match-status.mismatch {
+  color: #f5ca61;
+}
+
 .price-timeline {
   display: flex;
   align-items: stretch;
@@ -10650,6 +10700,10 @@ button.coverage-item {
   .bet-performance-summary,
   .performance-game-details,
   .performance-detail-grid.bet-values {
+    grid-template-columns: 1fr;
+  }
+
+  .performance-goalie-audit-grid {
     grid-template-columns: 1fr;
   }
 

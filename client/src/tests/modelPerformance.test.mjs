@@ -739,6 +739,51 @@ test('expanded game details distinguish official T2, Model at Bet, Bet, and FINA
   assert.match(html, /Official T2 and Model @ Bet are separate stored observations/)
 })
 
+test('expanded game audit shows both manual goalies at bet against authoritative starters', () => {
+  const game = gameFixture()
+  game.actualStartingGoalies = {
+    away: { name: 'J. Woll', playerId: 2, teamId: 'COL' },
+    home: { name: 'J. Korpisalo', playerId: 4, teamId: 'BOS' },
+    source: 'NHL_GAMECENTER_BOXSCORE',
+  }
+  game.betDetails[0].modelAtBet.startingGoalies = {
+    away: {
+      adjustment: -0.5,
+      displayName: 'Joseph Woll',
+      nhlPlayerId: 2,
+      selectionType: 'provider_goalie',
+      sourceType: 'MANUAL',
+      teamId: 'COL',
+    },
+    home: {
+      adjustment: -1.5,
+      displayName: 'Jeremy Swayman',
+      nhlPlayerId: 3,
+      selectionType: 'provider_goalie',
+      sourceType: 'MANUAL',
+      teamId: 'BOS',
+    },
+  }
+  game.betDetails[0].goalieComparison = {
+    away: 'MATCH',
+    home: 'MISMATCH',
+  }
+  const html = renderPerformance({
+    initialExpandedGameIds: ['2026020001'],
+    initialGames: gamesFixture([game]),
+    initialGamesStatus: 'success',
+    initialTab: 'games',
+  })
+
+  assert.match(html, /Starting goalies @ Bet vs actual/)
+  assert.match(html, /Jeremy Swayman/)
+  assert.match(html, /Joseph Woll/)
+  assert.match(html, /J\. Korpisalo/)
+  assert.match(html, /Manual selection/)
+  assert.match(html, /Different starter/)
+  assert.match(html, />Match</)
+})
+
 test('earliest captured semantics are explicit and missing checkpoints are omitted', () => {
   const bet = gameFixture().betDetails[0]
   const full = modelPerformanceUtils.buildPriceTimelinePoints(bet)

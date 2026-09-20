@@ -1,5 +1,6 @@
 const nhlApiService = require('./nhlApiService')
 const {
+  getGameIdentity,
   resolveForwardPredictionResult,
 } = require('./forwardPredictionContracts')
 const { PERFORMANCE_REASON_CODES } = require('./modelPerformanceContracts')
@@ -8,6 +9,12 @@ const RESULT_SOURCE = Object.freeze({
   HISTORICAL_NHL_GAME: 'HistoricalNhlGame',
   NHL_GAME_LANDING: 'NHL_GAME_LANDING',
 })
+const GOALIE_MATCH_STATUS = Object.freeze({
+  MATCH: 'MATCH',
+  MISMATCH: 'MISMATCH',
+  UNAVAILABLE: 'UNAVAILABLE',
+})
+const ACTUAL_STARTER_SOURCE = 'NHL_GAMECENTER_BOXSCORE'
 
 const toHistoricalGameContract = (storedGame = {}) => ({
   awayTeam: {
@@ -152,12 +159,76 @@ const resolvePredictionResults = async ({
   )
 }
 
+const unavailableActualStartingGoalies = () => ({
+  away: null,
+  home: null,
+  source: ACTUAL_STARTER_SOURCE,
+})
+
+const resolvePredictionActualStartingGoalies = async ({
+  gameProvider = nhlApiService.getGameBoxscore,
+  prediction,
+} = {}) => {
+  try {
+    const game = await gameProvider(prediction.gameId)
+    const identity = getGameIdentity(game)
+    if (!identity || ['gameId', 'seasonId', 'gameType', 'homeTeamId', 'awayTeamId']
+      .some((field) => identity[field] !== prediction[field]) ||
+      +identity.scheduledStartAtCapture !== +new Date(prediction.scheduledStartAtCapture)) {
+      return unavailableActualStartingGoalies()
+    }
+
+    return {
+      away: game.actualStartingGoalies?.away ?? null,
+      home: game.actualStartingGoalies?.home ?? null,
+      source: ACTUAL_STARTER_SOURCE,
+    }
+  } catch {
+    return unavailableActualStartingGoalies()
+  }
+}
+
+const resolveActualStartingGoalies = async ({
+  gameProvider,
+  predictions = [],
+} = {}) => {
+  const rows = await mapWithConcurrency(
+    predictions,
+    (prediction) => resolvePredictionActualStartingGoalies({
+      gameProvider,
+      prediction,
+    }),
+  )
+
+  return new Map(
+    predictions.map((prediction, index) => [prediction, rows[index]]),
+  )
+}
+
+const compareStartingGoalie = (selected, actual) => {
+  const selectedId = Number(selected?.nhlPlayerId)
+  const actualId = Number(actual?.playerId)
+  if (!Number.isSafeInteger(selectedId) || selectedId <= 0 ||
+      !Number.isSafeInteger(actualId) || actualId <= 0) {
+    return GOALIE_MATCH_STATUS.UNAVAILABLE
+  }
+
+  return selectedId === actualId
+    ? GOALIE_MATCH_STATUS.MATCH
+    : GOALIE_MATCH_STATUS.MISMATCH
+}
+
 module.exports = {
+  ACTUAL_STARTER_SOURCE,
+  GOALIE_MATCH_STATUS,
+  compareStartingGoalie,
   RESULT_SOURCE,
   mapResolutionReason,
   mapWithConcurrency,
   normalizeResultType,
   resolvePredictionResult,
   resolvePredictionResults,
+  resolveActualStartingGoalies,
+  resolvePredictionActualStartingGoalies,
   toHistoricalGameContract,
 }

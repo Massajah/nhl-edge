@@ -7,9 +7,11 @@ const {
   buildScheduleDateRequests,
   createNhlApiRequester,
   getCacheTtlMs,
+  getGameBoxscore,
   getHistoricalScheduleRangeCacheKey,
   getRosterForTeam,
   getScheduleGamesForDateRange,
+  simplifyGameBoxscore,
 } = require('../services/nhlApiService')
 
 const createResponse = ({ body = {}, headers = {}, ok = true, status = 200 }) => ({
@@ -101,6 +103,102 @@ test('NHL API requester serves cached schedule responses within TTL', async () =
     ),
     NHL_API_CACHE_TTLS_MS.currentSchedule,
   )
+})
+
+test('NHL API requester reuses a cached boxscore response', async () => {
+  let callCount = 0
+  const requester = createNhlApiRequester({
+    fetchImpl: async () => {
+      callCount += 1
+      return createResponse({ body: { id: 2026020001 } })
+    },
+    now: () => Date.parse('2026-10-09T03:00:00.000Z'),
+    sleepImpl: async () => {},
+  })
+
+  await requester('https://example.test', '/gamecenter/2026020001/boxscore')
+  await requester('https://example.test', '/gamecenter/2026020001/boxscore')
+  assert.equal(callCount, 1)
+})
+
+test('boxscore normalization resolves one authoritative starter per team', async () => {
+  let requestedPath = ''
+  const fixture = {
+    awayTeam: { abbrev: 'TOR', score: 2 },
+    gameState: 'OFF',
+    gameType: 2,
+    homeTeam: { abbrev: 'BOS', score: 3 },
+    id: 2026020001,
+    playerByGameStats: {
+      awayTeam: { goalies: [
+        { name: { default: 'J. Woll' }, playerId: 8480045, starter: true },
+        { name: { default: 'A. Backup' }, playerId: 8480046, starter: false },
+      ] },
+      homeTeam: { goalies: [
+        { name: { default: 'J. Swayman' }, playerId: 8478498, starter: true },
+      ] },
+    },
+    season: 20262027,
+    startTimeUTC: '2026-10-08T19:00:00.000Z',
+  }
+  const result = await getGameBoxscore('2026020001', {
+    requestGame: async (path) => {
+      requestedPath = path
+      return fixture
+    },
+  })
+
+  assert.equal(requestedPath, '/gamecenter/2026020001/boxscore')
+  assert.deepEqual(result.actualStartingGoalies.home, {
+    name: 'J. Swayman',
+    playerId: 8478498,
+    teamId: 'BOS',
+  })
+  assert.deepEqual(result.actualStartingGoalies.away, {
+    name: 'J. Woll',
+    playerId: 8480045,
+    teamId: 'TOR',
+  })
+})
+
+test('boxscore starter normalization fails closed for unavailable or malformed identity', () => {
+  const base = {
+    awayTeam: { abbrev: 'TOR' },
+    gameState: 'OFF',
+    homeTeam: { abbrev: 'BOS' },
+    playerByGameStats: {
+      awayTeam: { goalies: [{ playerId: 1, starter: 'true' }] },
+      homeTeam: { goalies: [{ playerId: null, starter: true }] },
+    },
+  }
+  const malformed = simplifyGameBoxscore(base)
+  const missing = simplifyGameBoxscore({
+    ...base,
+    playerByGameStats: {},
+  })
+  const pregame = simplifyGameBoxscore({
+    ...base,
+    gameState: 'FUT',
+    playerByGameStats: {
+      awayTeam: { goalies: [{ playerId: 1, starter: true }] },
+      homeTeam: { goalies: [{ playerId: 2, starter: true }] },
+    },
+  })
+  const multiple = simplifyGameBoxscore({
+    ...base,
+    playerByGameStats: {
+      awayTeam: { goalies: [
+        { playerId: 1, starter: true },
+        { playerId: 2, starter: true },
+      ] },
+      homeTeam: { goalies: [] },
+    },
+  })
+
+  for (const result of [malformed, missing, pregame, multiple]) {
+    assert.equal(result.actualStartingGoalies.home, null)
+    assert.equal(result.actualStartingGoalies.away, null)
+  }
 })
 
 test('standings cache uses short current and long historical TTLs', () => {

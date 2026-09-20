@@ -1,11 +1,13 @@
 const { createHash } = require('node:crypto')
 const { calculateGame } = require('../../shared/predictionCalculation')
 const { getSpecialTeamsContextForTeams } = require('../../shared/specialTeamsMatchups')
-const { BASE_MODEL_V1 } = require('../config/baseModel')
 const { serializeRatingEngineSettings } = require('./ratingEngineSettingsService')
 const { calculateEffectiveHomeAdvantage } = require('./homeAdvantageService')
 const { normalizeScheduleAdjustmentSettings } = require('./quickRematchSettingsService')
-const { CALCULATION_CONTRACT_VERSION } = require('./forwardPredictionContracts')
+const {
+  AUTOMATIC_PREDICTION_MODEL_VERSION,
+  CALCULATION_CONTRACT_VERSION,
+} = require('./forwardPredictionContracts')
 
 const finite = (value) => value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value))
 const canonicalJson = (value) => JSON.stringify(value, (_key, item) =>
@@ -62,16 +64,14 @@ const calculateAutomaticPrediction = ({ identity, ratings, settings: rawSettings
     const ratingAdjustment = finite(rating.manualAdjustment) ? Number(rating.manualAdjustment) : 0
     const baseRating = Number(rating.baseRating) + ratingAdjustment
     const context = gameContext?.[`${side}Context`]
-    const selection = gameContext?.goalieSelections?.[side]
-    const validGoalie = ['provider_goalie', 'team_goalie'].includes(selection?.selectionType) && selection.teamId === id &&
-      Number.isSafeInteger(selection.nhlPlayerId) && selection.nhlPlayerId > 0 && finite(selection.teamDefaultAdjustment)
-    const goalie = validGoalie ? Math.max(-5, Math.min(5, Number(selection.teamDefaultAdjustment))) : 0
+    // Official T2 has no authorized automatic pregame starter provider. Manual
+    // GameContext selections are intentionally outside this calculation path.
+    const goalie = 0
     const injury = injurySummaries?.[id]
     completeness.injuries[side] = finite(injury?.totalImpact) ? 'stored_user_data' : 'unavailable'
     const scheduleAvailable = context?.dataStatus === 'available'
     completeness.schedule[side] = context?.dataStatus ?? 'unavailable'
-    completeness.goalies[side] = validGoalie ? selection.confirmationStatus ?? 'selected' :
-      selection?.selectionType === 'custom' ? 'custom_excluded' : 'unknown'
+    completeness.goalies[side] = 'unknown'
     completeness.specialTeams[side] = settings.specialTeamsMode === 'automatic'
       ? matchup[side].status === 'unavailable' ? 'unavailable' : 'available' : 'disabled'
     adjustments[side] = {
@@ -94,7 +94,7 @@ const calculateAutomaticPrediction = ({ identity, ratings, settings: rawSettings
       quickRematchAdjustment: adjustments[side].quickRematch,
       specialTeamsAdjustment: adjustments[side].specialTeams, motivation: 0, manualAdjustment: 0 }
     modelState[side] = { baseRating: Number(rating.baseRating), effectiveRating: null,
-      goalieNhlPlayerId: validGoalie ? selection.nhlPlayerId : null,
+      goalieNhlPlayerId: null,
       restFatigueCondition: scheduleAvailable ? context.restFatigueCondition ?? 'unknown' : 'unavailable' }
   }
   const result = calculateGame(inputs.home, inputs.away, settings.probabilityScale)
@@ -103,7 +103,7 @@ const calculateAutomaticPrediction = ({ identity, ratings, settings: rawSettings
   }
   modelState.home.effectiveRating = result.homeFinalRating
   modelState.away.effectiveRating = result.awayFinalRating
-  return { available: true, modelVersion: BASE_MODEL_V1.modelVersion,
+  return { available: true, modelVersion: AUTOMATIC_PREDICTION_MODEL_VERSION,
     calculationContractVersion: CALCULATION_CONTRACT_VERSION,
     settingsFingerprint: settingsFingerprint(rawSettings, scheduleSettings),
     effectiveSettings: getPredictionSettings(rawSettings, scheduleSettings),

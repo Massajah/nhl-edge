@@ -115,6 +115,7 @@ const createModelPerformanceRepository = ({
         selectedSide: 1,
         selectedTeam: 1,
         stake: 1,
+        startingGoaliesAtBet: 1,
       },
     )
 

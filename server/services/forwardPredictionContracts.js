@@ -3,6 +3,10 @@ const { COMPLETED_GAME_STATES } = require('./nhlGameEligibility')
 
 const PREDICTION_DEFINITION = 'OFFICIAL_T2_AUTOMATIC_V1'
 const CALCULATION_CONTRACT_VERSION = 'automatic-prediction-v1'
+// The rating engine is unchanged. This version distinguishes Official T2
+// observations whose automatic input contract is guaranteed goalie-neutral.
+const AUTOMATIC_PREDICTION_MODEL_VERSION =
+  'power-rating-v1-goalie-neutral-v2'
 const OPEN_BEFORE_MS = 120 * 60 * 1000
 const CLOSE_BEFORE_MS = 75 * 60 * 1000
 
@@ -62,6 +66,7 @@ const resolveForwardPredictionResult = (snapshot, game) => {
     homeScore: Number(scores[0]), awayScore: Number(scores[1]) }
 }
 
-module.exports = { CALCULATION_CONTRACT_VERSION, CLOSE_BEFORE_MS, OPEN_BEFORE_MS,
+module.exports = { AUTOMATIC_PREDICTION_MODEL_VERSION,
+  CALCULATION_CONTRACT_VERSION, CLOSE_BEFORE_MS, OPEN_BEFORE_MS,
   PREDICTION_DEFINITION, getGameIdentity, getT2Eligibility,
   isForwardPredictionGameBlocked: blockedStatus, resolveForwardPredictionResult, snapshotKey }

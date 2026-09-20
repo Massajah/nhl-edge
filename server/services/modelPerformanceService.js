@@ -30,6 +30,8 @@ const {
   modelPerformanceRepository,
 } = require('./modelPerformanceRepository')
 const {
+  compareStartingGoalie,
+  resolveActualStartingGoalies,
   resolvePredictionResults,
 } = require('./modelPerformanceResultService')
 const { ODDS_SNAPSHOT_TYPES } = require('./oddsSnapshotContracts')
@@ -518,6 +520,7 @@ const buildBetDetail = ({
       fairOdds: decimalOddsOrNull(bet.fairOdds),
       probability: probabilityOrNull(bet.modelProbability),
       probabilityEdge: finiteNumberOrNull(bet.probabilityEdge),
+      startingGoalies: bet.startingGoaliesAtBet ?? null,
     },
     priceTimeline: {
       bet: marketOdds === null
@@ -1041,6 +1044,49 @@ const getModelPerformanceGames = async (userId, query = {}, options = {}) => {
   const totalItems = filtered.length
   const totalPages = Math.ceil(totalItems / dataset.normalized.limit)
   const offset = (dataset.normalized.page - 1) * dataset.normalized.limit
+  const pageItems = filtered.slice(offset, offset + dataset.normalized.limit)
+  const predictionByIdentity = new Map(
+    dataset.predictions.map((prediction) => [
+      `${prediction.gameId}/${new Date(prediction.scheduledStartAtCapture).getTime()}`,
+      prediction,
+    ]),
+  )
+  const predictionForRow = (row) => predictionByIdentity.get(
+    `${row.gameId}/${new Date(row.scheduledStart).getTime()}`,
+  )
+  const goalieAuditPredictions = pageItems
+    .filter((row) => row.result?.status === 'FINAL' &&
+      row.betDetails?.some((bet) => bet.modelAtBet?.startingGoalies))
+    .map(predictionForRow)
+    .filter(Boolean)
+  const actualStartingGoalies = goalieAuditPredictions.length
+    ? await resolveActualStartingGoalies({
+        gameProvider: options.actualStartingGoalieProvider,
+        predictions: goalieAuditPredictions,
+      })
+    : new Map()
+  const items = pageItems.map((row) => {
+    const prediction = predictionForRow(row)
+    const actual = prediction ? actualStartingGoalies.get(prediction) : null
+    if (!actual) return row
+
+    return {
+      ...row,
+      actualStartingGoalies: actual,
+      betDetails: row.betDetails.map((bet) => {
+        const selected = bet.modelAtBet?.startingGoalies
+        if (!selected) return bet
+
+        return {
+          ...bet,
+          goalieComparison: {
+            away: compareStartingGoalie(selected.away, actual.away),
+            home: compareStartingGoalie(selected.home, actual.home),
+          },
+        }
+      }),
+    }
+  })
 
   return {
     captureHealth: serializeCaptureHealth(dataset.captureHealth),
@@ -1061,7 +1107,7 @@ const getModelPerformanceGames = async (userId, query = {}, options = {}) => {
       status: dataset.normalized.status,
       to: dataset.normalized.to,
     },
-    items: filtered.slice(offset, offset + dataset.normalized.limit),
+    items,
     metadata: buildMetadata(dataset),
     pagination: {
       hasNextPage: dataset.normalized.page < totalPages,

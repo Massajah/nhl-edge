@@ -10,6 +10,11 @@ node_modules/
 dist/
 build/
 
+# Playwright output
+client/blob-report/
+client/playwright-report/
+client/test-results/
+
 # Logs
 *.log
 

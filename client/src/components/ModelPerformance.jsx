@@ -1348,6 +1348,49 @@ function GameDetails({ row }) {
   )
 }
 
+const goalieMatchLabel = (status) => {
+  if (status === 'MATCH') return 'Match'
+  if (status === 'MISMATCH') return 'Different starter'
+  return 'Unavailable'
+}
+
+function StartingGoalieAudit({ bet, row }) {
+  const selected = bet.modelAtBet?.startingGoalies
+  if (!selected) return null
+
+  return (
+    <div className="performance-goalie-audit" aria-label="Starting goalie audit">
+      <h5>Starting goalies @ Bet vs actual</h5>
+      <div className="performance-goalie-audit-grid">
+        {['away', 'home'].map((side) => {
+          const atBet = selected[side]
+          const actual = row.actualStartingGoalies?.[side]
+          const status = bet.goalieComparison?.[side] ?? 'UNAVAILABLE'
+          const teamId = side === 'home' ? row.homeTeamId : row.awayTeamId
+
+          return (
+            <section key={side}>
+              <strong>{teamId}</strong>
+              <span>Goalie @ Bet</span>
+              <b>{atBet?.displayName || (atBet ? 'Other / Unlisted goalie' : 'No goalie selected')}</b>
+              {atBet ? (
+                <small>
+                  Manual selection · {formatSignedNumber(atBet.adjustment, 2)}
+                </small>
+              ) : null}
+              <span>Actual Starter</span>
+              <b>{actual?.name || 'Unavailable'}</b>
+              <small className={`goalie-match-status ${String(status).toLowerCase()}`}>
+                {goalieMatchLabel(status)}
+              </small>
+            </section>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 function BetDetail({ bet, index, row }) {
   const points = buildPriceTimelinePoints(bet)
   const closing = bet.closingComparison ?? {}
@@ -1405,6 +1448,7 @@ function BetDetail({ bet, index, row }) {
         <DetailValue label="vs Best FINAL" value={formatSignedNumber(closing.vsBestFinalPercent, 1, '%')} />
         <DetailValue label="Best FINAL odds" value={formatOdds(closing.bestFinalOdds)} />
       </dl>
+      <StartingGoalieAudit bet={bet} row={row} />
       {points.length > 0 ? <PriceTimeline points={points} /> : null}
       <p className="performance-detail-note">
         Official T2 and Model @ Bet are separate stored observations. Missing Bet values are not reconstructed.

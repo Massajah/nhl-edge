@@ -476,6 +476,41 @@ const simplifyGame = (game = {}) => ({
   venueName: getLocalizedValue(game.venueName) || getLocalizedValue(game.venue),
 })
 
+const normalizeBoxscoreStartingGoalie = (goalies, team, gameState) => {
+  if (['FUT', 'PRE'].includes(String(gameState ?? '').toUpperCase())) return null
+  const starters = (Array.isArray(goalies) ? goalies : []).filter(
+    (goalie) => goalie?.starter === true,
+  )
+  if (starters.length !== 1) return null
+
+  const goalie = starters[0]
+  const playerId = Number(goalie.playerId)
+  const teamId = getTeamAbbreviation(team)
+  if (!Number.isSafeInteger(playerId) || playerId <= 0 || !teamId) return null
+
+  return {
+    name: getLocalizedValue(goalie.name) || 'Unknown Goalie',
+    playerId,
+    teamId,
+  }
+}
+
+const simplifyGameBoxscore = (game = {}) => ({
+  ...simplifyGame(game),
+  actualStartingGoalies: {
+    away: normalizeBoxscoreStartingGoalie(
+      game.playerByGameStats?.awayTeam?.goalies,
+      game.awayTeam,
+      game.gameState,
+    ),
+    home: normalizeBoxscoreStartingGoalie(
+      game.playerByGameStats?.homeTeam?.goalies,
+      game.homeTeam,
+      game.gameState,
+    ),
+  },
+})
+
 const simplifyStandingTeam = (standing = {}) => ({
   name: getStandingTeamName(standing),
   abbreviation: getTeamAbbreviation(standing),
@@ -1576,6 +1611,23 @@ const getGameLanding = async (gameId, options) => {
   return simplifyGame(game)
 }
 
+const getGameBoxscore = async (gameId, options = {}) => {
+  const normalizedGameId = String(gameId ?? '').trim()
+
+  if (!/^\d{10}$/.test(normalizedGameId)) {
+    throw new NhlApiError('NHL game ID must use 10 digits.', {
+      statusCode: 400,
+    })
+  }
+
+  const requestGame = options.requestGame ?? requestNhlApi
+  const game = await requestGame(
+    `/gamecenter/${encodeURIComponent(normalizedGameId)}/boxscore`,
+  )
+
+  return simplifyGameBoxscore(game)
+}
+
 const getClubScheduleSeason = async (teamAbbreviation, seasonId) => {
   const normalizedAbbreviation = normalizeTeamAbbreviation(teamAbbreviation)
   const normalizedSeasonId = String(seasonId ?? '').trim()
@@ -1960,6 +2012,7 @@ module.exports = {
   getClubScheduleSeason,
   getCacheTtlMs,
   getCurrentSeasonContext,
+  getGameBoxscore,
   getGameLanding,
   getGamesForDate,
   getGoalieSummariesForTeam,
@@ -1980,5 +2033,6 @@ module.exports = {
   isValidScheduleDate,
   isValidTeamAbbreviation,
   parseRetryAfterMs,
+  simplifyGameBoxscore,
   loadScheduleGamesForDateRange,
 }

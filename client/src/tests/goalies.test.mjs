@@ -297,6 +297,48 @@ test('saved bet normalization preserves provider provenance and legacy snapshots
   assert.equal(legacyCustom.goalieSelectionSnapshot.effectiveAdjustment, -0.75)
 })
 
+test('bet payload freezes both model-at-bet goalie selections with manual provenance', () => {
+  const home = goalieUtils.goalieSelectionToInputFields(
+    goalieUtils.createProviderGoalieSelection(providerGoalie, 'BOS'),
+  )
+  const away = goalieUtils.goalieSelectionToInputFields({
+    ...goalieUtils.createUnknownGoalieSelection('TOR'),
+    displayName: 'Emergency goalie',
+    effectiveAdjustment: -1.5,
+    manualAdjustment: -1.5,
+    overrideEnabled: true,
+    selectionType: 'custom',
+    source: 'custom',
+  })
+  const snapshot = savedAnalyses.createStartingGoaliesAtBetPayload({
+    away,
+    awayTeamId: 'TOR',
+    home,
+    homeTeamId: 'BOS',
+  })
+
+  assert.deepEqual(snapshot.home, {
+    adjustment: -1.25,
+    displayName: 'Jeremy Swayman',
+    nhlPlayerId: 8480280,
+    selectionType: 'provider_goalie',
+    sourceType: 'MANUAL',
+    teamId: 'BOS',
+  })
+  assert.equal(snapshot.away.adjustment, -1.5)
+  assert.equal(snapshot.away.nhlPlayerId, null)
+  assert.equal(snapshot.away.sourceType, 'MANUAL')
+  assert.equal(
+    savedAnalyses.createStartingGoaliesAtBetPayload({
+      away: modelAnalysis.defaultGameInputs.away,
+      awayTeamId: 'TOR',
+      home: modelAnalysis.defaultGameInputs.home,
+      homeTeamId: 'BOS',
+    }),
+    null,
+  )
+})
+
 test('Teams renders provider goalie rows with one compact adjustment editor', () => {
   const rowMarkup = renderToStaticMarkup(
     React.createElement(TeamsModule.GoalieRow, {

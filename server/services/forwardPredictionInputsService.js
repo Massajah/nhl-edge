@@ -37,7 +37,10 @@ const createForwardPredictionInputsService = ({ ratingModel = PowerRating, conte
         getSettings(userId), getScheduleSettings(userId),
         // A database failure must retry, not silently replace potentially known injuries with zero.
         getInjuries(userId),
-        contextModel.find({ userId, gameId: { $in: games.map((game) => String(game.gameId ?? game.id)) } }).lean(),
+        contextModel.find(
+          { userId, gameId: { $in: games.map((game) => String(game.gameId ?? game.id)) } },
+          { goalieSelections: 0 },
+        ).lean(),
       ])
       const normalizedGames = games.map(normalizeGame)
       const { scheduleGames, scheduleError } = await loadScheduleGamesForContext(normalizedGames, scheduleSettings,
@@ -50,12 +53,13 @@ const createForwardPredictionInputsService = ({ ratingModel = PowerRating, conte
       const contexts = new Map(normalizedGames.map((game) => {
         const stored = storedContexts.find((row) => row.gameId === game.gameId &&
           +new Date(row.scheduledStart) === +game.scheduledStart) ?? {}
+        // Keep owner-scoped schedule overrides available to their established
+        // automatic rules, but never carry manual Analyzer goalie selections
+        // into the Official T2 input object.
+        const automaticStored = { ...stored, goalieSelections: {} }
         const context = calculateGameContextForGame({ currentGame: game,
           homeScheduleGames: scheduleGames, awayScheduleGames: scheduleGames,
-          existingContext: stored, quickRematchSettings: scheduleSettings, now: observedAt })
-        // Keep provenance: legacy normalization can otherwise substitute a manual override
-        // for a missing team-default goalie adjustment.
-        context.goalieSelections = stored.goalieSelections ?? {}
+          existingContext: automaticStored, quickRematchSettings: scheduleSettings, now: observedAt })
         if (scheduleError) {
           for (const side of ['home', 'away']) context[`${side}Context`].dataStatus = 'unavailable'
         }

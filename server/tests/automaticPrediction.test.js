@@ -1,11 +1,12 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
 const { calculateAutomaticPrediction, settingsFingerprint, getPredictionSettings } = require('../services/automaticPredictionService')
+const { AUTOMATIC_PREDICTION_MODEL_VERSION } = require('../services/forwardPredictionContracts')
 const { getSpecialTeamsContextForTeams } = require('../../shared/specialTeamsMatchups')
 const { inputs, parityScenarios, scenarioInputs } = require('./fixtures/forwardPredictionFixtures')
 
 for (const scenario of parityScenarios) {
-  test(`official calculation matches frozen baseline, Dashboard and Analyzer: ${scenario.name}`, async () => {
+  test(`automatic and interactive calculation contracts remain explicit: ${scenario.name}`, async () => {
     const { calculatePreliminaryAnalysis } = await import('../../client/src/utils/modelAnalysis.js')
     const { calculateGame } = await import('../../client/src/utils/calculateGame.js')
     const value = scenarioInputs(scenario)
@@ -17,10 +18,17 @@ for (const scenario of parityScenarios) {
         mode: value.settings.specialTeamsMode, specialTeams: value.specialTeams }) })
     const analyzer = calculateGame(dashboard.inputs.home, dashboard.inputs.away, 20)
     assert.equal(result.available, true)
-    assert.ok(Math.abs(result.homeWinProbability - scenario.expected) < 1e-14)
-    assert.equal(result.homeWinProbability, dashboard.homeMarket.modelProbability)
-    assert.equal(result.homeWinProbability, analyzer.homeWinProbability)
-    assert.equal(result.modelState.home.effectiveRating, dashboard.homeFinalRating)
+    assert.ok(Math.abs(analyzer.homeWinProbability - scenario.expected) < 1e-14)
+    assert.equal(dashboard.homeMarket.modelProbability, analyzer.homeWinProbability)
+    if (scenario.goalie === undefined) {
+      assert.equal(result.homeWinProbability, dashboard.homeMarket.modelProbability)
+      assert.equal(result.modelState.home.effectiveRating, dashboard.homeFinalRating)
+    } else {
+      const neutralContext = { ...value.gameContext, goalieSelections: {} }
+      const neutral = calculateAutomaticPrediction({ ...value, gameContext: neutralContext })
+      assert.deepEqual(result, neutral)
+      assert.notEqual(result.homeWinProbability, analyzer.homeWinProbability)
+    }
     assert.equal(result.homeWinProbability + result.awayWinProbability, 1)
     assert.equal(result.homeFairOdds, 1 / result.homeWinProbability)
     assert.equal(result.awayFairOdds, 1 / result.awayWinProbability)
@@ -39,7 +47,7 @@ test('stored team rating adjustment is preserved, game-specific overrides are ex
   value.manualAdjustment = 20
   assert.deepEqual(calculateAutomaticPrediction(value), baseline)
   assert.equal(baseline.adjustments.home.ratingAdjustment, 2)
-  assert.equal(baseline.adjustments.home.goalie, -1.5)
+  assert.equal(baseline.adjustments.home.goalie, 0)
 })
 
 test('missing required ratings reject, optional missing inputs remain visibly neutral', () => {
@@ -60,20 +68,56 @@ test('missing required ratings reject, optional missing inputs remain visibly ne
   }
 })
 
-test('expected goalies remain expected; custom/mismatched goalies are not automatic evidence', () => {
-  const value = scenarioInputs(parityScenarios[7])
-  value.gameContext.goalieSelections.home.confirmationStatus = 'expected'
-  assert.equal(calculateAutomaticPrediction(value).completeness.goalies.home, 'expected')
-  value.gameContext.goalieSelections.home.selectionType = 'team_goalie'
-  assert.equal(calculateAutomaticPrediction(value).adjustments.home.goalie, -1.5)
-  value.gameContext.goalieSelections.home.selectionType = 'custom'
-  let result = calculateAutomaticPrediction(value)
-  assert.equal(result.adjustments.home.goalie, 0)
-  assert.equal(result.completeness.goalies.home, 'custom_excluded')
-  value.gameContext.goalieSelections.home.selectionType = 'provider_goalie'
-  value.gameContext.goalieSelections.home.teamId = 'TOR'
-  result = calculateAutomaticPrediction(value)
-  assert.equal(result.adjustments.home.goalie, 0)
+test('manual home and away goalie identity or status never affects Official T2', () => {
+  const baseline = calculateAutomaticPrediction(inputs())
+
+  for (const side of ['home', 'away']) {
+    for (const confirmationStatus of ['selected', 'expected', 'confirmed']) {
+      const value = inputs({
+        gameContext: {
+          ...inputs().gameContext,
+          goalieSelections: {
+            [side]: {
+              confirmationStatus,
+              effectiveAdjustment: -4,
+              nhlPlayerId: side === 'home' ? 1 : 2,
+              selectionType: 'provider_goalie',
+              teamDefaultAdjustment: -2,
+              teamId: side === 'home' ? 'BOS' : 'TOR',
+            },
+          },
+        },
+      })
+      assert.deepEqual(calculateAutomaticPrediction(value), baseline)
+    }
+  }
+})
+
+test('changing GameContext goalie selection cannot change automatic output', () => {
+  const value = inputs()
+  const baseline = calculateAutomaticPrediction(value)
+  value.gameContext.goalieSelections = {
+    home: {
+      confirmationStatus: 'confirmed',
+      effectiveAdjustment: -3,
+      nhlPlayerId: 8480001,
+      selectionType: 'provider_goalie',
+      teamDefaultAdjustment: -3,
+      teamId: 'BOS',
+    },
+  }
+  const firstManualState = calculateAutomaticPrediction(value)
+  value.gameContext.goalieSelections.home = {
+    ...value.gameContext.goalieSelections.home,
+    nhlPlayerId: 8480002,
+    teamDefaultAdjustment: -1,
+  }
+
+  assert.deepEqual(firstManualState, baseline)
+  assert.deepEqual(calculateAutomaticPrediction(value), baseline)
+  assert.equal(baseline.completeness.goalies.home, 'unknown')
+  assert.equal(baseline.modelState.home.goalieNhlPlayerId, null)
+  assert.equal(baseline.modelVersion, AUTOMATIC_PREDICTION_MODEL_VERSION)
 })
 
 test('persistent team adjustment and legacy home-adjustment storage match Dashboard normalization', async () => {

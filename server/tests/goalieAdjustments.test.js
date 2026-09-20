@@ -5,6 +5,7 @@ const test = require('node:test')
 const app = require('../app')
 const GoalieAdjustment = require('../models/GoalieAdjustment')
 const {
+  normalizeCreatePayload,
   normalizeGoalieSelectionSnapshot,
 } = require('../services/betsService')
 const {
@@ -732,6 +733,86 @@ test('saved provider snapshot remains stable after the team default changes', as
   assert.equal(betSnapshot.displayName, 'Darcy Kuemper')
   assert.equal(betSnapshot.effectiveAdjustment, -0.75)
   assert.equal(betSnapshot.source, 'provider_goalie')
+})
+
+test('bet save freezes both manual goalie selections without inventing unknown identity', () => {
+  const source = {
+    adjustments: { awayGoalie: -0.5, homeGoalie: -1.5 },
+    awayTeam: { abbreviation: 'TOR', name: 'Toronto', teamId: 'TOR' },
+    homeTeam: { abbreviation: 'BOS', name: 'Boston', teamId: 'BOS' },
+    marketOdds: 2,
+    modelProbability: 0.57,
+    selectedSide: {
+      abbreviation: 'BOS',
+      homeAway: 'home',
+      name: 'Boston',
+      teamId: 'BOS',
+    },
+    selectedTeam: { abbreviation: 'BOS', name: 'Boston', teamId: 'BOS' },
+    startingGoaliesAtBet: {
+      away: {
+        adjustment: -0.5,
+        displayName: 'Joseph Woll',
+        nhlPlayerId: 8480045,
+        selectionType: 'provider_goalie',
+        sourceType: 'MANUAL',
+        teamId: 'TOR',
+      },
+      home: {
+        adjustment: -1.5,
+        displayName: 'Jeremy Swayman',
+        nhlPlayerId: 8478498,
+        selectionType: 'provider_goalie',
+        sourceType: 'MANUAL',
+        teamId: 'BOS',
+      },
+    },
+  }
+  const normalized = normalizeCreatePayload(source)
+
+  source.startingGoaliesAtBet.home.displayName = 'Joonas Korpisalo'
+  source.startingGoaliesAtBet.home.nhlPlayerId = 8478048
+  assert.equal(normalized.startingGoaliesAtBet.home.displayName, 'Jeremy Swayman')
+  assert.equal(normalized.startingGoaliesAtBet.home.nhlPlayerId, 8478498)
+  assert.equal(normalized.startingGoaliesAtBet.home.adjustment, -1.5)
+  assert.equal(normalized.startingGoaliesAtBet.home.sourceType, 'MANUAL')
+  assert.equal(normalized.startingGoaliesAtBet.away.displayName, 'Joseph Woll')
+
+  const withoutGoalies = normalizeCreatePayload({
+    ...source,
+    adjustments: { awayGoalie: 0, homeGoalie: 0 },
+    startingGoaliesAtBet: null,
+  })
+  assert.equal(withoutGoalies.startingGoaliesAtBet, null)
+})
+
+test('Other or Unlisted goalie snapshots remain valid without an NHL player ID', () => {
+  const normalized = normalizeCreatePayload({
+    adjustments: { awayGoalie: 0, homeGoalie: -2 },
+    awayTeam: { abbreviation: 'TOR', name: 'Toronto', teamId: 'TOR' },
+    homeTeam: { abbreviation: 'BOS', name: 'Boston', teamId: 'BOS' },
+    marketOdds: 2,
+    modelProbability: 0.57,
+    selectedSide: {
+      abbreviation: 'BOS', homeAway: 'home', name: 'Boston', teamId: 'BOS',
+    },
+    selectedTeam: { abbreviation: 'BOS', name: 'Boston', teamId: 'BOS' },
+    startingGoaliesAtBet: {
+      away: null,
+      home: {
+        adjustment: -2,
+        displayName: 'Emergency goalie',
+        nhlPlayerId: null,
+        selectionType: 'custom',
+        sourceType: 'MANUAL',
+        teamId: 'BOS',
+      },
+    },
+  })
+
+  assert.equal(normalized.startingGoaliesAtBet.away, null)
+  assert.equal(normalized.startingGoaliesAtBet.home.nhlPlayerId, null)
+  assert.equal(normalized.startingGoaliesAtBet.home.selectionType, 'custom')
 })
 
 test('game context saves provider selections per user and preserves them on recalculation', async () => {

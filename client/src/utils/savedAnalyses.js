@@ -179,6 +179,34 @@ const normalizeAdjustments = (values = {}) => {
   }
 }
 
+const createStartingGoalieAtBetPayload = (values, teamId) => {
+  const selection = createGoalieSelectionPayload(values, teamId)
+  if (selection.selectionType === 'unknown') return null
+
+  return {
+    adjustment: selection.effectiveAdjustment,
+    displayName: selection.displayName,
+    nhlPlayerId: selection.nhlPlayerId,
+    selectionType: selection.selectionType,
+    sourceType: 'MANUAL',
+    teamId: selection.teamId,
+  }
+}
+
+export const createStartingGoaliesAtBetPayload = ({
+  away,
+  awayTeamId,
+  home,
+  homeTeamId,
+}) => {
+  const snapshot = {
+    away: createStartingGoalieAtBetPayload(away, awayTeamId),
+    home: createStartingGoalieAtBetPayload(home, homeTeamId),
+  }
+
+  return snapshot.away || snapshot.home ? snapshot : null
+}
+
 export const getRecommendedSide = (analysis) => {
   const homeModelStatus =
     normalizeModelStatus(analysis.homeModelStatus) ??
@@ -536,6 +564,12 @@ export const createBetPayloadFromGameAnalysis = ({
       selectedInputs,
       selectedTeam.id,
     ),
+    startingGoaliesAtBet: createStartingGoaliesAtBetPayload({
+      away: inputs.away,
+      awayTeamId: awayTeam.id,
+      home: inputs.home,
+      homeTeamId: homeTeam.id,
+    }),
     gameContextSnapshot: createGameContextSnapshot(gameContextSnapshot),
     stake: normalizeStake(stake),
     stakeType: 'units',
@@ -700,6 +734,12 @@ export const createBetPayloadFromSavedAnalysis = (analysis) => {
       selectedAdjustments,
       selectedTeam.id,
     ),
+    startingGoaliesAtBet: createStartingGoaliesAtBetPayload({
+      away: normalized.adjustments.away,
+      awayTeamId: normalized.awayTeamId,
+      home: normalized.adjustments.home,
+      homeTeamId: normalized.homeTeamId,
+    }),
     selectedGoalieSavePercentage: null,
     selectedGoalieGamesPlayed: null,
     selectedGoalieGamesStarted: null,
@@ -937,6 +977,7 @@ export const normalizeBet = (bet = {}) => {
     selectedGoalieGamesPlayed: toNullableNumber(bet.selectedGoalieGamesPlayed),
     selectedGoalieGamesStarted: toNullableNumber(bet.selectedGoalieGamesStarted),
     goalieSelectionSnapshot,
+    startingGoaliesAtBet: bet.startingGoaliesAtBet ?? null,
     stake: normalizeStake(bet.stake),
     stakeType: toText(bet.stakeType, 'units'),
     sportsbook: toText(bet.sportsbook, ''),

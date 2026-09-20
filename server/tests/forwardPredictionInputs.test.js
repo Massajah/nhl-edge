@@ -34,7 +34,7 @@ const makeLoader = (overrides = {}) => {
   return { service, calls, match: { ...match, venueCity: 'Boston' } }
 }
 
-test('server inputs reuse schedule travel/rematch rules, injury summaries and private goalie defaults', async () => {
+test('server inputs reuse legitimate owner inputs but strip manual goalie selections', async () => {
   const { service, calls, match } = makeLoader()
   const value = await service.loadUserInputs(USER_ID, [match], NOW)
   const context = value.contexts.get(String(match.id))
@@ -42,8 +42,9 @@ test('server inputs reuse schedule travel/rematch rules, injury summaries and pr
   assert.equal(result.adjustments.home.restFatigue, -1.25)
   assert.equal(result.adjustments.home.quickRematch, 0.25)
   assert.equal(result.adjustments.home.injuries, -2)
-  assert.equal(result.adjustments.home.goalie, -1)
-  assert.equal(result.completeness.goalies.home, 'expected')
+  assert.equal(result.adjustments.home.goalie, 0)
+  assert.equal(result.completeness.goalies.home, 'unknown')
+  assert.equal(context.goalieSelections.home.selectionType, 'unknown')
   assert.equal(context.homeContext.effectiveRestFatigueAdjustment, 3)
   for (const [domain, filter] of calls.filter(([name]) => ['ratings', 'contexts'].includes(name))) {
     assert.equal(filter.userId, USER_ID, domain)

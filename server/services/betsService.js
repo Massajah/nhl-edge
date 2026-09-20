@@ -657,6 +657,126 @@ const normalizeGoalieSelectionSnapshot = (snapshot = null) => {
   }
 }
 
+const normalizeStartingGoalieAtBet = (
+  snapshot,
+  { expectedAdjustment, expectedTeamId, side },
+) => {
+  if (snapshot === null || snapshot === '' || snapshot === undefined) {
+    return null
+  }
+
+  if (Array.isArray(snapshot) || typeof snapshot !== 'object') {
+    throw new BetsError(`startingGoaliesAtBet.${side} must be an object.`, 400, {
+      field: `startingGoaliesAtBet.${side}`,
+    })
+  }
+
+  const rawSelectionType = toText(snapshot.selectionType)
+  const selectionType = rawSelectionType === 'team_goalie'
+    ? 'provider_goalie'
+    : rawSelectionType
+  if (selectionType === 'unknown') return null
+  if (!['provider_goalie', 'custom'].includes(selectionType)) {
+    throw new BetsError(
+      `startingGoaliesAtBet.${side}.selectionType is invalid.`,
+      400,
+      { field: `startingGoaliesAtBet.${side}.selectionType` },
+    )
+  }
+
+  if (snapshot.sourceType && snapshot.sourceType !== 'MANUAL') {
+    throw new BetsError(
+      `startingGoaliesAtBet.${side}.sourceType must be MANUAL.`,
+      400,
+      { field: `startingGoaliesAtBet.${side}.sourceType` },
+    )
+  }
+
+  const teamId = toText(snapshot.teamId).toUpperCase()
+  if (!teamId || teamId !== expectedTeamId) {
+    throw new BetsError(
+      `startingGoaliesAtBet.${side}.teamId must match the ${side} team.`,
+      400,
+      { field: `startingGoaliesAtBet.${side}.teamId` },
+    )
+  }
+
+  const adjustment = normalizeGoalieSnapshotAdjustment(
+    snapshot.adjustment ?? snapshot.effectiveAdjustment,
+    `startingGoaliesAtBet.${side}.adjustment`,
+  )
+  if (Math.abs(adjustment - expectedAdjustment) > 1e-8) {
+    throw new BetsError(
+      `startingGoaliesAtBet.${side}.adjustment must match the model-at-bet adjustment.`,
+      400,
+      { field: `startingGoaliesAtBet.${side}.adjustment` },
+    )
+  }
+
+  const displayName = toText(snapshot.displayName ?? snapshot.goalieName)
+  if (displayName.length > 120) {
+    throw new BetsError(
+      `startingGoaliesAtBet.${side}.displayName cannot exceed 120 characters.`,
+      400,
+      { field: `startingGoaliesAtBet.${side}.displayName` },
+    )
+  }
+
+  const rawPlayerId = toOptionalNumber(
+    snapshot.nhlPlayerId ?? snapshot.playerId,
+    `startingGoaliesAtBet.${side}.nhlPlayerId`,
+  )
+  const nhlPlayerId = selectionType === 'custom' ? null : rawPlayerId
+  if (
+    selectionType === 'provider_goalie' &&
+    (!Number.isSafeInteger(nhlPlayerId) || nhlPlayerId <= 0)
+  ) {
+    throw new BetsError(
+      `startingGoaliesAtBet.${side}.nhlPlayerId must be a positive integer.`,
+      400,
+      { field: `startingGoaliesAtBet.${side}.nhlPlayerId` },
+    )
+  }
+
+  return {
+    adjustment,
+    displayName,
+    nhlPlayerId,
+    selectionType,
+    sourceType: 'MANUAL',
+    teamId,
+  }
+}
+
+const normalizeStartingGoaliesAtBet = (
+  snapshot,
+  { adjustments, awayTeamId, homeTeamId },
+) => {
+  if (snapshot === null || snapshot === '' || snapshot === undefined) {
+    return null
+  }
+  if (Array.isArray(snapshot) || typeof snapshot !== 'object') {
+    throw new BetsError('startingGoaliesAtBet must be an object.', 400, {
+      field: 'startingGoaliesAtBet',
+    })
+  }
+
+  const normalized = {
+    away: normalizeStartingGoalieAtBet(snapshot.away, {
+      expectedAdjustment: adjustments.awayGoalie,
+      expectedTeamId: awayTeamId,
+      side: 'away',
+    }),
+    home: normalizeStartingGoalieAtBet(snapshot.home, {
+      expectedAdjustment: adjustments.homeGoalie,
+      expectedTeamId: homeTeamId,
+      side: 'home',
+    }),
+  }
+
+  return normalized.home || normalized.away ? normalized : null
+}
+
 const calculateProfit = ({ marketOdds, result, stake }) => {
   const odds = Number(marketOdds)
   const wager = Number(stake)
@@ -735,6 +855,17 @@ const normalizeCreatePayload = (payload = {}) => {
   const goalieSelectionSnapshot = normalizeGoalieSelectionSnapshot(
     payload.goalieSelectionSnapshot,
   )
+  const homeTeam = normalizeTeam(payload.homeTeam, 'homeTeam')
+  const awayTeam = normalizeTeam(payload.awayTeam, 'awayTeam')
+  const adjustments = normalizeAdjustments(payload.adjustments)
+  const startingGoaliesAtBet = normalizeStartingGoaliesAtBet(
+    payload.startingGoaliesAtBet,
+    {
+      adjustments,
+      awayTeamId: awayTeam.abbreviation || awayTeam.teamId,
+      homeTeamId: homeTeam.abbreviation || homeTeam.teamId,
+    },
+  )
   const specialTeamsSnapshot = normalizeSpecialTeamsSnapshot(
     payload.specialTeamsSnapshot,
     'specialTeamsSnapshot',
@@ -769,8 +900,8 @@ const normalizeCreatePayload = (payload = {}) => {
     scheduledStart: toDate(payload.scheduledStart, 'scheduledStart', {
       allowNull: true,
     }),
-    homeTeam: normalizeTeam(payload.homeTeam, 'homeTeam'),
-    awayTeam: normalizeTeam(payload.awayTeam, 'awayTeam'),
+    homeTeam,
+    awayTeam,
     selectedTeam: normalizeTeam(
       payload.selectedTeam ?? payload.selectedSide,
       'selectedTeam',
@@ -880,6 +1011,7 @@ const normalizeCreatePayload = (payload = {}) => {
       'selectedGoalieGamesStarted',
     ),
     goalieSelectionSnapshot,
+    startingGoaliesAtBet,
     stake,
     stakeType: toText(payload.stakeType, 'units') || 'units',
     sportsbook: toText(payload.sportsbook),
@@ -888,7 +1020,7 @@ const normalizeCreatePayload = (payload = {}) => {
     }),
     result,
     notes: toText(payload.notes),
-    adjustments: normalizeAdjustments(payload.adjustments),
+    adjustments,
     gameContextSnapshot: normalizeGameContextSnapshot(
       payload.gameContextSnapshot,
     ),
@@ -1633,5 +1765,6 @@ module.exports = {
   normalizeBetListQuery,
   normalizeCreatePayload,
   normalizeGoalieSelectionSnapshot,
+  normalizeStartingGoaliesAtBet,
   updateBet,
 }
