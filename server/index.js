@@ -1,10 +1,11 @@
-require('dotenv').config()
+require('./instrument')
 
 const mongoose = require('mongoose')
 const app = require('./app')
 const connectDB = require('./config/db')
 const { assertAuthConfig } = require('./config/auth')
 const { assertDemoSandboxConfig } = require('./config/demoSandbox')
+const { captureExceptionAndFlush } = require('./monitoring/sentry')
 
 const PORT = process.env.PORT || 5000
 const HOST = '0.0.0.0'
@@ -48,6 +49,7 @@ async function shutdown(signal) {
     console.log('NHL Edge server stopped cleanly.')
   } catch (error) {
     console.error('Failed to stop NHL Edge server cleanly:', error.message)
+    await captureExceptionAndFlush(error)
     process.exitCode = 1
   }
 }
@@ -56,8 +58,9 @@ if (require.main === module) {
   process.once('SIGTERM', () => shutdown('SIGTERM'))
   process.once('SIGINT', () => shutdown('SIGINT'))
 
-  startServer().catch((error) => {
+  startServer().catch(async (error) => {
     console.error('Failed to start NHL Edge server:', error.message)
+    await captureExceptionAndFlush(error)
     process.exit(1)
   })
 }

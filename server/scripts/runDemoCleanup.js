@@ -1,10 +1,11 @@
-require('dotenv').config({ quiet: true })
+require('../instrument')
 
 const mongoose = require('mongoose')
 const connectDB = require('../config/db')
 const {
   demoSandboxCleanupService,
 } = require('../services/demoSandboxCleanupService')
+const { captureExceptionAndFlush } = require('../monitoring/sentry')
 
 const runDemoCleanup = async ({
   cleanupService = demoSandboxCleanupService,
@@ -27,14 +28,23 @@ const runDemoCleanup = async ({
   }
 }
 
-if (require.main === module) {
-  runDemoCleanup().catch((error) => {
-    console.error('Demo sandbox cleanup failed.', {
-      name: error.name,
-      summary: error.summary,
-    })
-    process.exitCode = 1
+const handleDemoCleanupFailure = async (
+  error,
+  { captureAndFlush = captureExceptionAndFlush } = {},
+) => {
+  console.error('Demo sandbox cleanup failed.', {
+    name: error.name,
+    summary: error.summary,
   })
+  try {
+    await captureAndFlush(error)
+  } finally {
+    process.exitCode = 1
+  }
 }
 
-module.exports = { runDemoCleanup }
+if (require.main === module) {
+  runDemoCleanup().catch(handleDemoCleanupFailure)
+}
+
+module.exports = { handleDemoCleanupFailure, runDemoCleanup }

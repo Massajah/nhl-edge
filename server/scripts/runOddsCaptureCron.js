@@ -1,4 +1,4 @@
-require('dotenv').config({ quiet: true })
+require('../instrument')
 
 const mongoose = require('mongoose')
 const connectDB = require('../config/db')
@@ -10,6 +10,7 @@ const { scheduledForwardPredictionService } = require('../services/scheduledForw
 const {
   demoSandboxCleanupService,
 } = require('../services/demoSandboxCleanupService')
+const { captureExceptionAndFlush } = require('../monitoring/sentry')
 
 const runOddsCaptureCron = async ({
   closeDatabase = () => mongoose.disconnect(),
@@ -51,13 +52,22 @@ const runOddsCaptureCron = async ({
   }
 }
 
-if (require.main === module) {
-  runOddsCaptureCron().catch((error) => {
-    console.error('Odds capture cron failed.', {
-      name: error.name,
-    })
-    process.exitCode = 1
+const handleOddsCaptureCronFailure = async (
+  error,
+  { captureAndFlush = captureExceptionAndFlush } = {},
+) => {
+  console.error('Odds capture cron failed.', {
+    name: error.name,
   })
+  try {
+    await captureAndFlush(error)
+  } finally {
+    process.exitCode = 1
+  }
 }
 
-module.exports = { runOddsCaptureCron }
+if (require.main === module) {
+  runOddsCaptureCron().catch(handleOddsCaptureCronFailure)
+}
+
+module.exports = { handleOddsCaptureCronFailure, runOddsCaptureCron }

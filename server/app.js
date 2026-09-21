@@ -1,3 +1,5 @@
+require('./instrument')
+
 const cors = require('cors')
 const express = require('express')
 const authRoutes = require('./routes/authRoutes')
@@ -17,6 +19,7 @@ const teamsRoutes = require('./routes/teamsRoutes')
 const { getCorsOptions } = require('./config/cors')
 const { requireTrustedOrigin } = require('./middleware/requireTrustedOrigin')
 const securityHeaders = require('./middleware/securityHeaders')
+const { setupExpressMonitoring } = require('./monitoring/sentry')
 
 const app = express()
 
@@ -83,6 +86,8 @@ app.get('/api/schedule/:date', async (request, response, next) => {
     next(error)
   }
 })
+
+setupExpressMonitoring(app)
 
 app.use((error, _request, response, _next) => {
   const statusCode = error.statusCode ?? error.status ?? 500
