@@ -915,7 +915,15 @@ test('Market Odds controls collapse safely at narrow widths', async () => {
 
   assert.match(
     css,
-    /\.preferred-bookmaker-list\s*{[^}]+minmax\(230px, 1fr\)/s,
+    /\.preferred-bookmaker-list\s*{[^}]+grid-template-columns:\s*repeat\(3, minmax\(0, 1fr\)\)/s,
+  )
+  assert.match(
+    css,
+    /\.preferred-bookmaker-list input\[type='checkbox'\]\s*{[^}]+width:\s*16px[^}]+min-height:\s*16px/s,
+  )
+  assert.match(
+    css,
+    /@media \(max-width: 1100px\)[\s\S]*?\.preferred-bookmaker-list\s*{[^}]+repeat\(2, minmax\(0, 1fr\)\)/s,
   )
   assert.match(css, /\.market-api-credits progress\s*{[^}]+width:\s*100%/s)
   assert.match(

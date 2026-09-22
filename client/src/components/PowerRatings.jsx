@@ -48,6 +48,7 @@ import {
   validateManualAdjustmentValue,
   validateStartingRatingManualValue,
 } from '../utils/powerRatings.js'
+import { getPowerRatingRankColor } from '../utils/powerRatingRankColor.js'
 import {
   DEFAULT_STARTING_RATING_SCALE,
   STANDARD_STARTING_RATING_SCALES,
@@ -90,6 +91,7 @@ const ratingFields = [
   {
     key: 'baseRating',
     label: 'Starting Rating',
+    shortLabel: 'Starting',
     min: 0,
     max: 100,
     step: MANUAL_POWER_RATING_STEP,
@@ -97,6 +99,7 @@ const ratingFields = [
   {
     key: 'homeAdjustment',
     label: 'Home Adjustment',
+    shortLabel: 'Home',
     min: -5,
     max: 5,
     step: 0.1,
@@ -104,6 +107,7 @@ const ratingFields = [
   {
     key: 'manualAdjustment',
     label: 'Manual Adjustment',
+    shortLabel: 'Manual',
     min: -25,
     max: 25,
     step: MANUAL_POWER_RATING_STEP,
@@ -419,6 +423,10 @@ function PowerRatings({
       startingRatingSeasonId,
       startingScaleLocked,
     ],
+  )
+  const rankedTeamCount = ratedTeams.reduce(
+    (count, team) => count + (Number.isInteger(team.leagueRank) ? 1 : 0),
+    0,
   )
 
   const startingScaleDraftValidation = useMemo(
@@ -1377,18 +1385,47 @@ function PowerRatings({
             <div className="ratings-grid">
               {visibleTeams.map((team) => {
                 const isDirty = draftSummary.dirtyTeamIds.includes(team.id)
+                const rankColor = getPowerRatingRankColor(
+                  team.leagueRank,
+                  rankedTeamCount,
+                )
 
                 return (
                   <article
                     className={`team-rating-row ${isDirty ? 'dirty' : ''}`}
                     key={team.id}
                   >
+                    <span
+                      className="team-rating-rank"
+                      aria-label={
+                        team.leagueRank
+                          ? `Rank ${team.leagueRank}`
+                          : 'Rank to be determined'
+                      }
+                    >
+                      {team.leagueRank ? `#${team.leagueRank}` : '#TBD'}
+                    </span>
+
+                    <output
+                      className="power-rating-current-value"
+                      aria-label={`Power Rating: ${formatRating(team.effectiveRating)}`}
+                      style={
+                        rankColor
+                          ? { '--power-rating-rank-color': rankColor }
+                          : undefined
+                      }
+                    >
+                      <strong>{formatRating(team.effectiveRating)}</strong>
+                    </output>
+
                     <div className="team-rating-identity">
                       <TeamLogo team={team} />
                       <div className="team-rating-copy">
                         <strong>{team.name}</strong>
                         <span>{team.abbreviation}</span>
-                        <small>{team.division}</small>
+                        {isDirty ? (
+                          <small className="team-rating-status">Unsaved</small>
+                        ) : null}
                       </div>
                     </div>
 
@@ -1411,10 +1448,14 @@ function PowerRatings({
                       if (field.key === 'baseRating' && !canEditStartingRatings) {
                         return (
                           <div
-                            className="rating-value-field rating-value-readonly"
+                            aria-label={`${team.name} ${field.label}`}
+                            className={`rating-value-field rating-value-readonly rating-field-${field.key}`}
                             key={field.key}
+                            role="group"
                           >
-                            <span>{field.label}</span>
+                            <span aria-label={field.label}>
+                              {field.shortLabel}
+                            </span>
                             <strong>{formatRating(team.startingRating)}</strong>
                             {startingScaleLocked ? (
                               <small className="rating-locked-status">
@@ -1427,14 +1468,17 @@ function PowerRatings({
 
                       return (
                         <label
-                          className={`field rating-value-field ${
+                          className={`field rating-value-field rating-field-${field.key} ${
                             isDirtyField ? 'dirty' : ''
                           }`}
                           key={field.key}
                         >
-                          <span>{field.label}</span>
+                          <span aria-label={field.label}>
+                            {field.shortLabel}
+                          </span>
                           <div className="rating-input-shell">
                             <input
+                              aria-label={`${team.name} ${field.label}`}
                               aria-invalid={isInvalid}
                               data-testid={`rating-${team.id}-${field.key}`}
                               type="number"
@@ -1480,20 +1524,6 @@ function PowerRatings({
                         </label>
                       )
                     })}
-
-                    <div className="power-rating-current-value">
-                      <span>Power Rating</span>
-                      <div className="power-rating-current-display">
-                        <strong>{formatRating(team.effectiveRating)}</strong>
-                        <small>
-                          {team.leagueRank ? `#${team.leagueRank}` : '#TBD'}
-                        </small>
-                      </div>
-                    </div>
-
-                    {isDirty ? (
-                      <span className="team-rating-status">Unsaved</span>
-                    ) : null}
                   </article>
                 )
               })}
