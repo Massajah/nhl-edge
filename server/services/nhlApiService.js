@@ -15,6 +15,7 @@ const NHL_API_CACHE_TTLS_MS = Object.freeze({
   default: 5 * 60 * 1000,
   futureSchedule: 15 * 60 * 1000,
   historicalSchedule: 30 * 24 * 60 * 60 * 1000,
+  recentHistoricalSchedule: 5 * 60 * 1000,
   historicalStandings: 30 * 24 * 60 * 60 * 1000,
 })
 const REGULAR_SEASON_GAME_TYPE_ID = 2
@@ -104,6 +105,9 @@ const getScheduleCacheTtlMs = (path, now = new Date()) => {
   const today = getTodayNhlDate(now)
 
   if (requestDate < today) {
+    const ageDays = (Date.parse(`${today}T00:00:00Z`) -
+      Date.parse(`${requestDate}T00:00:00Z`)) / MS_PER_DAY
+    if (ageDays <= 2) return NHL_API_CACHE_TTLS_MS.recentHistoricalSchedule
     return NHL_API_CACHE_TTLS_MS.historicalSchedule
   }
 

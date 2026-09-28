@@ -6231,6 +6231,83 @@
   white-space: nowrap;
 }
 
+.starting-goalie-audit-badge {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  max-width: 100%;
+  gap: 4px;
+  border: 1px solid rgba(241, 179, 82, 0.42);
+  border-radius: 999px;
+  padding: 2px 7px;
+  color: var(--accent-warm);
+  background: rgba(241, 179, 82, 0.1);
+  font-size: 0.67rem;
+  font-weight: 800;
+  line-height: 1.2;
+  white-space: normal;
+}
+
+.starting-goalie-audit-details {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.starting-goalie-audit-details h4 {
+  margin: 0 0 9px;
+  color: var(--text-strong);
+  font-size: 0.82rem;
+}
+
+.starting-goalie-audit-sides {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.starting-goalie-audit-side {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 9px;
+}
+
+.starting-goalie-audit-side > strong {
+  color: var(--text-strong);
+}
+
+.starting-goalie-audit-side dl,
+.starting-goalie-audit-side dl > div {
+  display: grid;
+  gap: 3px;
+  margin: 0;
+}
+
+.starting-goalie-audit-side dl {
+  margin-top: 7px;
+  gap: 8px;
+}
+
+.starting-goalie-audit-side dt {
+  color: var(--text-muted);
+  font-size: 0.68rem;
+}
+
+.starting-goalie-audit-side dd {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: 0.76rem;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 680px) {
+  .starting-goalie-audit-sides {
+    grid-template-columns: 1fr;
+  }
+}
+
 .view-bet-button.compact {
   min-height: 34px;
   justify-self: start;

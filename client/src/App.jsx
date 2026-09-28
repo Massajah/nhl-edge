@@ -669,6 +669,7 @@ function AuthenticatedApp({ authUser, onLogout }) {
     >
       {activePage === "dashboard" ? (
         <Dashboard
+          isDemo={authUser?.accountType === 'DEMO_SANDBOX'}
           baseHomeAdvantage={ratingEngineSettings.homeAdvantage}
           probabilityScale={ratingEngineSettings.probabilityScale}
           specialTeamsAdjustment={ratingEngineSettings.specialTeamsAdjustment}
@@ -764,7 +765,7 @@ function AuthenticatedApp({ authUser, onLogout }) {
           onUserDataReset={handleUserDataReset}
         />
       ) : (
-        <BetTracker />
+        <BetTracker isDemo={authUser?.accountType === 'DEMO_SANDBOX'} />
       )}
     </AppLayout>
   );

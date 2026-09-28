@@ -19,6 +19,7 @@ import {
   deleteBet,
   fetchBets,
   fetchBetsPage,
+  fetchStartingGoalieAudits,
   settleCompletedBets,
   updateBet,
 } from '../services/betsApi.js'
@@ -68,8 +69,13 @@ import {
 import { PROBABILITY_EDGE_HELP_TEXT } from '../utils/calculateGame.js'
 import { formatSignedGameContextAdjustment } from '../utils/gameContext.js'
 import { formatGoalieSelectionSnapshot } from '../utils/goalies.js'
+import {
+  getEligibleGoalieAuditBetIds,
+  goalieAuditStatusLabel,
+} from '../utils/startingGoalieAudit.js'
 import { formatLocalDateInputValue } from '../utils/powerRatingUpdates.js'
 import BankrollCashActions from './bankroll/BankrollCashActions.jsx'
+import StartingGoalieAuditBadge from './StartingGoalieAuditBadge.jsx'
 
 const filterOptions = [
   {
@@ -193,9 +199,10 @@ const modelStatusClass = (modelStatus = '') =>
 const profitClass = (profit) =>
   profit > 0 ? 'positive' : profit < 0 ? 'negative' : ''
 
-function BetTracker() {
+function BetTracker({ isDemo = false }) {
   const todayInputValue = useMemo(() => formatLocalDateInputValue(new Date()), [])
   const [bets, setBets] = useState([])
+  const [goalieAuditResult, setGoalieAuditResult] = useState({ key: '', audits: {} })
   const [status, setStatus] = useState('loading')
   const [errorMessage, setErrorMessage] = useState('')
   const [filter, setFilter] = useState('pending')
@@ -245,6 +252,23 @@ function BetTracker() {
 
     return nextHistory
   }, [])
+  const goalieAuditBetIds = useMemo(() =>
+    isDemo ? [] : getEligibleGoalieAuditBetIds(bets), [bets, isDemo])
+  const goalieAuditBetIdsKey = goalieAuditBetIds.join(',')
+  const goalieAudits = goalieAuditResult.key === goalieAuditBetIdsKey
+    ? goalieAuditResult.audits
+    : {}
+
+  useEffect(() => {
+    let active = true
+    if (!goalieAuditBetIdsKey) return undefined
+    fetchStartingGoalieAudits(goalieAuditBetIdsKey.split(','))
+      .then((audits) => {
+        if (active) setGoalieAuditResult({ key: goalieAuditBetIdsKey, audits })
+      })
+      .catch(() => { /* The bet list is usable without diagnostic enrichment. */ })
+    return () => { active = false }
+  }, [goalieAuditBetIdsKey])
 
   const loadBankroll = useCallback(
     async ({
@@ -967,6 +991,7 @@ function BetTracker() {
                 {bets.map((bet) => (
                   <BetCard
                     bet={bet}
+                    goalieAudit={goalieAudits[bet.id]}
                     key={bet.id}
                     onDelete={() => handleDeleteBet(bet.id)}
                     onUpdate={(updates) => handleUpdateBet(bet.id, updates)}
@@ -1570,7 +1595,7 @@ const getCompactResultLabel = (result) => {
   return 'Pending'
 }
 
-function BetCard({ bet, initialExpanded = false, onDelete, onUpdate }) {
+function BetCard({ bet, goalieAudit = null, initialExpanded = false, onDelete, onUpdate }) {
   const [draft, setDraft] = useState(() => ({
     closingOdds: bet.closingOdds === '' ? '' : String(bet.closingOdds),
     notes: bet.notes,
@@ -1672,6 +1697,7 @@ function BetCard({ bet, initialExpanded = false, onDelete, onUpdate }) {
           <small>
             {bet.awayTeam.name} @ {bet.homeTeam.name}
           </small>
+          {goalieAudit?.hasMismatch ? <StartingGoalieAuditBadge /> : null}
         </div>
 
         <div className="bet-compact-pick">
@@ -1788,6 +1814,10 @@ function BetCard({ bet, initialExpanded = false, onDelete, onUpdate }) {
             />
           </div>
 
+          {bet.startingGoaliesAtBet ? (
+            <StartingGoalieAuditDetails audit={goalieAudit} bet={bet} />
+          ) : null}
+
           <div className="bet-edit-grid">
             <label className="field tracker-field">
               <span>Result</span>
@@ -1887,6 +1917,34 @@ function BetCard({ bet, initialExpanded = false, onDelete, onUpdate }) {
         </div>
       ) : null}
     </article>
+  )
+}
+
+function StartingGoalieAuditDetails({ audit, bet }) {
+  return (
+    <section className="starting-goalie-audit-details" aria-label="Starting goalie audit">
+      <h4>Starting goalie audit</h4>
+      <div className="starting-goalie-audit-sides">
+        {['away', 'home'].map((side) => {
+          const selected = audit?.[side]?.selectedAtBet ??
+            bet.startingGoaliesAtBet?.[side]
+          const actual = audit?.[side]?.actualStarter
+          const status = audit?.[side]?.status ?? 'UNAVAILABLE'
+          const team = bet[`${side}Team`]
+          return (
+            <div className="starting-goalie-audit-side" key={side}>
+              <strong>{team?.abbreviation || team?.teamId || side}</strong>
+              <dl>
+                <div><dt>Selected @ bet</dt><dd>{selected?.displayName ||
+                  (selected ? 'Other / Unlisted goalie' : 'No goalie selected')}</dd></div>
+                <div><dt>Actual starter</dt><dd>{actual?.displayName || 'Unavailable'}</dd></div>
+                <div><dt>Status</dt><dd>{goalieAuditStatusLabel(status)}</dd></div>
+              </dl>
+            </div>
+          )
+        })}
+      </div>
+    </section>
   )
 }
 

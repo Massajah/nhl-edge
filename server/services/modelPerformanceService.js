@@ -30,10 +30,14 @@ const {
   modelPerformanceRepository,
 } = require('./modelPerformanceRepository')
 const {
-  compareStartingGoalie,
   resolveActualStartingGoalies,
   resolvePredictionResults,
 } = require('./modelPerformanceResultService')
+const {
+  buildBetStartingGoalieAudit,
+  isAuditableBetForGame,
+  publicActualStartingGoalies,
+} = require('./startingGoalieAuditService')
 const { ODDS_SNAPSHOT_TYPES } = require('./oddsSnapshotContracts')
 const { getNhlTeamIdentity } = require('./nhlTeamIdentity')
 const {
@@ -1054,9 +1058,15 @@ const getModelPerformanceGames = async (userId, query = {}, options = {}) => {
   const predictionForRow = (row) => predictionByIdentity.get(
     `${row.gameId}/${new Date(row.scheduledStart).getTime()}`,
   )
+  const originalBetsById = new Map(dataset.bets.map((bet) => [
+    String(bet._id ?? ''),
+    bet,
+  ]))
   const goalieAuditPredictions = pageItems
     .filter((row) => row.result?.status === 'FINAL' &&
-      row.betDetails?.some((bet) => bet.modelAtBet?.startingGoalies))
+      row.betDetails?.some((bet) => isAuditableBetForGame(
+        originalBetsById.get(bet.id), predictionForRow(row),
+      )))
     .map(predictionForRow)
     .filter(Boolean)
   const actualStartingGoalies = goalieAuditPredictions.length
@@ -1068,23 +1078,25 @@ const getModelPerformanceGames = async (userId, query = {}, options = {}) => {
   const items = pageItems.map((row) => {
     const prediction = predictionForRow(row)
     const actual = prediction ? actualStartingGoalies.get(prediction) : null
-    if (!actual) return row
+    if (row.result?.status !== 'FINAL') return row
+    const betDetails = row.betDetails.map((bet) => {
+      const selected = bet.modelAtBet?.startingGoalies
+      if (!selected) return bet
+      const originalBet = originalBetsById.get(bet.id)
+      const audit = buildBetStartingGoalieAudit(originalBet, actual)
 
+      return {
+        ...bet,
+        goalieComparison: {
+          away: audit?.away.status ?? 'UNAVAILABLE',
+          home: audit?.home.status ?? 'UNAVAILABLE',
+        },
+      }
+    })
     return {
       ...row,
-      actualStartingGoalies: actual,
-      betDetails: row.betDetails.map((bet) => {
-        const selected = bet.modelAtBet?.startingGoalies
-        if (!selected) return bet
-
-        return {
-          ...bet,
-          goalieComparison: {
-            away: compareStartingGoalie(selected.away, actual.away),
-            home: compareStartingGoalie(selected.home, actual.home),
-          },
-        }
-      }),
+      ...(actual ? { actualStartingGoalies: publicActualStartingGoalies(actual) } : {}),
+      betDetails,
     }
   })
 

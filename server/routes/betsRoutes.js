@@ -7,6 +7,7 @@ const router = express.Router()
 router.use(authenticate)
 
 router.get('/', betsController.getBets)
+router.get('/goalie-audit', betsController.getStartingGoalieAudits)
 router.post('/', betsController.createBet)
 router.post('/settle', betsController.settlePendingBets)
 router.put('/:id', betsController.updateBet)

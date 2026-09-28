@@ -42,6 +42,17 @@ export const deleteBet = async (id) => {
   return data.bet
 }
 
+export const fetchStartingGoalieAudits = async (betIds = []) => {
+  if (!betIds.length) return {}
+  const batches = []
+  for (let index = 0; index < betIds.length; index += 50) {
+    batches.push(betIds.slice(index, index + 50))
+  }
+  const responses = await Promise.all(batches.map((ids) =>
+    requestBets(`/api/bets/goalie-audit?betIds=${encodeURIComponent(ids.join(','))}`)))
+  return Object.assign({}, ...responses.map((response) => response.audits ?? {}))
+}
+
 export const fetchBetsPage = async (params = {}) => {
   const data = await requestBets(
     `/api/bets${buildBetHistoryQueryString(params)}`,

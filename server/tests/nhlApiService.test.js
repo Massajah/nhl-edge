@@ -98,11 +98,71 @@ test('NHL API requester serves cached schedule responses within TTL', async () =
   )
   assert.equal(
     getCacheTtlMs(
+      '/schedule/2026-07-29',
+      new Date('2026-07-30T16:00:00.000Z'),
+    ),
+    NHL_API_CACHE_TTLS_MS.recentHistoricalSchedule,
+  )
+  assert.equal(
+    getCacheTtlMs(
       '/schedule/2026-07-30',
       new Date('2026-07-30T16:00:00.000Z'),
     ),
     NHL_API_CACHE_TTLS_MS.currentSchedule,
   )
+})
+
+test('recent historical LIVE schedule refreshes to FINAL after five-minute cache expiry', async () => {
+  // October 9 at 00:05 EDT: October 8 is yesterday in the NHL calendar.
+  let currentTime = Date.parse('2026-10-09T04:05:00.000Z')
+  let upstreamCalls = 0
+  const path = '/schedule/2026-10-08'
+  const requester = createNhlApiRequester({
+    fetchImpl: async () => {
+      upstreamCalls += 1
+      return createResponse({
+        body: {
+          gameWeek: [{
+            date: '2026-10-08',
+            games: [{ id: 2026020001, gameState: upstreamCalls === 1 ? 'LIVE' : 'FINAL' }],
+          }],
+        },
+      })
+    },
+    now: () => currentTime,
+  })
+  const request = () => requester('https://example.test', path, { includeMetadata: true })
+
+  const live = await request()
+  assert.equal(live.source, 'live')
+  assert.equal(live.data.gameWeek[0].games[0].gameState, 'LIVE')
+  assert.equal(upstreamCalls, 1)
+
+  currentTime += NHL_API_CACHE_TTLS_MS.recentHistoricalSchedule - 1
+  const cached = await request()
+  assert.equal(cached.source, 'cache')
+  assert.strictEqual(cached.data, live.data)
+  assert.equal(upstreamCalls, 1)
+
+  currentTime += 2
+  const final = await request()
+  assert.equal(final.source, 'live')
+  assert.equal(final.data.gameWeek[0].games[0].gameState, 'FINAL')
+  assert.equal(upstreamCalls, 2)
+})
+
+test('schedule TTL boundaries use NHL Eastern calendar dates across UTC midnight', () => {
+  // July 30 at 02:30 UTC is still July 29 at 22:30 in New York.
+  const now = new Date('2026-07-30T02:30:00.000Z')
+  for (const [date, expectedTtl] of [
+    ['2026-07-28', NHL_API_CACHE_TTLS_MS.recentHistoricalSchedule],
+    ['2026-07-27', NHL_API_CACHE_TTLS_MS.recentHistoricalSchedule],
+    ['2026-07-26', NHL_API_CACHE_TTLS_MS.historicalSchedule],
+    ['2026-07-29', NHL_API_CACHE_TTLS_MS.currentSchedule],
+    ['2026-07-30', NHL_API_CACHE_TTLS_MS.futureSchedule],
+  ]) {
+    assert.equal(getCacheTtlMs(`/schedule/${date}`, now), expectedTtl, date)
+  }
 })
 
 test('NHL API requester reuses a cached boxscore response', async () => {

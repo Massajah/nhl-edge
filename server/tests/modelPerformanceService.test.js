@@ -463,9 +463,11 @@ test('games expose only durable saved-bet audit values and exact same-book price
         bookmakerKey: 'pinnacle',
         bookmakerTitle: 'Pinnacle',
         createdAt: new Date(+prediction.scheduledStartAtCapture - 60 * 60 * 1000),
+        awayTeam: { abbreviation: 'COL', teamId: 'COL' },
         expectedValue: 8.4,
         fairOdds: 1.94,
         gameId: prediction.gameId,
+        homeTeam: { abbreviation: 'BOS', teamId: 'BOS' },
         marketOdds: 2.18,
         marketOddsSource: 'provider',
         modelProbability: 0.515,
@@ -493,6 +495,23 @@ test('games expose only durable saved-bet audit values and exact same-book price
           },
         },
         stake: 10,
+        userId: USER_ID,
+      },
+      {
+        _id: 'bet-before-reschedule',
+        awayTeam: { abbreviation: 'COL', teamId: 'COL' },
+        gameId: prediction.gameId,
+        homeTeam: { abbreviation: 'BOS', teamId: 'BOS' },
+        result: 'pending',
+        scheduledStart: new Date(+prediction.scheduledStartAtCapture - 24 * 60 * 60 * 1000),
+        selectedSide: { homeAway: 'home', teamId: 'BOS' },
+        startingGoaliesAtBet: {
+          away: { displayName: 'Away Selected', nhlPlayerId: 2,
+            selectionType: 'provider_goalie', sourceType: 'MANUAL', teamId: 'COL' },
+          home: { displayName: 'Home Selected', nhlPlayerId: 3,
+            selectionType: 'provider_goalie', sourceType: 'MANUAL', teamId: 'BOS' },
+        },
+        stake: 1,
         userId: USER_ID,
       },
     ],
@@ -528,6 +547,11 @@ test('games expose only durable saved-bet audit values and exact same-book price
   assert.equal(detail.modelAtBet.startingGoalies.home.displayName, 'Home Selected')
   assert.equal(detail.goalieComparison.away, 'MATCH')
   assert.equal(detail.goalieComparison.home, 'MISMATCH')
+  const preRescheduleDetail = result.items[0].betDetails.find((bet) =>
+    bet.id === 'bet-before-reschedule')
+  assert.deepEqual(preRescheduleDetail.goalieComparison, {
+    away: 'UNAVAILABLE', home: 'UNAVAILABLE',
+  })
   assert.equal(result.items[0].actualStartingGoalies.home.name, 'Home Actual')
   assert.equal(detail.marketOdds, 2.18)
   assert.equal(detail.priceTimeline.earliestCaptured.odds, 2.3)
@@ -570,6 +594,45 @@ test('games without a goalie-at-bet snapshot never fetch or fabricate actual sta
   assert.equal(providerCalls, 0)
   assert.equal(result.items[0].betDetails[0].modelAtBet.startingGoalies, null)
   assert.equal(Object.hasOwn(result.items[0], 'actualStartingGoalies'), false)
+})
+
+test('Model Performance skips boxscores for only rescheduled or custom goalie Bets', async () => {
+  const prediction = makePrediction(0)
+  const baseBet = {
+    awayTeam: { teamId: 'COL' },
+    gameId: prediction.gameId,
+    homeTeam: { teamId: 'BOS' },
+    result: 'pending',
+    selectedSide: { homeAway: 'home', teamId: 'BOS' },
+    stake: 1,
+    userId: USER_ID,
+  }
+  const repository = createRepository({
+    bets: [
+      { ...baseBet, _id: 'rescheduled',
+        scheduledStart: new Date(+prediction.scheduledStartAtCapture - 24 * 60 * 60 * 1000),
+        startingGoaliesAtBet: { home: { nhlPlayerId: 3,
+          selectionType: 'provider_goalie', sourceType: 'MANUAL', teamId: 'BOS' } } },
+      { ...baseBet, _id: 'custom', scheduledStart: prediction.scheduledStartAtCapture,
+        startingGoaliesAtBet: { home: { displayName: 'Other', selectionType: 'custom' } } },
+    ],
+    historicalGames: [makeHistoricalGame(prediction)],
+    predictions: [prediction],
+  })
+  let providerCalls = 0
+  const result = await getModelPerformanceGames(USER_ID, {}, {
+    actualStartingGoalieProvider: async () => {
+      providerCalls += 1
+      throw new Error('must not run')
+    },
+    repository,
+    seasonMetadata: SEASON_METADATA,
+  })
+  assert.equal(providerCalls, 0)
+  assert.deepEqual(result.items[0].betDetails.map((bet) => bet.goalieComparison), [
+    { away: 'UNAVAILABLE', home: 'UNAVAILABLE' },
+    { away: 'UNAVAILABLE', home: 'UNAVAILABLE' },
+  ])
 })
 
 test('capture health uses the authenticated prediction cohort and exact schedule range', async () => {

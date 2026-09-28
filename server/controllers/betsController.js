@@ -1,5 +1,20 @@
 const betsService = require('../services/betsService')
 const betSettlementService = require('../services/betSettlementService')
+const startingGoalieAuditService = require('../services/startingGoalieAuditService')
+const { isDemoSandboxAccount } = require('../config/accountTypes')
+
+const getStartingGoalieAudits = async (request, response, next) => {
+  try {
+    const result = await startingGoalieAuditService.getBetsStartingGoalieAudits(
+      request.user.id,
+      request.query.betIds,
+      { demo: isDemoSandboxAccount(request.authUser) },
+    )
+    response.json(result)
+  } catch (error) {
+    next(error)
+  }
+}
 
 const getBets = async (request, response, next) => {
   try {
@@ -79,6 +94,7 @@ module.exports = {
   createBet,
   deleteBet,
   getBets,
+  getStartingGoalieAudits,
   settlePendingBets,
   updateBet,
 }

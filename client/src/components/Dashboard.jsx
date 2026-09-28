@@ -6,7 +6,7 @@ import {
   isUsingMockGames,
 } from '../services/scheduleApi.js'
 import { getBankrollSummary } from '../services/bankrollApi.js'
-import { fetchBets } from '../services/betsApi.js'
+import { fetchBets, fetchStartingGoalieAudits } from '../services/betsApi.js'
 import { getBettingSettings } from '../services/bettingSettingsApi.js'
 import { fetchGameContexts } from '../services/gameContextApi.js'
 import { fetchNhlMarketOdds } from '../services/marketOddsApi.js'
@@ -56,6 +56,8 @@ import {
   toLocalDateValue,
 } from '../utils/dashboard.js'
 import { normalizeBets } from '../utils/savedAnalyses.js'
+import { getEligibleGoalieAuditBetIds } from '../utils/startingGoalieAudit.js'
+import StartingGoalieAuditBadge from './StartingGoalieAuditBadge.jsx'
 import {
   formatSignedGameContextAdjustment,
   getCompactGameContextAdjustmentLabel,
@@ -209,6 +211,7 @@ function Dashboard({
   injurySummaries,
   injurySummaryError,
   injurySummaryStatus,
+  isDemo = false,
   initialBankrollSummary = null,
   initialBankrollError = '',
   initialBankrollStatus = null,
@@ -218,6 +221,7 @@ function Dashboard({
   initialBets = null,
   initialBetsError = '',
   initialBetsStatus = null,
+  initialGoalieAudits = {},
   initialBettingSettings = null,
   initialBettingSettingsError = '',
   initialBettingSettingsStatus = null,
@@ -278,6 +282,9 @@ function Dashboard({
   )
   const [bankrollError, setBankrollError] = useState(initialBankrollError)
   const [bets, setBets] = useState(() => normalizeBets(initialBets ?? []))
+  const [goalieAuditResult, setGoalieAuditResult] = useState({
+    key: null, audits: initialGoalieAudits,
+  })
   const [betsStatus, setBetsStatus] = useState(
     initialBetsStatus ?? (initialBets ? 'success' : 'loading'),
   )
@@ -881,6 +888,28 @@ function Dashboard({
     () => getBetsForGames(bets, previousSchedule.games),
     [bets, previousSchedule.games],
   )
+  const lastNightAuditIds = useMemo(() =>
+    isDemo ? [] : getEligibleGoalieAuditBetIds(
+      getBetsForGames(bets, previousCompletedGames),
+      { includePending: true },
+    ), [bets, isDemo, previousCompletedGames])
+  const lastNightAuditIdsKey = lastNightAuditIds.join(',')
+  const goalieAudits = isDemo || previousStatus !== 'success' || betsStatus !== 'success'
+    ? {}
+    : goalieAuditResult.key === null || goalieAuditResult.key === lastNightAuditIdsKey
+      ? goalieAuditResult.audits
+      : {}
+  useEffect(() => {
+    let active = true
+    if (previousStatus !== 'success' || betsStatus !== 'success' ||
+        !lastNightAuditIdsKey) return undefined
+    fetchStartingGoalieAudits(lastNightAuditIdsKey.split(','))
+      .then((audits) => {
+        if (active) setGoalieAuditResult({ key: lastNightAuditIdsKey, audits })
+      })
+      .catch(() => { /* Last night's games remain usable without audit data. */ })
+    return () => { active = false }
+  }, [betsStatus, lastNightAuditIdsKey, previousStatus])
   const lastNightBettingSummary = useMemo(
     () => buildLastNightBettingSummary(previousBets),
     [previousBets],
@@ -1126,6 +1155,7 @@ function Dashboard({
           <aside className="dashboard-last-night-column">
             <LastNightSection
               betsByGameId={betsByGameId}
+              goalieAudits={goalieAudits}
               currency={currency}
               date={previousDate}
               eyebrow={dateContextLabels.previousEyebrow}
@@ -2337,6 +2367,7 @@ function LastNightSection({
   errorMessage,
   eyebrow,
   games,
+  goalieAudits,
   onRetry,
   onViewBets,
   status,
@@ -2409,6 +2440,7 @@ function LastNightSection({
           {games.map((game) => (
             <LastNightGameCard
               bets={betsByGameId[getGameId(game)] ?? []}
+              goalieAudits={goalieAudits}
               currency={currency}
               game={game}
               key={game.gameId}
@@ -2463,13 +2495,15 @@ function LastNightBettingSummary({
   )
 }
 
-function LastNightGameCard({ bets, currency, game, onViewBets }) {
+function LastNightGameCard({ bets, currency, game, goalieAudits = {}, onViewBets }) {
   const showScore = hasGameScore(game)
   const statusLabel = getDashboardGameStatusLabel(game)
   const statusTone = getStatusTone(statusLabel)
   const winner = getWinner(game)
   const visibleBets = bets.slice(0, 3)
   const remainingBetCount = Math.max(0, bets.length - visibleBets.length)
+  const hiddenMismatchCount = bets.slice(3).filter((bet) =>
+    goalieAudits[bet.id]?.hasMismatch).length
 
   return (
     <article
@@ -2500,11 +2534,19 @@ function LastNightGameCard({ bets, currency, game, onViewBets }) {
       {bets.length > 0 ? (
         <div className="last-night-bet-list">
           {visibleBets.map((bet) => (
-            <LastNightBetDetail bet={bet} currency={currency} key={bet.id} />
+            <LastNightBetDetail
+              bet={bet}
+              currency={currency}
+              goalieAudit={goalieAudits[bet.id]}
+              key={bet.id}
+            />
           ))}
           {remainingBetCount > 0 ? (
             <small className="dashboard-muted-note compact">
               +{remainingBetCount} more in Bet Tracker
+              {hiddenMismatchCount > 0
+                ? ` · ${hiddenMismatchCount} with different starter`
+                : ''}
             </small>
           ) : null}
           <button className="view-bet-button compact" type="button" onClick={onViewBets}>
@@ -2534,7 +2576,7 @@ function LastNightTeamLine({ isWinner, showScore, team = {} }) {
   )
 }
 
-function LastNightBetDetail({ bet, currency }) {
+function LastNightBetDetail({ bet, currency, goalieAudit }) {
   const resultPresentation = getBetResultPresentation(bet.result)
   const profit = getBetProfit(bet)
   const showProfit = bet.result !== 'pending'
@@ -2546,6 +2588,7 @@ function LastNightBetDetail({ bet, currency }) {
           {resultPresentation.label}
         </span>
         <strong>{getBetTeamName(bet)}</strong>
+        {goalieAudit?.hasMismatch ? <StartingGoalieAuditBadge /> : null}
       </div>
       <small>
         {formatDashboardCurrency(bet.stake, currency)}{' '}

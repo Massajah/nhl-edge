@@ -1297,6 +1297,29 @@ test('Last Night renders results, settled profit, losses and pending settlements
   assertNoInvalidNumbers(html)
 })
 
+test('Last Night keeps goalie warnings per Bet and counts hidden mismatches', () => {
+  const hidden = createBet({ gameId: 'last-win', id: 'bet-hidden', result: 'win' })
+  const html = renderDashboard({
+    initialBets: [...dashboardBets(), hidden],
+    initialGoalieAudits: {
+      'bet-win': { hasMismatch: false },
+      'bet-loss': { hasMismatch: true },
+      'bet-pending': { hasMismatch: false },
+      'bet-hidden': { hasMismatch: true },
+    },
+  })
+  assert.equal(countMatches(html, /starting-goalie-audit-badge/g), 1)
+  assert.match(html, /\+1 more in Bet Tracker · 1 with different starter/)
+  assert.doesNotMatch(renderDashboard({
+    initialGoalieAudits: {
+      'bet-win': { hasMismatch: false },
+      'bet-loss': { hasMismatch: false },
+      'bet-pending': { hasMismatch: false },
+    },
+  }), /starting-goalie-audit-badge/)
+  assert.match(renderDashboard({ initialGoalieAudits: {} }), /Last Night/)
+})
+
 test('completed selected-day games render one Final status and contextual actions', () => {
   const completedGame = createGame({
     away: team('CAR', 'Carolina Hurricanes', 2),

@@ -11,6 +11,7 @@ let betHistoryUtils
 let betsApi
 let betTrackerComponents
 let savedAnalyses
+let goalieAuditUtils
 let vite
 
 const createBet = (overrides = {}) =>
@@ -78,6 +79,7 @@ before(async () => {
     '/src/components/BetTracker.jsx',
   )
   savedAnalyses = await vite.ssrLoadModule('/src/utils/savedAnalyses.js')
+  goalieAuditUtils = await vite.ssrLoadModule('/src/utils/startingGoalieAudit.js')
 })
 
 after(async () => {
@@ -155,6 +157,57 @@ test('expanded bet preserves odds, settlement, editing, analysis, notes, and del
   assert.match(html, /rows="2"/)
   assert.equal((html.match(/Market odds/g) ?? []).length, 1)
   assert.doesNotMatch(html, /bet-odds-grid/)
+})
+
+test('Bet Tracker warning is mismatch-only and expanded audit shows both sides', () => {
+  const bet = createBet({
+    startingGoaliesAtBet: {
+      away: { displayName: 'Away selected', nhlPlayerId: 2 },
+      home: { displayName: 'Home selected', nhlPlayerId: 3 },
+    },
+  })
+  const audit = {
+    away: { actualStarter: { displayName: 'Away actual' }, status: 'MATCH' },
+    hasMismatch: true,
+    home: { actualStarter: { displayName: 'Home actual' }, status: 'MISMATCH' },
+  }
+  const render = (goalieAudit, initialExpanded = false, selectedBet = bet) =>
+    renderToStaticMarkup(React.createElement(betTrackerComponents.BetCard, {
+      bet: selectedBet, goalieAudit, initialExpanded,
+      onDelete() {}, onUpdate() {},
+    }))
+  assert.match(render(audit), /starting-goalie-audit-badge/)
+  assert.doesNotMatch(render({ ...audit, hasMismatch: false }), /starting-goalie-audit-badge/)
+  assert.doesNotMatch(render(null), /starting-goalie-audit-badge/)
+  const expanded = render(audit, true)
+  for (const value of [
+    'Starting goalie audit', 'Selected @ bet', 'Actual starter', 'Status',
+    'Away selected', 'Away actual', 'Home selected', 'Home actual', 'Match',
+    'Different starter',
+  ]) assert.match(expanded, new RegExp(value))
+  assert.doesNotMatch(render(null, true, createBet({
+    goalieSelectionSnapshot: { goalieName: 'Legacy goalie' },
+  })), /Starting goalie audit/)
+})
+
+test('audit ID selection skips pending and legacy bets; empty API selection makes no request', async () => {
+  const eligible = createBet({
+    gameId: '2025020001',
+    result: 'win',
+    scheduledStart: '2026-01-15T00:00:00.000Z',
+    startingGoaliesAtBet: {
+      away: { nhlPlayerId: 2, selectionType: 'provider_goalie', sourceType: 'MANUAL' },
+    },
+  })
+  assert.deepEqual(goalieAuditUtils.getEligibleGoalieAuditBetIds([
+    eligible,
+    { ...eligible, id: 'pending', result: 'pending' },
+    { ...eligible, id: 'legacy', startingGoaliesAtBet: null },
+  ]), ['bet-1'])
+  assert.deepEqual(goalieAuditUtils.getEligibleGoalieAuditBetIds([
+    { ...eligible, result: 'pending' },
+  ], { includePending: true }), ['bet-1'])
+  assert.deepEqual(await betsApi.fetchStartingGoalieAudits([]), {})
 })
 
 test('expanded pending settlement folds source metadata into the compact strip', () => {
