@@ -26,6 +26,7 @@ const {
   getMarketOddsCacheKey,
   matchEventsToGames,
 } = require('../services/marketOddsService')
+const { buildCaptureProviderWindow } = require('../services/oddsCaptureContracts')
 const { getNhlTeamIdentity } = require('../services/nhlTeamIdentity')
 const { normalizeCreatePayload } = require('../services/betsService')
 
@@ -135,9 +136,9 @@ test('provider constructs the fixed NHL bookmaker h2h decimal request server-sid
       return createResponse({ body: createProviderBody() })
     },
     getConfig: () => createConfig(),
-    now: () => new Date(NOW_ISO),
+    now: () => new Date('2026-09-29T06:00:00.000Z'),
   })
-  const window = buildCommenceTimeWindow('2026-08-03')
+  const window = buildCommenceTimeWindow('2026-09-29')
 
   await provider.fetchNhlOdds(window)
 
@@ -152,8 +153,108 @@ test('provider constructs the fixed NHL bookmaker h2h decimal request server-sid
   assert.equal(requestUrl.searchParams.get('markets'), 'h2h')
   assert.equal(requestUrl.searchParams.get('oddsFormat'), 'decimal')
   assert.equal(requestUrl.searchParams.get('dateFormat'), 'iso')
-  assert.equal(requestUrl.searchParams.get('commenceTimeFrom'), window.commenceTimeFrom)
-  assert.equal(requestUrl.searchParams.get('commenceTimeTo'), window.commenceTimeTo)
+  assert.equal(window.commenceTimeFrom, '2026-09-28T12:00:00.000Z')
+  assert.equal(window.commenceTimeTo, '2026-09-30T12:00:00.000Z')
+  assert.equal(requestUrl.searchParams.get('commenceTimeFrom'), null)
+  assert.equal(
+    requestUrl.searchParams.get('commenceTimeTo'),
+    '2026-09-30T12:00:00Z',
+  )
+  assert.equal(requestUrl.search.includes('.000Z'), false)
+})
+
+test('future Dashboard bounds use whole-second UTC without narrowing the interval', async () => {
+  let requestUrl
+  const provider = createMarketOddsProvider({
+    fetchImpl: async (url) => {
+      requestUrl = new URL(url)
+      return createResponse({ body: [] })
+    },
+    getConfig: () => createConfig(),
+    now: () => new Date('2026-10-07T00:00:00.000Z'),
+  })
+
+  await provider.fetchNhlMoneylineOdds(buildCommenceTimeWindow('2026-10-08'))
+
+  assert.equal(
+    requestUrl.searchParams.get('commenceTimeFrom'),
+    '2026-10-07T12:00:00Z',
+  )
+  assert.equal(
+    requestUrl.searchParams.get('commenceTimeTo'),
+    '2026-10-09T12:00:00Z',
+  )
+  assert.equal(requestUrl.search.includes('.000Z'), false)
+})
+
+test('subsecond provider bounds round outwards and invalid bounds do not fetch', async () => {
+  let requestUrl
+  let calls = 0
+  const provider = createMarketOddsProvider({
+    fetchImpl: async (url) => {
+      calls += 1
+      requestUrl = new URL(url)
+      return createResponse({ body: [] })
+    },
+    getConfig: () => createConfig(),
+    now: () => new Date('2026-10-08T17:00:00.000Z'),
+  })
+
+  await provider.fetchNhlMoneylineOdds({
+    commenceTimeFrom: '2026-10-08T18:00:00.499Z',
+    commenceTimeTo: '2026-10-08T20:00:00.001Z',
+  })
+
+  assert.equal(
+    requestUrl.searchParams.get('commenceTimeFrom'),
+    '2026-10-08T18:00:00Z',
+  )
+  assert.equal(
+    requestUrl.searchParams.get('commenceTimeTo'),
+    '2026-10-08T20:00:01Z',
+  )
+  await assert.rejects(
+    provider.fetchNhlMoneylineOdds({ commenceTimeFrom: 'invalid-time' }),
+    (error) => error instanceof MarketOddsProviderError &&
+      error.status === 'invalid_response',
+  )
+  assert.equal(calls, 1)
+})
+
+test('capture keeps its logical game window; closing omits a past provider lower bound', async () => {
+  const requestUrls = []
+  let requestNow = '2026-10-08T17:00:00.000Z'
+  const provider = createMarketOddsProvider({
+    fetchImpl: async (url) => {
+      requestUrls.push(new URL(url))
+      return createResponse({ body: [] })
+    },
+    getConfig: () => createConfig(),
+    now: () => new Date(requestNow),
+  })
+  const window = buildCaptureProviderWindow([
+    { scheduledStart: new Date('2026-10-08T19:00:00.000Z') },
+  ])
+
+  assert.deepEqual(window, {
+    commenceTimeFrom: '2026-10-08T18:00:00.000Z',
+    commenceTimeTo: '2026-10-08T20:00:00.000Z',
+  })
+  await provider.fetchNhlMoneylineOdds(window)
+  requestNow = '2026-10-08T18:50:00.000Z'
+  await provider.fetchNhlMoneylineOdds(window)
+
+  assert.equal(
+    requestUrls[0].searchParams.get('commenceTimeFrom'),
+    '2026-10-08T18:00:00Z',
+  )
+  assert.equal(requestUrls[0].searchParams.get('commenceTimeTo'), '2026-10-08T20:00:00Z')
+  assert.equal(requestUrls[1].searchParams.get('commenceTimeFrom'), null)
+  assert.equal(requestUrls[1].searchParams.get('commenceTimeTo'), '2026-10-08T20:00:00Z')
+  assert.deepEqual(window, {
+    commenceTimeFrom: '2026-10-08T18:00:00.000Z',
+    commenceTimeTo: '2026-10-08T20:00:00.000Z',
+  })
 })
 
 test('scheduled capture requests selected bookmakers together in one provider call', async () => {
@@ -561,7 +662,7 @@ test('service does not spend provider credits when every schedule game has start
       ...createSchedule(),
       games: [{ ...createSchedule().games[0], gameState: 'FINAL' }],
     }),
-    now: () => Date.parse(NOW_ISO),
+    now: () => Date.parse('2026-08-05T12:00:00.000Z'),
     provider: {
       async fetchNhlOdds() {
         calls += 1
@@ -573,6 +674,46 @@ test('service does not spend provider credits when every schedule game has start
   assert.equal(calls, 0)
   assert.equal(result.status, 'no_events')
   assert.equal(result.games[0].oddsStatus, 'started')
+})
+
+test('NHL schedule game on the next UTC and Finnish date remains within the live bound', async () => {
+  let requestUrl
+  let providerCalls = 0
+  let nowMs = Date.parse('2026-09-29T06:00:00.000Z')
+  const gameStart = '2026-09-30T02:00:00Z'
+  const provider = createMarketOddsProvider({
+    fetchImpl: async (url) => {
+      providerCalls += 1
+      requestUrl = new URL(url)
+      return createResponse({
+        body: createProviderBody({ commenceTime: gameStart }),
+      })
+    },
+    getConfig: () => createConfig(),
+    now: () => new Date(nowMs),
+  })
+  const service = createMarketOddsService({
+    getConfig: () => createConfig(),
+    getGamesForDate: async () => ({
+      ...createSchedule('2026-09-29'),
+      games: [{
+        ...createSchedule().games[0],
+        startTimeUTC: gameStart,
+      }],
+    }),
+    now: () => nowMs,
+    provider,
+  })
+
+  const result = await service.getNhlMarketOdds({ date: '2026-09-29' })
+  nowMs += 60 * 1000
+  const cached = await service.getNhlMarketOdds({ date: '2026-09-29' })
+
+  assert.equal(requestUrl.searchParams.get('commenceTimeFrom'), null)
+  assert.equal(Date.parse(gameStart) <= Date.parse(requestUrl.searchParams.get('commenceTimeTo')), true)
+  assert.equal(result.games[0].oddsStatus, 'ready')
+  assert.equal(cached.source, 'cache')
+  assert.equal(providerCalls, 1)
 })
 
 test('demo market odds are cache-only and never initiate a provider request', async () => {
@@ -641,6 +782,7 @@ test('cache is shared, expires, keys include windows, and forced refresh is boun
     service.getNhlMarketOdds({ date: '2026-08-03' }),
     service.getNhlMarketOdds({ date: '2026-08-03' }),
   ])
+  nowMs += 100
   const cached = await service.getNhlMarketOdds({ date: '2026-08-03' })
   const forcedTooSoon = await service.getNhlMarketOdds({
     date: '2026-08-03',

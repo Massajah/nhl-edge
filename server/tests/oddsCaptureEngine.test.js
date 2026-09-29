@@ -354,6 +354,14 @@ test('happy path captures multiple checkpoints with one shared provider request'
   assert.equal(result.providerRequestCount, 1)
   assert.equal(result.actualCreditCost, 1)
   assert.equal(harness.calls.provider, 1)
+  assert.equal(
+    harness.calls.providerRequest.commenceTimeFrom,
+    '2026-10-08T18:00:00.000Z',
+  )
+  assert.equal(
+    harness.calls.providerRequest.commenceTimeTo,
+    '2026-10-08T20:00:00.000Z',
+  )
   assert.equal(snapshots.length, 2)
   assert.equal(snapshots.every(({ schemaVersion }) => schemaVersion === 2), true)
   assert.equal(
@@ -1039,6 +1047,14 @@ test('CLOSING work records safe selected-bookmaker observations instead of legac
   assert.equal(result.insertedCount, 1)
   assert.equal(harness.snapshotModel.documents.size, 0)
   assert.equal(harness.closingRecords.length, 1)
+  assert.equal(
+    harness.calls.providerRequest.commenceTimeFrom,
+    '2026-10-08T18:00:00.000Z',
+  )
+  assert.equal(
+    harness.calls.providerRequest.commenceTimeTo,
+    '2026-10-08T20:00:00.000Z',
+  )
   assert.deepEqual(
     harness.closingRecords[0].bookmakers.map(({ key }) => key).sort(),
     ['coolbet', 'pinnacle'],

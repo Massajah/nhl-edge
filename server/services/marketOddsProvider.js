@@ -403,6 +403,22 @@ const getProviderFailureStatus = (response, body) => {
   return 'unavailable'
 }
 
+const parseCommenceTime = (value) => {
+  const timeMs = Date.parse(value)
+
+  if (!Number.isFinite(timeMs)) {
+    throw new MarketOddsProviderError(
+      'invalid_response',
+      'The market odds provider request has an invalid commence time.',
+    )
+  }
+
+  return timeMs
+}
+
+const formatWholeSecondUtc = (timeMs) =>
+  new Date(timeMs).toISOString().replace('.000Z', 'Z')
+
 const createMarketOddsProvider = ({
   fetchImpl = fetch,
   getConfig = getMarketOddsConfig,
@@ -458,11 +474,23 @@ const createMarketOddsProvider = ({
     url.searchParams.set('dateFormat', config.dateFormat)
 
     if (commenceTimeFrom) {
-      url.searchParams.set('commenceTimeFrom', commenceTimeFrom)
+      const fromMs = parseCommenceTime(commenceTimeFrom)
+
+      if (fromMs >= now().getTime()) {
+        // Round outwards to retain the original inclusive interval.
+        url.searchParams.set(
+          'commenceTimeFrom',
+          formatWholeSecondUtc(Math.floor(fromMs / 1000) * 1000),
+        )
+      }
     }
 
     if (commenceTimeTo) {
-      url.searchParams.set('commenceTimeTo', commenceTimeTo)
+      const toMs = parseCommenceTime(commenceTimeTo)
+      url.searchParams.set(
+        'commenceTimeTo',
+        formatWholeSecondUtc(Math.ceil(toMs / 1000) * 1000),
+      )
     }
 
     const controller = new AbortController()
