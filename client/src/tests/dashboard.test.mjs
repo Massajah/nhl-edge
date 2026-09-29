@@ -1298,9 +1298,18 @@ test('Last Night renders results, settled profit, losses and pending settlements
 })
 
 test('Last Night keeps goalie warnings per Bet and counts hidden mismatches', () => {
-  const hidden = createBet({ gameId: 'last-win', id: 'bet-hidden', result: 'win' })
+  const bets = dashboardBets().map((bet, index) => ({
+    ...bet,
+    analyzedAt: `2026-01-13T20:0${4 - index}:00.000Z`,
+  }))
+  const hidden = createBet({
+    analyzedAt: '2026-01-13T20:00:00.000Z',
+    gameId: 'last-win',
+    id: 'bet-hidden',
+    result: 'win',
+  })
   const html = renderDashboard({
-    initialBets: [...dashboardBets(), hidden],
+    initialBets: [...bets, hidden],
     initialGoalieAudits: {
       'bet-win': { hasMismatch: false },
       'bet-loss': { hasMismatch: true },
