@@ -412,7 +412,7 @@ function Settings({
     initialMarketOddsStatus ?? {
       configuration: {
         bookmakers: [],
-        cacheTtlMs: 10 * 60 * 1000,
+        cacheTtlMs: 60 * 60 * 1000,
         configured: null,
         expectedRequestCredits: 1,
         market: 'Moneyline',

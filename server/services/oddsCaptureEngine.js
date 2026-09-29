@@ -126,6 +126,9 @@ const normalizeClosingGame = (work, index = 0) => {
   return {
     ...normalized,
     checkpointKey: expectedKey,
+    captureReason: work.captureReason,
+    closingRequirementsConsidered: work.closingRequirementsConsidered,
+    closingRequirementsAlreadyComplete: work.closingRequirementsAlreadyComplete,
     snapshotType: CLOSING_OBSERVATION_TYPE,
   }
 }
@@ -575,12 +578,15 @@ const createOddsCaptureEngine = ({
       throw new TypeError('Capture engine clock returned an invalid date.')
     }
 
+    // Scheduled market history is closing-only. Historical checkpoint schemas
+    // remain readable, while the cron cannot create new T24/T6/T2 snapshots.
+    const requestedCheckpoints = triggerSource === 'SCHEDULED' ? [] : checkpoints
     let normalizedCheckpoints
     let normalizedClosingGames
     let validationError
 
     try {
-      normalizedCheckpoints = validateCheckpointBatch(checkpoints)
+      normalizedCheckpoints = validateCheckpointBatch(requestedCheckpoints)
       normalizedClosingGames = closingGames.map(normalizeClosingGame)
     } catch (error) {
       validationError = error
@@ -591,7 +597,7 @@ const createOddsCaptureEngine = ({
         : null
 
     const identity = buildOddsCaptureRunIdentity({
-      checkpoints: normalizedWork ?? [...checkpoints, ...closingGames],
+      checkpoints: normalizedWork ?? [...requestedCheckpoints, ...closingGames],
       intendedAt: intendedAt ?? startedAt,
       triggerSource,
     })
@@ -635,6 +641,8 @@ const createOddsCaptureEngine = ({
     const resultsByIdentity = new Map()
     const additionalReasonCounts = {}
     let providerRequestCount = 0
+    let sportProviderRequestCount = 0
+    let coolbetEventRequestCount = 0
     let actualCreditCost = 0
     let quotaBefore = null
     let quotaAfter = null
@@ -644,6 +652,14 @@ const createOddsCaptureEngine = ({
     let existingCount = 0
     let providerStageStarted = false
     let forcePartial = false
+    const closingRequirementsConsidered = normalizedClosingGames?.reduce(
+      (sum, game) => sum + (game.closingRequirementsConsidered ?? 0), 0) ?? 0
+    const closingRequirementsAlreadyComplete = normalizedClosingGames?.reduce(
+      (sum, game) => sum + (game.closingRequirementsAlreadyComplete ?? 0), 0) ?? 0
+    const captureReasons = new Set(normalizedClosingGames?.map(({ captureReason }) => captureReason))
+    const captureReason = captureReasons.size > 1
+      ? 'CLOSING_MIXED'
+      : [...captureReasons][0] ?? null
 
     const complete = async (status, extraReasonCounts = {}) => {
       const checkpointResults = normalizedWork
@@ -668,6 +684,11 @@ const createOddsCaptureEngine = ({
           gamesMatched,
           gamesSkipped,
           providerRequestCount,
+          sportProviderRequestCount,
+          coolbetEventRequestCount,
+          closingRequirementsConsidered,
+          closingRequirementsAlreadyComplete,
+          captureReason,
           quotaAfter,
           quotaBefore,
           reasonCounts,
@@ -683,6 +704,11 @@ const createOddsCaptureEngine = ({
         existingCount,
         insertedCount,
         providerRequestCount,
+        sportProviderRequestCount,
+        coolbetEventRequestCount,
+        closingRequirementsConsidered,
+        closingRequirementsAlreadyComplete,
+        captureReason,
         reasonCounts,
         reusedRun: false,
         runId: startedRun.runId,
@@ -861,6 +887,9 @@ const createOddsCaptureEngine = ({
 
     providerRequestCount = providerData.providerRequestCount ??
       (providerData.requestAttempted ? 1 : 0)
+    sportProviderRequestCount = providerData.sportProviderRequestCount ??
+      (providerData.requestAttempted ? 1 : 0)
+    coolbetEventRequestCount = providerData.coolbetEventRequestCount ?? 0
     quotaAfter = normalizeQuotaForRun(providerData.quota)
     actualCreditCost = providerData.requestCreditCost ??
       (providerData.requestAttempted
@@ -1232,7 +1261,7 @@ const createOddsCaptureEngine = ({
               ? 'GAME_STARTED'
               : 'CLOSING_WINDOW_ENDED',
           scheduledStart: game.scheduledStart,
-          selectedBookmakerKeys,
+          selectedBookmakerKeys: game.selectedBookmakerKeys ?? selectedBookmakerKeys,
         })
         results.push({ gameId: game.gameId, status: result.status })
       } catch {

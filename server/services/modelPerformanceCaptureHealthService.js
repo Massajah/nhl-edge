@@ -436,7 +436,9 @@ const calculateCaptureHealth = ({
     )
   })
 
-  const sections = [officialT2, ...Object.values(marketCheckpoints)]
+  // Forward market snapshots are optional historical observations. Only the
+  // automatic Official T2 model prediction contributes to capture health.
+  const sections = [officialT2]
   const status = sections.some(
     (section) => section.status === CAPTURE_HEALTH_STATUSES.GAPS,
   )

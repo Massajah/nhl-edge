@@ -1,15 +1,10 @@
 const nhlApiService = require('./nhlApiService')
-const { REQUESTED_BOOKMAKERS } = require('../config/marketOdds')
 const {
-  CHECKPOINT_ACCEPTANCE_WINDOWS_MS,
   MAX_CAPTURE_CHECKPOINTS,
-  getCheckpointIdentity,
-  isCheckpointWithinAcceptanceWindow,
 } = require('./oddsCaptureContracts')
 const { getGameBlockingReason } = require('./oddsCaptureEngine')
 const {
   ODDS_SNAPSHOT_PROVIDER,
-  createOddsCheckpoint,
 } = require('./oddsSnapshotContracts')
 const { getNhlTeamIdentity } = require('./nhlTeamIdentity')
 const {
@@ -17,36 +12,26 @@ const {
   AUTOMATIC_POLICY_MODES,
   oddsQuotaLedgerService,
 } = require('./oddsQuotaLedgerService')
-const { oddsSnapshotRepository } = require('./oddsSnapshotRepository')
+const { oddsClosingMarketRepository } = require('./oddsClosingMarketRepository')
+const {
+  hasSafeClosingRow,
+  oddsClosingRequirementService,
+} = require('./oddsClosingRequirementService')
 const {
   CLOSING_FINALIZATION_GRACE_MS,
   CLOSING_OBSERVATION_TYPE,
   CLOSING_WINDOW_MINIMUM_BEFORE_START_MS,
+  buildClosingMarketKey,
   buildClosingWorkKey,
   isWithinClosingObservationWindow,
 } = require('./oddsClosingMarketContracts')
-const {
-  oddsCaptureBookmakerSelectionService,
-} = require('./oddsCaptureBookmakerSelectionService')
 
 const DAY_MS = 24 * 60 * 60 * 1000
 const FIVE_MINUTES_MS = 5 * 60 * 1000
-const PROVIDER_WINDOW_PADDING_MS = 60 * 60 * 1000
+const CLOSING_STARTUP_BUFFER_MS = 30 * 1000
 const SCHEDULE_DATE_OFFSETS = Object.freeze([-1, 0, 1, 2])
 const PLANNABLE_GAME_STATES = new Set(['FUT', 'PRE'])
-const LONG_TERM_SNAPSHOT_TYPES = Object.freeze(['T24', 'T6', 'T2'])
-const LONG_TERM_RETRY_INTERVALS_MS = Object.freeze({
-  T24: 30 * 60 * 1000,
-  T6: 15 * 60 * 1000,
-  T2: 15 * 60 * 1000,
-})
-const CHECKPOINT_PRIORITY = Object.freeze({
-  CLOSING: 0,
-  FINAL: 0,
-  T2: 1,
-  T6: 2,
-  T24: 3,
-})
+const CHECKPOINT_PRIORITY = Object.freeze({ CLOSING: 0 })
 
 const normalizeDate = (value, field) => {
   const date = value instanceof Date ? new Date(value.getTime()) : new Date(value)
@@ -158,61 +143,25 @@ const compareCheckpoints = (left, right) =>
   left.scheduledStart.getTime() - right.scheduledStart.getTime() ||
   left.gameId.localeCompare(right.gameId)
 
-const isLongTermRetryTick = (checkpoint, observedAt) => {
-  const intervalMs = LONG_TERM_RETRY_INTERVALS_MS[checkpoint.snapshotType]
-
-  if (!intervalMs) return false
-
-  const current = normalizeDate(observedAt, 'observedAt')
-  const firstCronSlot =
-    Math.ceil(checkpoint.targetAt.getTime() / FIVE_MINUTES_MS) * FIVE_MINUTES_MS
-  const currentCronSlot =
-    Math.floor(current.getTime() / FIVE_MINUTES_MS) * FIVE_MINUTES_MS
-
-  return (
-    currentCronSlot >= firstCronSlot &&
-    (currentCronSlot - firstCronSlot) % intervalMs === 0
-  )
+const getClosingAttempt = (scheduledStart, observedAt) => {
+  const cronSlot = Math.floor(observedAt.getTime() / FIVE_MINUTES_MS) * FIVE_MINUTES_MS
+  // A process starting at exact T-5 will fetch too late for the existing
+  // T-5 provider cutoff. Reserve a little startup/fetch time and select the
+  // two latest five-minute slots that can still produce a safe observation.
+  const lastSafeSlot = Math.floor((
+    scheduledStart.getTime() - CLOSING_WINDOW_MINIMUM_BEFORE_START_MS -
+    CLOSING_STARTUP_BUFFER_MS
+  ) / FIVE_MINUTES_MS) * FIVE_MINUTES_MS
+  if (cronSlot === lastSafeSlot - FIVE_MINUTES_MS) {
+    return 'CLOSING_PRIMARY'
+  }
+  if (cronSlot === lastSafeSlot) {
+    return 'CLOSING_RETRY'
+  }
+  return null
 }
 
-const buildDueCheckpoints = (games, observedAt, selectedBookmakerKeys = []) => {
-  const current = normalizeDate(observedAt, 'observedAt')
-  const reasonCounts = {}
-  const checkpoints = []
-
-  games.forEach((game) => {
-    const normalized = normalizePlanningGame(game, current)
-
-    if (!normalized.game) {
-      addReason(reasonCounts, normalized.reason)
-      return
-    }
-
-    LONG_TERM_SNAPSHOT_TYPES.forEach((snapshotType) => {
-      const checkpoint = {
-        ...normalized.game,
-        provider: ODDS_SNAPSHOT_PROVIDER,
-        snapshotType,
-        selectedBookmakerKeys,
-        ...createOddsCheckpoint({
-          scheduledStart: normalized.game.scheduledStart,
-          snapshotType,
-        }),
-      }
-
-      if (
-        isCheckpointWithinAcceptanceWindow(checkpoint, current) &&
-        isLongTermRetryTick(checkpoint, current)
-      ) {
-        checkpoints.push(checkpoint)
-      }
-    })
-  })
-
-  return { checkpoints: checkpoints.sort(compareCheckpoints), reasonCounts }
-}
-
-const buildClosingWork = (games, observedAt, selectedBookmakerKeys = []) => {
+const buildClosingWork = (games, observedAt, requirementsById = new Map(), closingById = new Map()) => {
   const current = normalizeDate(observedAt, 'observedAt')
   const work = []
   const reasonCounts = {}
@@ -230,6 +179,20 @@ const buildClosingWork = (games, observedAt, selectedBookmakerKeys = []) => {
       return
     }
 
+    const requirements = requirementsById.get(normalized.game.gameId) ?? []
+    if (!requirements.length) {
+      addReason(reasonCounts, 'no_eligible_bet')
+      return
+    }
+    addReason(reasonCounts, 'requirements_considered', requirements.length)
+    const captureReason = getClosingAttempt(normalized.game.scheduledStart, current)
+    if (!captureReason) return
+    const existing = closingById.get(normalized.game.gameId)
+    const missing = requirements.filter((requirement) =>
+      !hasSafeClosingRow(existing, requirement, normalized.game))
+    addReason(reasonCounts, 'already_complete', requirements.length - missing.length)
+    if (!missing.length) return
+
     work.push({
       ...normalized.game,
       checkpointKey: buildClosingWorkKey({
@@ -237,7 +200,10 @@ const buildClosingWork = (games, observedAt, selectedBookmakerKeys = []) => {
         scheduledStart: normalized.game.scheduledStart,
       }),
       provider: ODDS_SNAPSHOT_PROVIDER,
-      selectedBookmakerKeys,
+      selectedBookmakerKeys: [...new Set(missing.map(({ bookmakerKey }) => bookmakerKey))],
+      captureReason,
+      closingRequirementsConsidered: requirements.length,
+      closingRequirementsAlreadyComplete: requirements.length - missing.length,
       snapshotType: CLOSING_OBSERVATION_TYPE,
       targetAt: new Date(
         normalized.game.scheduledStart.getTime() - 10 * 60 * 1000,
@@ -288,41 +254,6 @@ const uniqueScheduleGames = (scheduleResults) => {
 const groupDueCheckpoints = (checkpoints) => {
   const remaining = [...checkpoints].sort(compareCheckpoints)
   const groups = []
-
-  const isClosingPriority = ({ snapshotType }) =>
-    ['CLOSING', 'FINAL'].includes(snapshotType)
-
-  while (remaining.some(isClosingPriority)) {
-    const finalCluster = remaining.filter(
-      isClosingPriority,
-    )
-    const clusterStarts = finalCluster.map(({ scheduledStart }) =>
-      scheduledStart.getTime(),
-    )
-    const providerFrom = Math.min(...clusterStarts) - PROVIDER_WINDOW_PADDING_MS
-    const providerTo = Math.max(...clusterStarts) + PROVIDER_WINDOW_PADDING_MS
-    const group = remaining.filter((checkpoint) => {
-      const start = checkpoint.scheduledStart.getTime()
-
-      return (
-        finalCluster.includes(checkpoint) ||
-        (!isClosingPriority(checkpoint) &&
-          start >= providerFrom &&
-          start <= providerTo)
-      )
-    })
-    const identities = new Set(group.map(getCheckpointIdentity))
-
-    groups.push(group.sort(compareCheckpoints))
-    remaining.splice(
-      0,
-      remaining.length,
-      ...remaining.filter(
-        (checkpoint) => !identities.has(getCheckpointIdentity(checkpoint)),
-      ),
-    )
-  }
-
   for (let index = 0; index < remaining.length; index += MAX_CAPTURE_CHECKPOINTS) {
     groups.push(
       remaining
@@ -338,9 +269,8 @@ const createOddsCheckpointPlanner = ({
   getAutomaticPolicy = (request) =>
     oddsQuotaLedgerService.getAutomaticPolicy(request),
   getGamesForDate = nhlApiService.getGamesForDate,
-  getSelectedBookmakerKeys = async () =>
-    REQUESTED_BOOKMAKERS.map(({ key }) => key),
-  snapshotRepository = oddsSnapshotRepository,
+  requirementService = oddsClosingRequirementService,
+  closingRepository = oddsClosingMarketRepository,
 } = {}) => {
   const planDueCheckpoints = async ({ observedAt = new Date() } = {}) => {
     const current = normalizeDate(observedAt, 'observedAt')
@@ -370,32 +300,33 @@ const createOddsCheckpointPlanner = ({
     }
 
     const games = uniqueScheduleGames(schedules)
-    const selectedBookmakerKeys = await getSelectedBookmakerKeys()
     const finalizations = buildFinalizationGames(games, current)
+    const closingCandidates = games
+      .map((game) => normalizePlanningGame(game, current).game)
+      .filter((game) => game && isWithinClosingObservationWindow(game.scheduledStart, current))
+    const candidateGames = [...new Map(
+      [...closingCandidates, ...finalizations].map((game) => [game.gameId, game]),
+    ).values()]
+    const requirementsById = await requirementService.findForGames(candidateGames)
+    const closingById = new Map()
+    await Promise.all(closingCandidates.map(async (game) => {
+      if (!(requirementsById.get(game.gameId) ?? []).length) return
+      const closingKey = buildClosingMarketKey({
+        gameId: game.gameId,
+        scheduledStart: game.scheduledStart,
+      })
+      closingById.set(game.gameId, await closingRepository.getByKey(closingKey))
+    }))
+    const closing = buildClosingWork(games, current, requirementsById, closingById)
+    Object.entries(closing.reasonCounts).forEach(([reason, count]) =>
+      addReason(reasonCounts, reason, count))
+    const finalizationWork = finalizations.map((game) => ({
+      ...game,
+      selectedBookmakerKeys: (requirementsById.get(game.gameId) ?? [])
+        .map(({ bookmakerKey }) => bookmakerKey),
+    }))
 
-    if (selectedBookmakerKeys.length === 0) {
-      addReason(reasonCounts, 'no_participating_bookmakers')
-      return {
-        dueCheckpointCount: 0,
-        groups: [],
-        finalizations,
-        policy,
-        reasonCounts,
-        scheduleDates,
-        selectedBookmakerKeys,
-        scheduleFailureCount,
-        status: finalizations.length > 0 ? 'FINALIZE_ONLY' : 'NO_DUE_WORK',
-      }
-    }
-
-    const due = buildDueCheckpoints(games, current, selectedBookmakerKeys)
-    const closing = buildClosingWork(games, current, selectedBookmakerKeys)
-
-    Object.entries(due.reasonCounts).forEach(([reason, count]) =>
-      addReason(reasonCounts, reason, count),
-    )
-
-    if (due.checkpoints.length === 0 && closing.checkpoints.length === 0) {
+    if (closing.checkpoints.length === 0) {
       addReason(reasonCounts, games.length === 0 ? 'no_games' : 'no_due_checkpoints')
       if (!policy.allowed) {
         addReason(reasonCounts, policy.reason || 'quota_blocked')
@@ -403,11 +334,10 @@ const createOddsCheckpointPlanner = ({
       return {
         dueCheckpointCount: 0,
         groups: [],
-        finalizations,
+        finalizations: finalizationWork,
         policy,
         reasonCounts,
         scheduleDates,
-        selectedBookmakerKeys,
         scheduleFailureCount,
         status:
           finalizations.length > 0
@@ -418,27 +348,7 @@ const createOddsCheckpointPlanner = ({
       }
     }
 
-    const existing = await snapshotRepository.findExistingCheckpoints(
-      due.checkpoints,
-    )
-    let pending = due.checkpoints.filter((checkpoint) => {
-      const persisted = existing.has(getCheckpointIdentity(checkpoint))
-
-      if (persisted) {
-        addReason(reasonCounts, 'already_persisted')
-      }
-
-      return !persisted
-    })
-    pending.push(...closing.checkpoints)
-
-    if (policy.mode === AUTOMATIC_POLICY_MODES.FINAL_ONLY) {
-      const before = pending.length
-      pending = pending.filter(({ snapshotType }) =>
-        ['CLOSING', 'FINAL'].includes(snapshotType),
-      )
-      addReason(reasonCounts, 'policy_intermediate_suppressed', before - pending.length)
-    }
+    let pending = closing.checkpoints
 
     if (!policy.allowed && policy.mode === AUTOMATIC_POLICY_MODES.DISABLED) {
       addReason(reasonCounts, policy.reason || 'quota_blocked')
@@ -477,12 +387,11 @@ const createOddsCheckpointPlanner = ({
         0,
       ),
       groups,
-      finalizations,
+      finalizations: finalizationWork,
       policy,
       reasonCounts,
       scheduleDates,
       scheduleFailureCount,
-      selectedBookmakerKeys,
       status:
         groups.length > 0
           ? 'READY'
@@ -497,26 +406,19 @@ const createOddsCheckpointPlanner = ({
   return { planDueCheckpoints }
 }
 
-const oddsCheckpointPlanner = createOddsCheckpointPlanner({
-  getSelectedBookmakerKeys: () =>
-    oddsCaptureBookmakerSelectionService.getSelectedBookmakerKeys(),
-})
+const oddsCheckpointPlanner = createOddsCheckpointPlanner()
 
 module.exports = {
-  CHECKPOINT_ACCEPTANCE_WINDOWS_MS,
   CHECKPOINT_PRIORITY,
-  LONG_TERM_SNAPSHOT_TYPES,
-  LONG_TERM_RETRY_INTERVALS_MS,
   PLANNABLE_GAME_STATES,
   SCHEDULE_DATE_OFFSETS,
   buildClosingWork,
-  buildDueCheckpoints,
   buildFinalizationGames,
   compareCheckpoints,
   createOddsCheckpointPlanner,
   getPlanningScheduleDates,
   groupDueCheckpoints,
-  isLongTermRetryTick,
+  getClosingAttempt,
   normalizePlanningGame,
   oddsCheckpointPlanner,
 }

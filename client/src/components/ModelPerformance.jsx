@@ -497,14 +497,14 @@ function CoverageBanner({ aggregate, onInspectCaptureGap }) {
           supporting={formatPercent(forward.resultCoveragePercent)}
         />
         <CoverageItem
-          label="T2 market"
+          label="Historical T2 market"
           value={`${forward.validT2Markets ?? 0} / ${official}`}
-          supporting={formatPercent(forward.t2MarketCoveragePercent)}
+          supporting="Forward collection ended; historical rows remain"
         />
         <CoverageItem
-          label="FINAL market"
+          label="Bet-game closing market"
           value={`${forward.validFinalMarkets ?? 0} / ${official}`}
-          supporting={formatPercent(forward.finalMarketCoveragePercent)}
+          supporting="Collected only for eligible saved bets"
         />
         <CoverageItem
           label="CLV eligible"
@@ -542,7 +542,6 @@ function CoverageItem({ label, onClick, supporting = '', value }) {
 }
 
 function CaptureHealthPanel({ captureHealth, onInspectCaptureGap }) {
-  const checkpoints = captureHealth?.marketCheckpoints ?? {}
   const status = captureHealth?.status ?? 'UNAVAILABLE'
   const officialT2 = captureHealth?.officialT2 ?? {}
   const rows = [
@@ -564,11 +563,6 @@ function CaptureHealthPanel({ captureHealth, onInspectCaptureGap }) {
       },
       label: 'Official T2',
     },
-    ...['T24', 'T6', 'T2', 'FINAL'].map((checkpoint) => ({
-      checkpoint,
-      coverage: checkpoints[checkpoint] ?? {},
-      label: `${checkpoint} Market`,
-    })),
   ]
 
   return (
@@ -663,7 +657,7 @@ function ForwardModelTab({ aggregate }) {
       ) : Number(aggregate.coverage?.forward?.validT2Markets ?? 0) === 0 &&
         Number(aggregate.coverage?.forward?.validFinalMarkets ?? 0) === 0 ? (
         <PerformanceMessage
-          message="Model results remain available, but no paired T2 or FINAL market observations can be compared for this cohort."
+          message="Model results remain available. T2 market snapshots are historical only; closing markets are collected only for eligible saved bets. Market comparisons require real paired observations."
           title="Market coverage unavailable"
         />
       ) : null}
@@ -685,7 +679,7 @@ function ForwardModelTab({ aggregate }) {
           <MetricCard
             label="FINAL Market Brier"
             sampleSize={finalComparison.pairedSampleSize}
-            supporting="Paired no-vig consensus"
+            supporting="Paired bet-game closing observations"
             value={formatNumber(finalComparison.finalMarketBrier ?? finalComparison.marketBrier)}
           />
           <MetricCard
@@ -718,7 +712,7 @@ function ForwardModelTab({ aggregate }) {
           <MetricCard
             label="T2 Market Brier"
             sampleSize={t2Comparison.pairedSampleSize}
-            supporting="Paired no-vig consensus"
+            supporting="Historical paired no-vig consensus"
             value={formatNumber(t2Comparison.marketBrier)}
           />
           <MetricCard

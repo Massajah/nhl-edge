@@ -274,6 +274,7 @@ const createMarketOddsService = ({
   const getProviderData = async ({
     allowProviderRequest = true,
     bookmakerKeys,
+    cacheTtlMs,
     config,
     key,
     refresh,
@@ -421,7 +422,7 @@ const createMarketOddsService = ({
 
         cache.set(key, {
           data,
-          expiresAt: now() + config.cacheTtlMs,
+          expiresAt: now() + (cacheTtlMs ?? config.cacheTtlMs),
         })
         logDevelopment('Market odds provider request completed', {
           bookmakerCount: countBookmakerRows(result.events),
@@ -503,11 +504,13 @@ const createMarketOddsService = ({
 
   const getCoolbetEventRow = async ({
     allowProviderRequest,
+    cacheTtlMs,
     config,
     event,
     maximumProviderAgeMs,
     requestSource,
     checkpoints,
+    refresh = false,
   }) => {
     const cacheKey = [
       event.providerEventId,
@@ -523,7 +526,8 @@ const createMarketOddsService = ({
       cached?.expiresAt > now() &&
       Number.isFinite(ageMs) &&
       ageMs >= 0 &&
-      ageMs <= maximumProviderAgeMs
+      ageMs <= maximumProviderAgeMs &&
+      (!refresh || ageMs < config.minimumRefreshIntervalMs || !allowProviderRequest)
     ) {
       return {
         bookmaker: isFreshCoolbetPrice(cached.bookmaker, now(), maximumProviderAgeMs)
@@ -545,7 +549,11 @@ const createMarketOddsService = ({
       typeof provider.fetchCoolbetMoneylineOdds !== 'function' ||
       (Number.isFinite(remaining) && remaining <= config.lowCreditThreshold)
     ) {
-      return { bookmaker: null, requestCount: 0, creditCost: 0 }
+      return {
+        bookmaker: cached?.bookmaker ?? null,
+        requestCount: 0,
+        creditCost: 0,
+      }
     }
     if (requestSource !== 'MANUAL') {
       const policy = await canSpendEventCredit({
@@ -601,7 +609,7 @@ const createMarketOddsService = ({
       if (quota) latestProviderState.quota = quota
       eventCache.set(cacheKey, {
         bookmaker,
-        expiresAt: now() + (successful ? config.cacheTtlMs : config.minimumRefreshIntervalMs),
+        expiresAt: now() + (successful ? (cacheTtlMs ?? config.cacheTtlMs) : config.minimumRefreshIntervalMs),
         providerFetchedAt,
       })
       return {
@@ -618,11 +626,13 @@ const createMarketOddsService = ({
   const enrichWithCoolbet = async ({
     allowProviderRequest = true,
     bookmakerKeys,
+    cacheTtlMs,
     checkpoints = [],
     config,
     events,
     maximumProviderAgeMs = config.cacheTtlMs,
     requestSource,
+    refresh = false,
     targetGames,
   }) => {
     if (!Array.isArray(targetGames) || !targetGames.length ||
@@ -646,10 +656,12 @@ const createMarketOddsService = ({
           allowProviderRequest && !stopBatch &&
           requestCount < MAX_COOLBET_EVENT_REQUESTS_PER_BATCH,
         checkpoints,
+        cacheTtlMs,
         config,
         event,
         maximumProviderAgeMs,
         requestSource,
+        refresh,
       })
       requestCount += result.requestCount
       creditCost += result.creditCost
@@ -735,6 +747,7 @@ const createMarketOddsService = ({
         cachedAgeMs > maximumProviderAgeMs),
     )
     const providerData = await getProviderData({
+      cacheTtlMs: config.cacheTtlMs,
       config,
       bookmakerKeys,
       key,
@@ -744,6 +757,7 @@ const createMarketOddsService = ({
     })
     const enriched = await enrichWithCoolbet({
       bookmakerKeys,
+      cacheTtlMs: config.cacheTtlMs,
       checkpoints,
       config,
       events: providerData.events ?? [],
@@ -766,6 +780,8 @@ const createMarketOddsService = ({
       quota: normalizeQuotaMetadata(latestProviderState.quota),
       requestAttempted: Boolean(providerData.requestAttempted || enriched.requestCount),
       providerRequestCount: Number(Boolean(providerData.requestAttempted)) + enriched.requestCount,
+      sportProviderRequestCount: Number(Boolean(providerData.requestAttempted)),
+      coolbetEventRequestCount: enriched.requestCount,
       requestCreditCost: baseCost + enriched.creditCost,
       requestQuota: normalizeQuotaMetadata(providerData.requestQuota),
       source: providerData.source,
@@ -790,6 +806,7 @@ const createMarketOddsService = ({
 
     const config = getConfig()
     const key = getMarketOddsCacheKey(config, window)
+    const dashboardCacheTtlMs = config.dashboardCacheTtlMs ?? config.cacheTtlMs
     let schedule
 
     try {
@@ -824,6 +841,7 @@ const createMarketOddsService = ({
     } else {
       providerData = await getProviderData({
         allowProviderRequest,
+        cacheTtlMs: dashboardCacheTtlMs,
         config,
         key,
         refresh,
@@ -835,9 +853,12 @@ const createMarketOddsService = ({
     const enriched = await enrichWithCoolbet({
       allowProviderRequest,
       bookmakerKeys: enabledBookmakerKeys ?? [],
+      cacheTtlMs: dashboardCacheTtlMs,
       config,
       events: providerData.events ?? [],
+      maximumProviderAgeMs: dashboardCacheTtlMs,
       requestSource: 'MANUAL',
+      refresh,
       targetGames: (schedule.games ?? []).filter((game) => !isGameStarted(game, now())),
     })
     providerData = { ...providerData, events: enriched.events }

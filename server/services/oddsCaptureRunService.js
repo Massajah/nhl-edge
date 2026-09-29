@@ -14,6 +14,10 @@ class OddsCaptureRunPersistenceError extends Error {
 
 const COMPLETION_COUNT_FIELDS = Object.freeze([
   'providerRequestCount',
+  'sportProviderRequestCount',
+  'coolbetEventRequestCount',
+  'closingRequirementsConsidered',
+  'closingRequirementsAlreadyComplete',
   'eventsReceived',
   'gamesConsidered',
   'gamesMatched',
@@ -73,6 +77,7 @@ const createOddsCaptureRunService = ({
         summary.actualCreditCost === undefined
           ? null
           : summary.actualCreditCost,
+      captureReason: summary.captureReason ?? null,
       checkpointResults: summary.checkpointResults ?? [],
       completedAt: summary.completedAt ?? now(),
       quotaAfter: summary.quotaAfter ?? null,

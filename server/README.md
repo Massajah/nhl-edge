@@ -247,11 +247,13 @@ highest valid decimal price independently for the home and away sides. Prices
 are not averaged, de-vigged, or treated as consensus probabilities. Started or
 final games do not receive a current pre-match snapshot.
 
-Public provider data is cached in server memory for 10 minutes by sport,
-explicit bookmaker keys, market, odds format, and commence-time window.
+Live Dashboard provider data is cached in the web process for 60 minutes;
+capture retains its separate 10-minute provider-response freshness bound.
+Cache keys include sport, bookmaker keys, market, odds format, and commence-time window.
 Identical in-flight requests share one Promise across users. A forced Dashboard
-refresh is limited to one provider attempt per identical window every 30
-seconds, and valid cache data is preferred when credits are low or the provider
+refresh is limited to one sport request per identical window every 30
+seconds; requested Coolbet games can also incur separate event requests.
+Valid cache data is preferred when credits are low or the provider
 rate-limits a request. The server exposes only safe quota metadata. It derives
 `total` as `remaining + used`, then derives remaining percentage and an
 informational warning level; it also exposes `lastCost` and `observedAt`.
@@ -283,10 +285,10 @@ the unsaved Settings view, and newly added requested bookmakers are enabled
 without changing previously
 saved disabled keys. Temporary provider absence changes only the `available`
 status and does not remove a selection. The update endpoint accepts only
-`enabledBookmakerKeys`; it never accepts a client-supplied `userId`. Only an
-explicitly persisted preferences row participates in scheduled capture. Saving
-an empty selection disables participation for that account and returns a
-warning; it does not re-enable bookmakers as a fallback.
+`enabledBookmakerKeys`; it never accepts a client-supplied `userId`. Saved
+provider-backed production bets determine closing capture requirements,
+independently of later preference changes. Saving an empty selection prevents
+new Dashboard odds selection but does not erase a saved bet's CLV requirement.
 
 Preferences are applied after the shared provider response is read from cache,
 so changing them does not make another provider request or create a per-user
@@ -302,51 +304,32 @@ day and adjacent dates. It exits without contacting The Odds API when no fetch
 work is useful. The external Railway cron schedule is `*/5 * * * *` (UTC); the
 API process itself has no timer, worker, startup hook, or public trigger route.
 
-`OddsSnapshot` remains global NHL market data with no user owner. V2 stores the
-immutable long-term checkpoints below in `odds_snapshots`:
-
-- `T24`: first successful fetch in inclusive T-24h through T-18h. Eligibility
-  begins at the nominal T-24h target, so a healthy five-minute cron normally
-  captures the first tick at or immediately after that target.
-- `T6`: first successful fetch in inclusive T-6h through T-4h.
-- `T2`: first successful fetch in inclusive T-2h through T-75m.
-
-The later ends are retry tolerances for cron drift, downtime, provider failure,
-or a temporarily missing market. A failed target attempt does not consume the
-checkpoint. To prevent one missing long-term market from spending every
-five-minute slot, retries are deterministic: every 30 minutes for T24 and every
-15 minutes for T6/T2, measured from the first five-minute cron slot at or after
-the nominal target. This yields at most 13 T24, 9 T6, and 4 T2 attempts across
-their respective windows. Once a valid checkpoint is inserted, the unique
-game/provider/snapshot-start key and `$setOnInsert` persistence keep it
-immutable. The v2 row also records the selected bookmaker keys used for that
-capture.
+New automatic T24, T6, and T2 **market** snapshots are disabled. Existing
+`OddsSnapshot` records remain readable and unchanged. The separate immutable
+Official T2 **model prediction** job continues on its existing schedule.
 
 Closing observations are a separate game/start document in
-`odds_closing_markets`. From inclusive scheduled T-30m through T-5m, each
-eligible five-minute cron may fetch the selected bookmakers. All closing games
-due on the same cron tick share one provider request; compatible T24/T6/T2 work
-is included where possible. The response is normalized and a closing
-observation is appended only when selected-bookmaker availability, home odds,
-or away odds changed. Ordering, provider metadata, and timestamp-only changes
-do not create history rows. An unchanged successful fetch still advances the
-durable latest-safe observation time for each bookmaker present.
-
-The selected provider set is the union of bookmakers explicitly configured by
-active NHL Edge users. A user without a persisted preferences row does not
-participate, and an all-disabled row contributes no bookmakers. An empty union
-does not call The Odds API; quota-free finalization can still use the selected
-set already stored with an existing closing-market observation. A non-empty
-union produces one provider request, never one request per user, game, or
-bookmaker. No user identifier is stored with global market history. Every
-historical observation records its selected set, so later Settings changes
-neither rewrite old data nor fabricate missing bookmaker history.
+`odds_closing_markets`. Only eligible saved production-user provider bets create
+new closing work. Requirements are deduplicated by exact game/start,
+bookmaker, and compatible provider market. The primary attempt runs on the
+first of the two latest five-minute cron slots that permit a fetch before the
+existing T-5 safety cutoff. The second slot is a fallback only if a safe
+same-book/same-market observation
+later than every relevant bet is still missing. Existing safety cutoffs remain
+authoritative. For a game starting on a five-minute boundary, those slots are
+T-15 and T-10; an unaligned start may put them closer to T-10 and T-5.
+No provider request occurs for games without an eligible bet or for a
+requirement already satisfied at the primary attempt. Each due group shares one sport-level
+request; Coolbet also needs one event-level `h2h_ot` request per matched game.
+The response is normalized and an observation is appended only when selected
+bookmaker availability or odds change. An unchanged successful observation
+still advances its durable latest-safe time.
 
 Each closing document durably maintains `latestSafeBookmakers`, independently
 per bookmaker. A disappearance is represented in the change-driven observation
 but does not erase that bookmaker's earlier safe price. At T-5 (after any
-eligible capture attempt), or earlier if authoritative NHL state says the game
-started, quota-free finalization copies the currently selected bookmakers'
+eligible fallback attempt), or earlier if authoritative NHL state says the game
+started, quota-free finalization copies the bet-required bookmakers'
 latest safe rows to `finalBookmakers`. Finalization performs no provider fetch,
 so a failed last request retains prior safe data. Repeated finalization and
 concurrent writes use a unique closing key plus optimistic revisions and cannot
@@ -398,9 +381,10 @@ bookmaker FINAL retrieval. The separate collection makes a redundant constant
 
 Existing schemaVersion 1 `OddsSnapshot` documents, including legacy `FINAL`
 rows with first-success-in-window semantics, remain readable and untouched.
-They are not reinterpreted as bookmaker-level v2 closing prices. New long-term
-checkpoints are schemaVersion 2; new bookmaker closing data lives only in the
-v2 closing collection. No destructive migration is required.
+They are not reinterpreted as bookmaker-level v2 closing prices. Existing
+schemaVersion 2 long-term records remain readable, but forward collection
+creates no new ones. New bookmaker closing data lives only in the v2 closing
+collection. No destructive migration is required.
 
 `OddsCaptureRun` stores only bounded operational counts, checkpoint outcomes,
 reason counts, and quota summaries. No odds collection stores raw provider JSON,
@@ -417,26 +401,22 @@ unknown, which is labeled `CONTROLLED_PROBE`.
 
 The automatic policy uses repository-owned constants: a 400-credit monthly soft
 target, 450-credit hard ceiling, 100-credit remaining floor, and 24 successful
-automatic requests per UTC day for full cadence. Above 200 remaining credits
-and below the soft/daily targets, T24/T6/T2 and closing work are enabled. At 200
-or fewer remaining credits, after 400 automatic credits in the billing month,
-or after 24 successful automatic requests that UTC day, only closing work is
-allowed. The daily limit intentionally does not block later closing games; one
-missing game can retry only in its finite, at-most-six-tick closing window. The hard
-ceiling and remaining floor still block every provider call. When quota is
+automatic requests per UTC day. Only bet-driven closing work is scheduled;
+prior intermediate/final-only modes remain for quota compatibility. The daily
+limit does not block later closing games; a missing requirement has only one
+primary and one fallback slot. The hard ceiling and remaining floor still
+block every provider call. When quota is
 unknown, at most one actual controlled request is allowed in the current
 billing window. Missing request-cost headers debit one credit conservatively
 for budgeting, while authoritative `lastRequestCost` remains null.
 
-For request planning, games at one common start time cost at most six closing
-requests plus one healthy first-success request for each of T24, T6, and T2:
-at most nine requests across the lifecycle of that start cohort. Two fully
-separate start cohorts are approximately 18 and three are approximately 27;
-overlapping closing windows, shared checkpoint targets, a late T-5 process
-start, and existing snapshots reduce that count. A day with no due work makes
-zero provider requests. These are request counts, not assumed credit costs;
-actual provider headers remain authoritative and the retry schedules above are
-the additional failure-path bounds.
+For request planning, a no-bet game costs zero automatic odds requests. A
+bet-bearing cohort normally costs one sport request plus one Coolbet event
+request per matched Coolbet game; missing requirements can repeat this once
+in the fallback slot. A day with no due work makes zero provider requests.
+Actual provider headers remain authoritative. Capture runs report sport and
+Coolbet event counts, credits, closing attempt reason, and bounded skip counts
+without raw provider data.
 
 The Odds API does not currently expose a reset timestamp in its documented
 quota headers. The deterministic fallback billing window is therefore the UTC

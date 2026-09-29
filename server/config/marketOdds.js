@@ -17,6 +17,7 @@ const CANDIDATE_BOOKMAKERS = REQUESTED_BOOKMAKERS
 const DEFAULTS = Object.freeze({
   baseUrl: 'https://api.the-odds-api.com',
   cacheTtlMs: 10 * 60 * 1000,
+  dashboardCacheTtlMs: 60 * 60 * 1000,
   dateFormat: 'iso',
   lowCreditThreshold: 25,
   market: 'h2h',
@@ -44,6 +45,7 @@ const getMarketOddsConfig = (environment = process.env) => ({
     environment.MARKET_ODDS_CACHE_TTL_MS,
     DEFAULTS.cacheTtlMs,
   ),
+  dashboardCacheTtlMs: DEFAULTS.dashboardCacheTtlMs,
   dateFormat: DEFAULTS.dateFormat,
   lowCreditThreshold: getPositiveNumber(
     environment.MARKET_ODDS_LOW_CREDIT_THRESHOLD,
@@ -64,7 +66,7 @@ const getMarketOddsConfig = (environment = process.env) => ({
 
 const getSafeMarketOddsConfiguration = (config = getMarketOddsConfig()) => ({
   bookmakers: config.bookmakers.map(({ key, title }) => ({ key, title })),
-  cacheTtlMs: config.cacheTtlMs,
+  cacheTtlMs: config.dashboardCacheTtlMs,
   configured: Boolean(config.apiKey),
   expectedRequestCredits: 1,
   market: 'Moneyline',

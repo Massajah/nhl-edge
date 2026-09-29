@@ -89,6 +89,14 @@ const createScheduledOddsCaptureService = ({
         (count, result) => count + (Number(result.providerRequestCount) || 0),
         0,
       )
+      const sportProviderRequestCount = runResults.reduce(
+        (count, result) => count + (Number(result.sportProviderRequestCount) || 0), 0)
+      const coolbetEventRequestCount = runResults.reduce(
+        (count, result) => count + (Number(result.coolbetEventRequestCount) || 0), 0)
+      const closingRequirementsConsidered =
+        Number(plan.reasonCounts?.requirements_considered) || 0
+      const closingRequirementsAlreadyComplete =
+        Number(plan.reasonCounts?.already_complete) || 0
       const snapshotsStored = runResults.reduce(
         (count, result) => count + (Number(result.insertedCount) || 0),
         0,
@@ -132,6 +140,11 @@ const createScheduledOddsCaptureService = ({
         plannedGroupCount: plan.groups.length,
         policyMode: plan.policy.mode,
         providerRequestCount,
+        sportProviderRequestCount,
+        coolbetEventRequestCount,
+        closingRequirementsConsidered,
+        closingRequirementsAlreadyComplete,
+        closingGamesSkippedNoEligibleBet: Number(plan.reasonCounts?.no_eligible_bet) || 0,
         quotaRemaining: plan.policy.quota?.remaining ?? null,
         reasonCounts: plan.reasonCounts,
         recoveredRunCount,

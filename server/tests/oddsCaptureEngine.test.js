@@ -407,6 +407,20 @@ const execute = (harness, checkpoints, intendedAt = T2_CAPTURED_AT) =>
     triggerSource: 'TEST',
   })
 
+test('scheduled market capture cannot persist T24, T6 or T2 snapshots', async () => {
+  for (const snapshotType of ['T24', 'T6', 'T2']) {
+    const harness = createHarness()
+    const result = await harness.engine.executeOddsCapture({
+      checkpoints: [makeCheckpoint({ snapshotType })],
+      intendedAt: T2_CAPTURED_AT,
+      triggerSource: 'SCHEDULED',
+    })
+    assert.equal(result.providerRequestCount, 0)
+    assert.equal(harness.calls.provider, 0)
+    assert.equal(harness.snapshotModel.documents.size, 0)
+  }
+})
+
 test('three-way bookmaker is absent from T24, T6, T2, FINAL, and closing candidates', () => {
   for (const snapshotType of ['T24', 'T6', 'T2', 'FINAL']) {
     const checkpoint = makeCheckpoint({
@@ -1238,6 +1252,30 @@ test('CLOSING work records safe selected-bookmaker observations instead of legac
     harness.calls.providerRequest.bookmakerKeys.includes('veikkaus_fi'),
     false,
   )
+})
+
+test('capture run persists safe provider request counts and closing attempt reason', async () => {
+  const providerData = {
+    ...makeProviderData({ capturedAt: FINAL_CAPTURED_AT,
+      events: [makeEvent({ capturedAt: FINAL_CAPTURED_AT })] }),
+    providerRequestCount: 2,
+    sportProviderRequestCount: 1,
+    coolbetEventRequestCount: 1,
+    requestCreditCost: 2,
+  }
+  const harness = createHarness({ now: FINAL_CAPTURED_AT, providerData })
+  const result = await harness.engine.executeOddsCapture({
+    closingGames: [makeClosingGame({ captureReason: 'CLOSING_PRIMARY',
+      closingRequirementsConsidered: 1, closingRequirementsAlreadyComplete: 0 })],
+    intendedAt: FINAL_CAPTURED_AT,
+    triggerSource: 'SCHEDULED',
+  })
+  const run = [...harness.captureRunModel.documents.values()][0]
+  assert.equal(result.captureReason, 'CLOSING_PRIMARY')
+  assert.equal(run.sportProviderRequestCount, 1)
+  assert.equal(run.coolbetEventRequestCount, 1)
+  assert.equal(run.actualCreditCost, 2)
+  assert.equal(run.closingRequirementsConsidered, 1)
 })
 
 test('CLOSING work is rejected when the NHL post-fetch recheck reports LIVE', async () => {

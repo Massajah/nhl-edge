@@ -1046,14 +1046,14 @@ function Dashboard({
           </button>
 
           <button
-            aria-label="Refresh dashboard data; this may consume one market-odds API credit"
+            aria-label="Refresh odds and dashboard data; this may use multiple API credits when Coolbet games are requested"
             className="schedule-refresh-button"
-            title="May consume one The Odds API credit"
+            title="Refresh odds; this may use multiple The Odds API credits for Coolbet games"
             type="button"
             onClick={handleRefreshDashboard}
           >
             <RefreshCw aria-hidden="true" size={14} />
-            Refresh
+            Refresh odds
           </button>
         </div>
 

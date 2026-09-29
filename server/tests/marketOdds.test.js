@@ -467,6 +467,44 @@ test('Coolbet event odds uses one scoped request, merges with other books, and r
   assert.equal(capture.events[0].bookmakers.some(({ key }) => key === 'coolbet'), true)
 })
 
+test('Dashboard reuses sport and Coolbet event odds for one hour; Refresh explicitly refetches both', async () => {
+  let nowMs = Date.parse(NOW_ISO)
+  let sportCalls = 0
+  let eventCalls = 0
+  const base = normalizeProviderEvent(createProviderBody()[0], NOW_ISO)
+  const config = createConfig({ dashboardCacheTtlMs: 60 * 60 * 1000 })
+  const service = createMarketOddsService({
+    getConfig: () => config,
+    getGamesForDate: async () => createSchedule(),
+    now: () => nowMs,
+    provider: {
+      async fetchNhlMoneylineOdds() {
+        sportCalls += 1
+        return { events: [base], providerFetchedAt: new Date(nowMs).toISOString(),
+          quota: { lastCost: 1, remaining: 900, used: sportCalls + eventCalls } }
+      },
+      async fetchCoolbetMoneylineOdds() {
+        eventCalls += 1
+        return { bookmaker: { bookmakerKey: 'coolbet', providerMarketKey: 'h2h_ot',
+          homeOdds: 2.1, awayOdds: 2.2 }, providerFetchedAt: new Date(nowMs).toISOString(),
+        quota: { lastCost: 1, remaining: 900, used: sportCalls + eventCalls } }
+      },
+    },
+  })
+  const load = (refresh = false) => service.getNhlMarketOdds({
+    date: '2026-08-03', enabledBookmakerKeys: ['coolbet'], refresh,
+  })
+  await load()
+  nowMs += 59 * 60 * 1000
+  await load()
+  assert.deepEqual([sportCalls, eventCalls], [1, 1])
+  await load(true)
+  assert.deepEqual([sportCalls, eventCalls], [2, 2])
+  nowMs += 60 * 60 * 1000 + 1
+  await load()
+  assert.deepEqual([sportCalls, eventCalls], [3, 3])
+})
+
 test('missing, mismatched, or failed Coolbet event odds leave other books available', async () => {
   const raw = createProviderBody()[0]
   raw.bookmakers = [{ key: 'pinnacle', markets: [{ key: 'h2h', outcomes: [
@@ -1081,7 +1119,7 @@ test('cache is shared, expires, keys include windows, and forced refresh is boun
       }
     },
   }
-  const config = createConfig({ cacheTtlMs: 1000, minimumRefreshIntervalMs: 30000 })
+  const config = createConfig({ dashboardCacheTtlMs: 1000, minimumRefreshIntervalMs: 30000 })
   const service = createMarketOddsService({
     getConfig: () => config,
     getGamesForDate: async (date) => createSchedule(date),

@@ -91,6 +91,17 @@ test('Official T2 is captured only by an exact accepted prediction', () => {
   assert.equal(result.officialT2.status, CAPTURE_HEALTH_STATUSES.CAPTURED)
 })
 
+test('Official T2 remains healthy when forward T2 market odds are intentionally absent', () => {
+  const result = calculate({
+    observedAt: new Date(START.getTime() - 74 * 60 * 1000),
+    predictions: [prediction()],
+    snapshots: [],
+  })
+  assert.equal(result.officialT2.capturedCount, 1)
+  assert.equal(result.marketCheckpoints.T2.capturedCount, 0)
+  assert.equal(result.status, CAPTURE_HEALTH_STATUSES.HEALTHY)
+})
+
 test('Official T2 accepts a prediction captured at the inclusive T-120 boundary', () => {
   const result = calculate({
     predictions: [
