@@ -4,9 +4,12 @@ const assert = require('node:assert/strict')
 const test = require('node:test')
 const OddsSnapshot = require('../models/OddsSnapshot')
 const {
+  buildClosingObservationCandidate,
+  buildSnapshotCandidate,
   createOddsCaptureEngine,
   normalizeQuotaForRun,
 } = require('../services/oddsCaptureEngine')
+const { normalizeProviderEvent } = require('../services/marketOddsProvider')
 const {
   createOddsCaptureRunService,
 } = require('../services/oddsCaptureRunService')
@@ -107,6 +110,37 @@ const makeEvent = ({
   providerFetchedAt: capturedAt,
   sportKey: 'icehockey_nhl',
 })
+
+const makeMixedSemanticEvent = (capturedAt) => normalizeProviderEvent({
+  id: 'provider-event-1',
+  sport_key: 'icehockey_nhl',
+  commence_time: START,
+  away_team: 'Montreal Canadiens',
+  home_team: 'Toronto Maple Leafs',
+  bookmakers: [
+    {
+      key: 'coolbet',
+      markets: [{
+        key: 'h2h',
+        outcomes: [
+          { name: 'Montreal Canadiens', price: 2.6 },
+          { name: 'Draw', price: 4 },
+          { name: 'Toronto Maple Leafs', price: 2.43 },
+        ],
+      }],
+    },
+    {
+      key: 'pinnacle',
+      markets: [{
+        key: 'h2h',
+        outcomes: [
+          { name: 'Montreal Canadiens', price: 1.91 },
+          { name: 'Toronto Maple Leafs', price: 1.95 },
+        ],
+      }],
+    },
+  ],
+}, capturedAt)
 
 const makeProviderData = ({
   capturedAt = T2_CAPTURED_AT,
@@ -318,6 +352,54 @@ const execute = (harness, checkpoints, intendedAt = T2_CAPTURED_AT) =>
     intendedAt,
     triggerSource: 'TEST',
   })
+
+test('three-way bookmaker is absent from T24, T6, T2, FINAL, and closing candidates', () => {
+  for (const snapshotType of ['T24', 'T6', 'T2', 'FINAL']) {
+    const checkpoint = makeCheckpoint({
+      scheduledStart: new Date(START),
+      snapshotType,
+    })
+    const capturedAt = checkpoint.targetAt.toISOString()
+    const event = makeMixedSemanticEvent(capturedAt)
+    const { candidate } = buildSnapshotCandidate({ checkpoint, event, runId: 'test-run' })
+
+    assert.deepEqual(event.bookmakers.map(({ key }) => key), ['pinnacle'])
+    assert.deepEqual(candidate.bookmakers.map(({ key }) => key), ['pinnacle'])
+  }
+
+  const closing = buildClosingObservationCandidate({
+    checkpoint: makeClosingGame({ scheduledStart: new Date(START) }),
+    event: makeMixedSemanticEvent(FINAL_CAPTURED_AT),
+  })
+  assert.deepEqual(closing.candidate.bookmakers.map(({ key }) => key), ['pinnacle'])
+})
+
+test('capture stores only accepted binary rows in snapshots and closing observations', async () => {
+  const t2Event = makeMixedSemanticEvent(T2_CAPTURED_AT)
+  const t2Harness = createHarness({
+    providerData: makeProviderData({ events: [t2Event] }),
+  })
+  await execute(t2Harness, [makeCheckpoint()])
+  const [snapshot] = [...t2Harness.snapshotModel.documents.values()]
+  assert.deepEqual(snapshot.bookmakers.map(({ key }) => key), ['pinnacle'])
+
+  const closingHarness = createHarness({
+    now: FINAL_CAPTURED_AT,
+    providerData: makeProviderData({
+      capturedAt: FINAL_CAPTURED_AT,
+      events: [makeMixedSemanticEvent(FINAL_CAPTURED_AT)],
+    }),
+  })
+  await closingHarness.engine.executeOddsCapture({
+    closingGames: [makeClosingGame()],
+    intendedAt: FINAL_CAPTURED_AT,
+    triggerSource: 'TEST',
+  })
+  assert.deepEqual(
+    closingHarness.closingRecords[0].bookmakers.map(({ key }) => key),
+    ['pinnacle'],
+  )
+})
 
 test('happy path captures multiple checkpoints with one shared provider request', async () => {
   const secondCheckpoint = makeCheckpoint({

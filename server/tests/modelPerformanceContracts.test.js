@@ -2,6 +2,7 @@ process.env.NODE_ENV = 'test'
 
 const assert = require('node:assert/strict')
 const test = require('node:test')
+const { normalizeProviderEvent } = require('../services/marketOddsProvider')
 const { CLOSING_SAFETY_REASON } = require('../services/oddsClosingMarketContracts')
 const {
   CALIBRATION_BUCKETS,
@@ -143,6 +144,59 @@ test('no-vig consensus rejects missing opposing sides and invalid decimal odds',
     result.reason,
     PERFORMANCE_REASON_CODES.INCOMPLETE_TWO_SIDED_ODDS,
   )
+})
+
+test('market consensus and paired Brier receive only normalized binary NHL markets', () => {
+  const rawEvent = {
+    id: 'provider-event-1',
+    sport_key: 'icehockey_nhl',
+    commence_time: '2026-10-08T19:00:00Z',
+    away_team: 'Toronto Maple Leafs',
+    home_team: 'Boston Bruins',
+    bookmakers: [
+      {
+        key: 'unibet_fi',
+        markets: [{ key: 'h2h', outcomes: [
+          { name: 'Toronto Maple Leafs', price: 2.6 },
+          { name: 'Draw', price: 4 },
+          { name: 'Boston Bruins', price: 2.43 },
+        ] }],
+      },
+      {
+        key: 'pinnacle',
+        markets: [{ key: 'h2h', outcomes: [
+          { name: 'Toronto Maple Leafs', price: 1.91 },
+          { name: 'Boston Bruins', price: 1.95 },
+        ] }],
+      },
+    ],
+  }
+  const event = normalizeProviderEvent(rawEvent, '2026-10-08T17:00:00Z')
+  const consensus = calculateNoVigConsensus(event.bookmakers)
+  const expected = (1 / 1.95) / (1 / 1.95 + 1 / 1.91)
+
+  assert.deepEqual(consensus.bookmakerKeys, ['pinnacle'])
+  assert.equal(consensus.bookmakerCount, 1)
+  assert.equal(consensus.homeProbability, expected)
+  const paired = calculatePairedBrier({
+    marketCoverageCount: 1,
+    observations: [{
+      bookmakerCount: consensus.bookmakerCount,
+      marketProbability: consensus.homeProbability,
+      modelProbability: 0.6,
+      outcome: 1,
+    }],
+    resolvedCount: 1,
+  })
+  assert.equal(paired.marketBrier, (expected - 1) ** 2)
+
+  const rejectedOnly = normalizeProviderEvent(
+    { ...rawEvent, bookmakers: [rawEvent.bookmakers[0]] },
+    '2026-10-08T17:00:00Z',
+  )
+  const missingConsensus = calculateNoVigConsensus(rejectedOnly.bookmakers)
+  assert.equal(missingConsensus.homeProbability, null)
+  assert.equal(missingConsensus.bookmakerCount, 0)
 })
 
 test('paired Brier never mixes a larger raw model population into market comparison', () => {

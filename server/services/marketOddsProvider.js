@@ -150,9 +150,17 @@ const normalizeBookmaker = (
     return null
   }
 
+  if (market.outcomes.length !== 2) {
+    reportNormalizationWarning(onWarning, 'invalid_h2h_outcome_count', {
+      bookmakerKey,
+      providerEventId,
+    })
+    return null
+  }
+
   const prices = {}
 
-  market.outcomes.forEach((outcome) => {
+  for (const outcome of market.outcomes) {
     const teamName = String(outcome?.name ?? '').trim()
     const identity = getNhlTeamIdentity(teamName)
 
@@ -162,7 +170,7 @@ const normalizeBookmaker = (
         providerEventId,
         teamName,
       })
-      return
+      return null
     }
 
     if (!eventIdentities.allowed.has(identity)) {
@@ -171,13 +179,30 @@ const normalizeBookmaker = (
         providerEventId,
         teamName,
       })
-      return
+      return null
     }
 
-    if (isValidDecimalOdds(outcome?.price)) {
-      prices[identity] = Number(outcome.price)
+    if (Object.hasOwn(prices, identity)) {
+      reportNormalizationWarning(onWarning, 'duplicate_h2h_outcome', {
+        bookmakerKey,
+        providerEventId,
+      })
+      return null
     }
-  })
+
+    if (
+      typeof outcome?.price !== 'number' ||
+      !isValidDecimalOdds(outcome.price)
+    ) {
+      reportNormalizationWarning(onWarning, 'invalid_h2h_price', {
+        bookmakerKey,
+        providerEventId,
+      })
+      return null
+    }
+
+    prices[identity] = Number(outcome.price)
+  }
 
   const homeOdds = prices[eventIdentities.home]
   const awayOdds = prices[eventIdentities.away]

@@ -27,6 +27,9 @@ const {
   matchEventsToGames,
 } = require('../services/marketOddsService')
 const { buildCaptureProviderWindow } = require('../services/oddsCaptureContracts')
+const {
+  filterMarketOddsForBookmakers,
+} = require('../services/bookmakerOddsFilter')
 const { getNhlTeamIdentity } = require('../services/nhlTeamIdentity')
 const { normalizeCreatePayload } = require('../services/betsService')
 
@@ -85,6 +88,16 @@ const createProviderBody = ({ commenceTime = '2026-08-04T00:00:00Z' } = {}) => [
     ],
   },
 ]
+
+const createEventWithOutcomes = (outcomes, bookmakerKey = 'pinnacle') => {
+  const event = createProviderBody()[0]
+  event.bookmakers = [{
+    key: bookmakerKey,
+    title: bookmakerKey,
+    markets: [{ key: 'h2h', outcomes }],
+  }]
+  return event
+}
 
 const createConfig = (overrides = {}) => ({
   ...getMarketOddsConfig({
@@ -329,6 +342,115 @@ test('normalization preserves bookmakers and selects independent best prices', (
   })
   assert.equal(event.bestAvailable.home.bookmakerKey, 'book-b')
   assert.equal(event.bestAvailable.home.odds, 1.8)
+})
+
+test('NHL h2h accepts exactly one valid home and away outcome in either order', () => {
+  const away = { name: 'Toronto Maple Leafs', price: 2.1 }
+  const home = { name: 'Boston Bruins', price: 1.8 }
+
+  for (const outcomes of [[away, home], [home, away]]) {
+    const event = normalizeProviderEvent(
+      createEventWithOutcomes(outcomes),
+      NOW_ISO,
+    )
+
+    assert.equal(event.bookmakers.length, 1)
+    assert.equal(event.bookmakers[0].awayOdds, 2.1)
+    assert.equal(event.bookmakers[0].homeOdds, 1.8)
+    assert.equal(event.bestAvailable.away.odds, 2.1)
+    assert.equal(event.bestAvailable.home.odds, 1.8)
+  }
+})
+
+test('NHL h2h rejects the entire bookmaker for extra, duplicate, missing, or invalid outcomes', () => {
+  const away = { name: 'Toronto Maple Leafs', price: 2.1 }
+  const home = { name: 'Boston Bruins', price: 1.8 }
+  const invalidMarkets = [
+    { name: 'Draw third', outcomes: [away, { name: 'Draw', price: 4 }, home], reason: 'invalid_h2h_outcome_count' },
+    { name: 'unknown third', outcomes: [away, { name: 'SomethingElse', price: 4 }, home], reason: 'invalid_h2h_outcome_count' },
+    { name: 'duplicate home', outcomes: [away, home, { ...home, price: 1.85 }], reason: 'invalid_h2h_outcome_count' },
+    { name: 'duplicate away', outcomes: [away, { ...away, price: 2.2 }, home], reason: 'invalid_h2h_outcome_count' },
+    { name: 'only away', outcomes: [away], reason: 'invalid_h2h_outcome_count' },
+    { name: 'unknown instead of home', outcomes: [away, { name: 'SomethingElse', price: 1.8 }], reason: 'unknown_team' },
+    { name: 'unrelated NHL team', outcomes: [away, { name: 'Montreal Canadiens', price: 1.8 }], reason: 'unexpected_h2h_outcome' },
+    { name: 'two home outcomes', outcomes: [home, { ...home, price: 1.85 }], reason: 'duplicate_h2h_outcome' },
+    { name: 'two away outcomes', outcomes: [away, { ...away, price: 2.2 }], reason: 'duplicate_h2h_outcome' },
+    { name: 'null price', outcomes: [away, { ...home, price: null }], reason: 'invalid_h2h_price' },
+    { name: 'string price', outcomes: [away, { ...home, price: '1.8' }], reason: 'invalid_h2h_price' },
+    { name: 'array price', outcomes: [away, { ...home, price: [1.8] }], reason: 'invalid_h2h_price' },
+    { name: 'non-finite price', outcomes: [away, { ...home, price: Infinity }], reason: 'invalid_h2h_price' },
+    { name: 'price at one', outcomes: [away, { ...home, price: 1 }], reason: 'invalid_h2h_price' },
+  ]
+
+  for (const { name, outcomes, reason } of invalidMarkets) {
+    const normalized = normalizeProviderResponse(
+      [createEventWithOutcomes(outcomes)],
+      NOW_ISO,
+    )
+    const [event] = normalized.events
+
+    assert.deepEqual(event.bookmakers, [], name)
+    assert.equal(event.bestAvailable.away, null, name)
+    assert.equal(event.bestAvailable.home, null, name)
+    assert.equal(
+      normalized.normalizationWarnings.some(({ code }) => code === reason),
+      true,
+      name,
+    )
+  }
+})
+
+test('invalid three-way bookmaker cannot enter best odds, availability, or allBookmakers', async () => {
+  const rawEvent = createProviderBody()[0]
+  rawEvent.bookmakers = [
+    {
+      key: 'unibet_fi',
+      markets: [{
+        key: 'h2h',
+        outcomes: [
+          { name: 'Toronto Maple Leafs', price: 2.6 },
+          { name: 'Draw', price: 4 },
+          { name: 'Boston Bruins', price: 2.43 },
+        ],
+      }],
+    },
+    {
+      key: 'pinnacle',
+      markets: [{
+        key: 'h2h',
+        outcomes: [
+          { name: 'Toronto Maple Leafs', price: 1.91 },
+          { name: 'Boston Bruins', price: 1.95 },
+        ],
+      }],
+    },
+  ]
+  const provider = createMarketOddsProvider({
+    fetchImpl: async () => createResponse({ body: [rawEvent] }),
+    getConfig: () => createConfig(),
+    now: () => new Date(NOW_ISO),
+  })
+  const service = createMarketOddsService({
+    getConfig: () => createConfig(),
+    getGamesForDate: async () => createSchedule(),
+    now: () => Date.parse(NOW_ISO),
+    provider,
+  })
+  const result = await service.getNhlMarketOdds({ date: '2026-08-03' })
+  const filtered = filterMarketOddsForBookmakers(result, ['unibet_fi', 'pinnacle'])
+  const marketOdds = filtered.games[0].marketOdds
+
+  assert.deepEqual(result.availableBookmakers.map(({ key }) => key), ['pinnacle'])
+  assert.deepEqual(marketOdds.allBookmakers.map(({ key }) => key), ['pinnacle'])
+  assert.deepEqual(marketOdds.bookmakers.map(({ key }) => key), ['pinnacle'])
+  assert.deepEqual(marketOdds.awayBest, {
+    bookmakerKey: 'pinnacle',
+    bookmakerTitle: 'pinnacle',
+    lastUpdate: null,
+    odds: 1.91,
+  })
+  assert.equal(marketOdds.homeBest.odds, 1.95)
+  assert.equal(marketOdds.homeBest.bookmakerKey, 'pinnacle')
 })
 
 test('best-price selection excludes malformed odds and breaks ties by bookmaker identity', () => {
