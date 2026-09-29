@@ -3,6 +3,7 @@ const {
   MODEL_PERFORMANCE_DATA_MODES,
 } = require('../config/modelPerformanceDataModes')
 const nhlSeasonService = require('./nhlSeasonService')
+const { isCompatibleBookmakerRow } = require('./marketOddsProvider')
 const {
   CALCULATION_CONTRACT_VERSION,
   PREDICTION_DEFINITION,
@@ -430,16 +431,17 @@ const probabilityOrNull = (value) => {
   return number !== null && number > 0 && number < 1 ? number : null
 }
 
-const timelinePricePoint = (snapshot, bookmakerKey, oddsField) => {
+const timelinePricePoint = (snapshot, bookmakerKey, oddsField, providerMarketKey) => {
+  if (bookmakerKey === 'coolbet' && providerMarketKey !== 'h2h_ot') return null
   const bookmaker = (snapshot?.bookmakers ?? []).find(
-    ({ key }) => key === bookmakerKey,
+    (row) => row.key === bookmakerKey && isCompatibleBookmakerRow(row),
   )
   const odds = decimalOddsOrNull(bookmaker?.[oddsField])
 
   return odds === null
     ? null
     : {
-        observedAt: snapshot.capturedAt,
+        observedAt: bookmaker.providerFetchedAt ?? snapshot.capturedAt,
         odds,
         snapshotType: snapshot.snapshotType,
       }
@@ -485,7 +487,12 @@ const buildBetDetail = ({
     bookmakerKey && oddsField
       ? exactSnapshots
           .map((snapshot) => ({
-            point: timelinePricePoint(snapshot, bookmakerKey, oddsField),
+            point: timelinePricePoint(
+              snapshot,
+              bookmakerKey,
+              oddsField,
+              bet.providerMarketKey,
+            ),
             snapshot,
           }))
           .filter(({ point }) => point)

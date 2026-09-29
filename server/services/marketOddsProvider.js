@@ -1,6 +1,19 @@
 const { getMarketOddsConfig } = require('../config/marketOdds')
 const { getNhlTeamIdentity } = require('./nhlTeamIdentity')
 
+// Verified for NHL: Coolbet's h2h is a regulation three-way market, while
+// its event-level h2h_ot is the full-game two-way moneyline.
+const COMPATIBLE_MARKET_BY_BOOKMAKER = Object.freeze({ coolbet: 'h2h_ot' })
+const compatibleMarketKey = (bookmakerKey) =>
+  COMPATIBLE_MARKET_BY_BOOKMAKER[bookmakerKey] ?? 'h2h'
+const isCompatibleBookmakerRow = (row) => {
+  const key = String(row?.key ?? row?.bookmakerKey ?? '').trim()
+  const market = String(row?.providerMarketKey ?? '').trim()
+  return key !== 'coolbet'
+    ? !market || market === 'h2h'
+    : market === 'h2h_ot'
+}
+
 const VALID_STATUS_VALUES = new Set([
   'authentication_failed',
   'invalid_response',
@@ -138,8 +151,9 @@ const normalizeBookmaker = (
     return null
   }
 
+  const providerMarketKey = compatibleMarketKey(bookmakerKey)
   const market = Array.isArray(bookmaker.markets)
-    ? bookmaker.markets.find((candidate) => candidate?.key === 'h2h')
+    ? bookmaker.markets.find((candidate) => candidate?.key === providerMarketKey)
     : null
 
   if (!market || !Array.isArray(market.outcomes)) {
@@ -225,6 +239,7 @@ const normalizeBookmaker = (
     homeOdds,
     key: bookmakerKey,
     lastUpdate,
+    providerMarketKey,
     title: bookmakerTitle,
   }
 }
@@ -265,6 +280,8 @@ const selectBestOdds = (bookmakers, side) => {
         bookmakerTitle: best.bookmakerTitle,
         lastUpdate: best.lastUpdate,
         odds: Number(best[oddsKey]),
+        providerMarketKey: best.providerMarketKey,
+        providerFetchedAt: best.providerFetchedAt ?? null,
       }
     : null
 }
@@ -587,7 +604,85 @@ const createMarketOddsProvider = ({
     }
   }
 
+  const fetchCoolbetMoneylineOdds = async ({ event }) => {
+    const config = getConfig()
+    const eventId = String(event?.providerEventId ?? '').trim()
+
+    if (!config.apiKey || !/^[a-zA-Z0-9_-]+$/.test(eventId)) {
+      return { bookmaker: null, providerFetchedAt: null, quota: null }
+    }
+
+    const url = new URL(
+      `/v4/sports/${encodeURIComponent(config.sport)}/events/${encodeURIComponent(eventId)}/odds`,
+      config.baseUrl,
+    )
+    url.searchParams.set('apiKey', config.apiKey)
+    url.searchParams.set('bookmakers', 'coolbet')
+    url.searchParams.set('markets', 'h2h_ot')
+    url.searchParams.set('oddsFormat', config.oddsFormat)
+    url.searchParams.set('dateFormat', config.dateFormat)
+
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), config.requestTimeoutMs)
+
+    try {
+      const response = await fetchImpl(url, {
+        headers: { Accept: 'application/json' },
+        signal: controller.signal,
+      })
+      const providerFetchedAt = now().toISOString()
+      const quota = normalizeQuotaHeaders(response.headers, providerFetchedAt)
+      let body
+
+      try {
+        body = await parseResponseBody(response)
+      } catch (error) {
+        error.quota = quota
+        throw error
+      }
+
+      if (!response.ok) {
+        throw new MarketOddsProviderError(
+          getProviderFailureStatus(response, body),
+          'The market odds provider request was unsuccessful.',
+          { quota, upstreamStatus: response.status },
+        )
+      }
+
+      const normalized = normalizeProviderEvent(body, providerFetchedAt)
+      const sameEvent =
+        normalized?.providerEventId === eventId &&
+        normalized.homeTeamIdentity === event.homeTeamIdentity &&
+        normalized.awayTeamIdentity === event.awayTeamIdentity &&
+        normalized.commenceTime === event.commenceTime
+      const rawCoolbetCount = (Array.isArray(body?.bookmakers) ? body.bookmakers : [])
+        .filter((row) => row?.key === 'coolbet').length
+      const compatibleRows = normalized?.bookmakers.filter(
+        (row) => row.bookmakerKey === 'coolbet' && row.providerMarketKey === 'h2h_ot',
+      ) ?? []
+
+      return {
+        bookmaker: sameEvent && rawCoolbetCount === 1 && compatibleRows.length === 1
+          ? compatibleRows[0]
+          : null,
+        providerFetchedAt,
+        quota,
+      }
+    } catch (error) {
+      if (error instanceof MarketOddsProviderError) throw error
+      throw new MarketOddsProviderError(
+        'unavailable',
+        error?.name === 'AbortError'
+          ? 'The market odds provider request timed out.'
+          : 'The market odds provider is unavailable.',
+      )
+    } finally {
+      clearTimeout(timeout)
+    }
+  }
+
   return {
+    fetchCoolbetMoneylineOdds,
     fetchNhlMoneylineOdds,
     fetchNhlOdds: fetchNhlMoneylineOdds,
   }
@@ -596,6 +691,8 @@ const createMarketOddsProvider = ({
 module.exports = {
   MarketOddsProviderError,
   createMarketOddsProvider,
+  compatibleMarketKey,
+  isCompatibleBookmakerRow,
   isValidDecimalOdds,
   normalizeProviderEvent,
   normalizeProviderEvents,

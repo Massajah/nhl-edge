@@ -18,6 +18,7 @@ const {
 const { oddsCaptureRunService } = require('./oddsCaptureRunService')
 const { oddsSnapshotRepository } = require('./oddsSnapshotRepository')
 const { marketOddsService } = require('./marketOddsService')
+const { isCompatibleBookmakerRow } = require('./marketOddsProvider')
 const { oddsQuotaLedgerService } = require('./oddsQuotaLedgerService')
 const { getNhlTeamIdentity } = require('./nhlTeamIdentity')
 const {
@@ -285,6 +286,7 @@ const normalizeScheduleResult = (result) => {
 const filterBookmakerRows = ({
   bookmakers,
   capturedAt,
+  checkpoint,
   finalSafeCutoff,
   selectedBookmakerKeys,
   snapshotType,
@@ -314,6 +316,7 @@ const filterBookmakerRows = ({
 
     if (
       !supportedBookmakerKeys.has(key) ||
+      !isCompatibleBookmakerRow(row) ||
       !selected.has(key) ||
       keyCounts.get(key) !== 1 ||
       !Number.isFinite(homeOdds) ||
@@ -326,6 +329,27 @@ const filterBookmakerRows = ({
     }
 
     const rawLastUpdate = row?.lastUpdate
+    const providerFetchedAt = row?.providerFetchedAt
+      ? normalizeDate(row.providerFetchedAt)
+      : null
+    if (row?.providerFetchedAt && !providerFetchedAt) {
+      rejectedCount += 1
+      return
+    }
+    if (providerFetchedAt && checkpoint) {
+      const scheduledStart = normalizeDate(checkpoint.scheduledStart)
+      const withinWindow = snapshotType === 'FINAL'
+        ? providerFetchedAt <= finalSafeCutoff &&
+          providerFetchedAt >= new Date(scheduledStart.getTime() - 30 * 60 * 1000)
+        : isCheckpointWithinAcceptanceWindow(
+            { ...checkpoint, scheduledStart },
+            providerFetchedAt,
+          )
+      if (!withinWindow) {
+        rejectedCount += 1
+        return
+      }
+    }
     let lastUpdate = null
 
     if (rawLastUpdate !== null && rawLastUpdate !== undefined && rawLastUpdate !== '') {
@@ -337,7 +361,7 @@ const filterBookmakerRows = ({
       }
 
       if (
-        lastUpdate.getTime() > capturedAt.getTime() ||
+        lastUpdate.getTime() > (providerFetchedAt ?? capturedAt).getTime() ||
         (snapshotType === 'FINAL' &&
           lastUpdate.getTime() > finalSafeCutoff.getTime())
       ) {
@@ -346,7 +370,14 @@ const filterBookmakerRows = ({
       }
     }
 
-    usable.push({ awayOdds, homeOdds, key, lastUpdate })
+    usable.push({
+      awayOdds,
+      homeOdds,
+      key,
+      lastUpdate,
+      ...(providerFetchedAt ? { providerFetchedAt } : {}),
+      ...(key === 'coolbet' ? { providerMarketKey: 'h2h_ot' } : {}),
+    })
   })
 
   return { bookmakers: usable, rejectedCount }
@@ -377,6 +408,7 @@ const buildSnapshotCandidate = ({ checkpoint, event, runId }) => {
   const filtered = filterBookmakerRows({
     bookmakers: event.bookmakers,
     capturedAt,
+    checkpoint,
     finalSafeCutoff,
     selectedBookmakerKeys: checkpoint.selectedBookmakerKeys,
     snapshotType: checkpoint.snapshotType,
@@ -390,12 +422,18 @@ const buildSnapshotCandidate = ({ checkpoint, event, runId }) => {
     }
   }
 
+  const completeCapturedAt = new Date(Math.max(
+    capturedAt.getTime(),
+    ...filtered.bookmakers.map((row) =>
+      row.providerFetchedAt?.getTime() ?? capturedAt.getTime()),
+  ))
+
   return {
     candidate: {
       awayTeamId: checkpoint.awayTeamId,
       bookmakers: filtered.bookmakers,
       captureRunId: runId,
-      capturedAt,
+      capturedAt: completeCapturedAt,
       checkpointKey: checkpoint.checkpointKey,
       gameId: checkpoint.gameId,
       gameType: checkpoint.gameType,
@@ -442,16 +480,22 @@ const buildClosingObservationCandidate = ({ checkpoint, event }) => {
   const filtered = filterBookmakerRows({
     bookmakers: event.bookmakers,
     capturedAt,
+    checkpoint,
     finalSafeCutoff,
     selectedBookmakerKeys: checkpoint.selectedBookmakerKeys,
     snapshotType: 'FINAL',
   })
+  const completeCapturedAt = new Date(Math.max(
+    capturedAt.getTime(),
+    ...filtered.bookmakers.map((row) =>
+      row.providerFetchedAt?.getTime() ?? capturedAt.getTime()),
+  ))
 
   return {
     candidate: {
       awayTeamId: checkpoint.awayTeamId,
       bookmakers: filtered.bookmakers,
-      capturedAt,
+      capturedAt: completeCapturedAt,
       gameId: checkpoint.gameId,
       gameType: checkpoint.gameType,
       homeTeamId: checkpoint.homeTeamId,
@@ -793,8 +837,17 @@ const createOddsCaptureEngine = ({
       providerData = await fetchOdds({
         ...buildCaptureProviderWindow(eligible),
         bookmakerKeys,
+        checkpoints: eligible,
         maximumProviderAgeMs,
         requestSource: quotaDecision.requestSource,
+        targetGames: eligible
+          .filter(({ selectedBookmakerKeys = [] }) => selectedBookmakerKeys.includes('coolbet'))
+          .map((checkpoint) => ({
+            gameId: checkpoint.gameId,
+            awayTeam: { abbreviation: checkpoint.awayTeamId },
+            homeTeam: { abbreviation: checkpoint.homeTeamId },
+            startTimeUTC: checkpoint.scheduledStart,
+          })),
       })
     } catch {
       eligible.forEach((checkpoint) => {
@@ -806,11 +859,13 @@ const createOddsCaptureEngine = ({
       return complete('FAILED')
     }
 
-    providerRequestCount = providerData.requestAttempted ? 1 : 0
+    providerRequestCount = providerData.providerRequestCount ??
+      (providerData.requestAttempted ? 1 : 0)
     quotaAfter = normalizeQuotaForRun(providerData.quota)
-    actualCreditCost = providerData.requestAttempted
-      ? normalizeQuotaForRun(providerData.requestQuota)?.lastCost ?? null
-      : 0
+    actualCreditCost = providerData.requestCreditCost ??
+      (providerData.requestAttempted
+        ? normalizeQuotaForRun(providerData.requestQuota)?.lastCost ?? null
+        : 0)
     const providerEvents = Array.isArray(providerData.events)
       ? providerData.events
       : []

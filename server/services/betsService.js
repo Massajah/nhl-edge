@@ -920,6 +920,9 @@ const normalizeCreatePayload = (payload = {}) => {
     bookmakerKey: isProviderOdds
       ? toText(payload.bookmakerKey) || null
       : null,
+    providerMarketKey: isProviderOdds
+      ? toText(payload.providerMarketKey) || null
+      : null,
     bookmakerTitle: isProviderOdds
       ? toText(payload.bookmakerTitle) || null
       : null,

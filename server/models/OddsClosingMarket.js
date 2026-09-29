@@ -23,6 +23,8 @@ const priceSchema = new mongoose.Schema(
     homeOdds: { required: true, type: Number, validate: validOdds },
     awayOdds: { required: true, type: Number, validate: validOdds },
     lastUpdate: { default: null, type: Date },
+    providerMarketKey: { enum: ['h2h', 'h2h_ot'], type: String },
+    providerFetchedAt: { type: Date },
   },
   { _id: false, strict: 'throw' },
 )
@@ -33,6 +35,8 @@ const latestSafePriceSchema = new mongoose.Schema(
     homeOdds: { required: true, type: Number, validate: validOdds },
     awayOdds: { required: true, type: Number, validate: validOdds },
     lastUpdate: { default: null, type: Date },
+    providerMarketKey: { enum: ['h2h', 'h2h_ot'], type: String },
+    providerFetchedAt: { type: Date },
     observedAt: { required: true, type: Date },
     providerCommenceTime: { required: true, type: Date },
     providerEventId: { maxlength: 200, required: true, trim: true, type: String },
@@ -73,6 +77,7 @@ const bestPriceSchema = new mongoose.Schema(
     odds: { required: true, type: Number, validate: validOdds },
     observedAt: { required: true, type: Date },
     lastUpdate: { default: null, type: Date },
+    providerMarketKey: { enum: ['h2h', 'h2h_ot'], type: String },
   },
   { _id: false, strict: 'throw' },
 )

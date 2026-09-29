@@ -142,6 +142,60 @@ const makeMixedSemanticEvent = (capturedAt) => normalizeProviderEvent({
   ],
 }, capturedAt)
 
+test('Coolbet h2h_ot enters T24, T6, T2, FINAL, and closing candidates with provenance', () => {
+  for (const snapshotType of ['T24', 'T6', 'T2', 'FINAL']) {
+    const checkpoint = makeCheckpoint({ snapshotType, scheduledStart: new Date(START) })
+    const capturedAt = snapshotType === 'FINAL'
+      ? FINAL_CAPTURED_AT
+      : checkpoint.targetAt.toISOString()
+    const event = makeEvent({
+      bookmakers: [{
+        key: 'coolbet',
+        homeOdds: 1.89,
+        awayOdds: 1.96,
+        lastUpdate: capturedAt,
+        providerFetchedAt: capturedAt,
+        providerMarketKey: 'h2h_ot',
+      }],
+      capturedAt,
+    })
+    const result = buildSnapshotCandidate({ checkpoint, event, runId: 'run-1' })
+    assert.equal(result.candidate.bookmakers[0].providerMarketKey, 'h2h_ot')
+    assert.equal(result.candidate.bookmakers[0].key, 'coolbet')
+  }
+
+  const closing = buildClosingObservationCandidate({
+    checkpoint: makeClosingGame({ scheduledStart: new Date(START) }),
+    event: makeEvent({
+      capturedAt: FINAL_CAPTURED_AT,
+      bookmakers: [{
+        key: 'coolbet',
+        homeOdds: 1.89,
+        awayOdds: 1.96,
+        providerMarketKey: 'h2h_ot',
+        providerFetchedAt: FINAL_CAPTURED_AT,
+      }],
+    }),
+  })
+  assert.equal(closing.candidate.bookmakers[0].providerMarketKey, 'h2h_ot')
+
+  const afterCutoff = buildClosingObservationCandidate({
+    checkpoint: makeClosingGame({ scheduledStart: new Date(START) }),
+    event: makeEvent({
+      capturedAt: FINAL_CAPTURED_AT,
+      bookmakers: [
+        {
+          key: 'coolbet', homeOdds: 1.89, awayOdds: 1.96,
+          providerMarketKey: 'h2h_ot',
+          providerFetchedAt: '2026-10-08T18:55:01.000Z',
+        },
+        { key: 'pinnacle', homeOdds: 1.91, awayOdds: 1.95 },
+      ],
+    }),
+  })
+  assert.deepEqual(afterCutoff.candidate.bookmakers.map(({ key }) => key), ['pinnacle'])
+})
+
 const makeProviderData = ({
   capturedAt = T2_CAPTURED_AT,
   events = [makeEvent({ capturedAt })],
@@ -399,6 +453,45 @@ test('capture stores only accepted binary rows in snapshots and closing observat
     closingHarness.closingRecords[0].bookmakers.map(({ key }) => key),
     ['pinnacle'],
   )
+})
+
+test('capture run stores Coolbet h2h_ot in snapshot and closing observation', async () => {
+  const coolbetRow = (providerFetchedAt) => ({
+    key: 'coolbet',
+    homeOdds: 1.89,
+    awayOdds: 1.96,
+    providerMarketKey: 'h2h_ot',
+    providerFetchedAt,
+    lastUpdate: providerFetchedAt,
+  })
+  const t2 = createHarness({
+    providerData: makeProviderData({
+      events: [makeEvent({
+        capturedAt: T2_CAPTURED_AT,
+        bookmakers: [coolbetRow(T2_CAPTURED_AT)],
+      })],
+    }),
+  })
+  await execute(t2, [makeCheckpoint()])
+  const snapshot = [...t2.snapshotModel.documents.values()][0]
+  assert.equal(snapshot.bookmakers[0].providerMarketKey, 'h2h_ot')
+
+  const closing = createHarness({
+    now: FINAL_CAPTURED_AT,
+    providerData: makeProviderData({
+      capturedAt: FINAL_CAPTURED_AT,
+      events: [makeEvent({
+        capturedAt: FINAL_CAPTURED_AT,
+        bookmakers: [coolbetRow(FINAL_CAPTURED_AT)],
+      })],
+    }),
+  })
+  await closing.engine.executeOddsCapture({
+    closingGames: [makeClosingGame()],
+    intendedAt: FINAL_CAPTURED_AT,
+    triggerSource: 'TEST',
+  })
+  assert.equal(closing.closingRecords[0].bookmakers[0].providerMarketKey, 'h2h_ot')
 })
 
 test('happy path captures multiple checkpoints with one shared provider request', async () => {

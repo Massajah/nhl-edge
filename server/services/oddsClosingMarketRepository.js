@@ -1,4 +1,5 @@
 const OddsClosingMarket = require('../models/OddsClosingMarket')
+const { isCompatibleBookmakerRow } = require('./marketOddsProvider')
 const {
   CLOSING_MARKET_SCHEMA_VERSION,
   CLOSING_SAFETY_REASON,
@@ -53,7 +54,7 @@ const buildSafeRows = ({
   bookmakers.map((row) => ({
     ...row,
     lastUpdateMissing: !row.lastUpdate,
-    observedAt: capturedAt,
+    observedAt: row.providerFetchedAt ?? capturedAt,
     providerCommenceTime,
     providerEventId,
     safetyReason: CLOSING_SAFETY_REASON,
@@ -227,7 +228,7 @@ const createOddsClosingMarketRepository = ({
           : normalizeSelectedBookmakerKeys(existing.selectedBookmakerKeys)
       const selected = new Set(finalSelectedBookmakerKeys)
       const finalBookmakers = (existing.latestSafeBookmakers ?? [])
-        .filter((row) => selected.has(row.key))
+        .filter((row) => selected.has(row.key) && isCompatibleBookmakerRow(row))
         .sort((left, right) => left.key.localeCompare(right.key))
       const finalizationReason =
         finalBookmakers.length > 0 ? reason : 'NO_SAFE_ODDS'

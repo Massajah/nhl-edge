@@ -209,6 +209,7 @@ const providerMetadata = {
     providerEventId: 'event-1',
     providerFetchedAt: '2026-08-03T12:00:00.000Z',
     providerName: 'The Odds API',
+    providerMarketKey: 'h2h',
     source: 'provider',
   },
 }
@@ -223,10 +224,30 @@ test('saved bet payload snapshots untouched provider odds and bookmaker provenan
   assert.equal(payload.providerName, 'The Odds API')
   assert.equal(payload.providerEventId, 'event-1')
   assert.equal(payload.bookmakerKey, 'away-book')
+  assert.equal(payload.providerMarketKey, 'h2h')
   assert.equal(payload.bookmakerTitle, 'Away Book')
   assert.equal(payload.providerFetchedAt, '2026-08-03T12:00:00.000Z')
   assert.equal(payload.bookmakerLastUpdate, '2026-08-03T11:59:00.000Z')
   assert.equal(payload.offeredOdds, 2.3)
+})
+
+test('Coolbet h2h_ot provenance survives Dashboard selection and saved bet payload', () => {
+  const coolbetGame = structuredClone(providerGame)
+  coolbetGame.marketOdds.awayBest.bookmakerKey = 'coolbet'
+  coolbetGame.marketOdds.awayBest.providerMarketKey = 'h2h_ot'
+  coolbetGame.marketOdds.awayBest.providerFetchedAt = '2026-08-03T12:01:00.000Z'
+  const indexed = marketOddsUtils.indexProviderMarketOdds([coolbetGame])
+  const resolved = marketOddsUtils.resolveGameMarketOdds({
+    gameId: 'game-1',
+    providerOddsByGame: indexed,
+  })
+  assert.equal(resolved.metadata.away.providerMarketKey, 'h2h_ot')
+  assert.equal(resolved.metadata.away.providerFetchedAt, '2026-08-03T12:01:00.000Z')
+  const payload = savedAnalyses.createBetPayloadFromGameAnalysis({
+    ...createAnalysisInput(),
+    marketOddsMetadata: { away: resolved.metadata.away },
+  })
+  assert.equal(payload.providerMarketKey, 'h2h_ot')
 })
 
 test('edited provider odds are labeled manual without bookmaker claims', () => {

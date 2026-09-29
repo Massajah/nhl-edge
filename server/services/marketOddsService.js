@@ -8,12 +8,15 @@ const {
   MarketOddsProviderError,
   createMarketOddsProvider,
   normalizeQuotaMetadata,
+  selectBestOdds,
 } = require('./marketOddsProvider')
 const { collectAvailableBookmakers } = require('./bookmakerOddsFilter')
 const { oddsQuotaLedgerService } = require('./oddsQuotaLedgerService')
+const { matchOddsEventsToNhlGames } = require('./strictMarketOddsMatcher')
 
 const MATCH_TOLERANCE_MS = 3 * 60 * 60 * 1000
 const WINDOW_PADDING_MS = 12 * 60 * 60 * 1000
+const MAX_COOLBET_EVENT_REQUESTS_PER_BATCH = 16
 const STARTED_GAME_STATES = new Set([
   'CRIT',
   'FINAL',
@@ -70,6 +73,13 @@ const countBookmakerRows = (events = []) =>
       total + (Array.isArray(event.bookmakers) ? event.bookmakers.length : 0),
     0,
   )
+
+const isFreshCoolbetPrice = (bookmaker, referenceMs, maximumAgeMs) => {
+  if (!bookmaker?.lastUpdate) return true
+  const updatedAtMs = Date.parse(bookmaker.lastUpdate)
+  const ageMs = referenceMs - updatedAtMs
+  return Number.isFinite(ageMs) && ageMs >= 0 && ageMs <= maximumAgeMs
+}
 
 const isGameStarted = (game, nowMs) => {
   if (STARTED_GAME_STATES.has(String(game.gameState ?? '').toUpperCase())) {
@@ -220,6 +230,9 @@ const createDevelopmentLogger = (logger, now) => (message, metadata = {}) => {
 
 const createMarketOddsService = ({
   cache = new Map(),
+  canSpendEventCredit = async () => ({ allowed: true }),
+  eventCache = new Map(),
+  eventInFlightRequests = new Map(),
   getConfig = getMarketOddsConfig,
   getGamesForDate = nhlApiService.getGamesForDate,
   inFlightRequests = new Map(),
@@ -232,6 +245,7 @@ const createMarketOddsService = ({
   recordProviderRequest = async () => null,
 } = {}) => {
   const lastForcedRefreshAt = new Map()
+  let eventAccountingUnavailable = false
   const logDevelopment = createDevelopmentLogger(logger, now)
   let latestProviderState = {
     availableBookmakers: [],
@@ -487,12 +501,192 @@ const createMarketOddsService = ({
     return request
   }
 
+  const getCoolbetEventRow = async ({
+    allowProviderRequest,
+    config,
+    event,
+    maximumProviderAgeMs,
+    requestSource,
+    checkpoints,
+  }) => {
+    const cacheKey = [
+      event.providerEventId,
+      event.homeTeamIdentity,
+      event.awayTeamIdentity,
+      event.commenceTime,
+      'coolbet',
+      'h2h_ot',
+    ].join('|')
+    const cached = eventCache.get(cacheKey)
+    const ageMs = now() - Date.parse(cached?.providerFetchedAt)
+    if (
+      cached?.expiresAt > now() &&
+      Number.isFinite(ageMs) &&
+      ageMs >= 0 &&
+      ageMs <= maximumProviderAgeMs
+    ) {
+      return {
+        bookmaker: isFreshCoolbetPrice(cached.bookmaker, now(), maximumProviderAgeMs)
+          ? cached.bookmaker
+          : null,
+        requestCount: 0,
+        creditCost: 0,
+      }
+    }
+    if (eventInFlightRequests.has(cacheKey)) {
+      const inFlight = await eventInFlightRequests.get(cacheKey)
+      return { ...inFlight, requestCount: 0, creditCost: 0 }
+    }
+    const remaining = latestProviderState.quota?.remaining
+    if (
+      !allowProviderRequest ||
+      eventAccountingUnavailable ||
+      !config.apiKey ||
+      typeof provider.fetchCoolbetMoneylineOdds !== 'function' ||
+      (Number.isFinite(remaining) && remaining <= config.lowCreditThreshold)
+    ) {
+      return { bookmaker: null, requestCount: 0, creditCost: 0 }
+    }
+    if (requestSource !== 'MANUAL') {
+      const policy = await canSpendEventCredit({
+        checkpoints,
+        expectedCreditCost: 1,
+        quotaBefore: latestProviderState.quota,
+      })
+      if (!policy?.allowed) {
+        return { bookmaker: null, requestCount: 0, creditCost: 0 }
+      }
+    }
+
+    const request = (async () => {
+      let quota = null
+      let successful = false
+      let stopBatch = false
+      let bookmaker = null
+      let providerFetchedAt = new Date(now()).toISOString()
+      try {
+        const result = await provider.fetchCoolbetMoneylineOdds({ event })
+        quota = normalizeQuotaMetadata(result.quota)
+        providerFetchedAt = result.providerFetchedAt ?? providerFetchedAt
+        bookmaker = result.bookmaker?.bookmakerKey === 'coolbet' &&
+          result.bookmaker.providerMarketKey === 'h2h_ot' &&
+          Number.isFinite(result.bookmaker.homeOdds) &&
+          result.bookmaker.homeOdds > 1 &&
+          Number.isFinite(result.bookmaker.awayOdds) &&
+          result.bookmaker.awayOdds > 1 &&
+          isFreshCoolbetPrice(
+            result.bookmaker,
+            Date.parse(providerFetchedAt),
+            maximumProviderAgeMs,
+          )
+          ? { ...result.bookmaker, providerFetchedAt }
+          : null
+        successful = true
+      } catch (error) {
+        quota = normalizeQuotaMetadata(error?.quota)
+        stopBatch = ![400, 404].includes(error?.upstreamStatus)
+      }
+
+      try {
+        await recordProviderRequest({
+          observedAt: quota?.observedAt ?? providerFetchedAt,
+          quota,
+          source: requestSource,
+          successful,
+        })
+      } catch {
+        bookmaker = null
+        eventAccountingUnavailable = true
+      }
+      if (quota) latestProviderState.quota = quota
+      eventCache.set(cacheKey, {
+        bookmaker,
+        expiresAt: now() + (successful ? config.cacheTtlMs : config.minimumRefreshIntervalMs),
+        providerFetchedAt,
+      })
+      return {
+        bookmaker,
+        requestCount: 1,
+        creditCost: quota?.lastCost ?? 1,
+        stopBatch,
+      }
+    })().finally(() => eventInFlightRequests.delete(cacheKey))
+    eventInFlightRequests.set(cacheKey, request)
+    return request
+  }
+
+  const enrichWithCoolbet = async ({
+    allowProviderRequest = true,
+    bookmakerKeys,
+    checkpoints = [],
+    config,
+    events,
+    maximumProviderAgeMs = config.cacheTtlMs,
+    requestSource,
+    targetGames,
+  }) => {
+    if (!Array.isArray(targetGames) || !targetGames.length ||
+        (Array.isArray(bookmakerKeys) && !bookmakerKeys.includes('coolbet'))) {
+      return { events, requestCount: 0, creditCost: 0 }
+    }
+    const matched = matchOddsEventsToNhlGames({
+      games: targetGames,
+      events,
+    }).matches.map(({ event }) => event)
+      .filter((event) => /^[a-zA-Z0-9_-]+$/.test(event.providerEventId))
+      .sort((left, right) => left.commenceTime.localeCompare(right.commenceTime))
+    const rows = new Map()
+    let requestCount = 0
+    let creditCost = 0
+    let stopBatch = false
+
+    for (const event of matched) {
+      const result = await getCoolbetEventRow({
+        allowProviderRequest:
+          allowProviderRequest && !stopBatch &&
+          requestCount < MAX_COOLBET_EVENT_REQUESTS_PER_BATCH,
+        checkpoints,
+        config,
+        event,
+        maximumProviderAgeMs,
+        requestSource,
+      })
+      requestCount += result.requestCount
+      creditCost += result.creditCost
+      if (result.stopBatch) stopBatch = true
+      if (result.bookmaker) rows.set(event.providerEventId, result.bookmaker)
+    }
+
+    return {
+      creditCost,
+      requestCount,
+      events: events.map((event) => {
+        const coolbet = rows.get(event.providerEventId)
+        if (!coolbet) return event
+        const bookmakers = [
+          ...event.bookmakers.filter((row) => row.bookmakerKey !== 'coolbet'),
+          coolbet,
+        ]
+        return {
+          ...event,
+          bookmakers,
+          bestAvailable: {
+            away: selectBestOdds(bookmakers, 'away'),
+            home: selectBestOdds(bookmakers, 'home'),
+          },
+        }
+      }),
+    }
+  }
+
   const getNhlOddsCaptureData = async ({
     bookmakerKeys,
+    checkpoints = [],
     commenceTimeFrom,
     commenceTimeTo,
     maximumProviderAgeMs,
     requestSource = 'AUTOMATIC',
+    targetGames = [],
   } = {}) => {
     const fromMs = Date.parse(commenceTimeFrom)
     const toMs = Date.parse(commenceTimeTo)
@@ -548,14 +742,31 @@ const createMarketOddsService = ({
       requestSource,
       window,
     })
+    const enriched = await enrichWithCoolbet({
+      bookmakerKeys,
+      checkpoints,
+      config,
+      events: providerData.events ?? [],
+      maximumProviderAgeMs,
+      requestSource,
+      targetGames,
+    })
+    if (hasUsableMarketOdds(enriched.events) && providerData.status === 'no_events') {
+      providerData.status = 'ready'
+    }
+    const baseCost = providerData.requestAttempted
+      ? normalizeQuotaMetadata(providerData.requestQuota)?.lastCost ?? 1
+      : 0
 
     return {
       diagnostics: providerData.diagnostics,
-      events: Array.isArray(providerData.events) ? providerData.events : [],
+      events: enriched.events,
       hasUsableData: Boolean(providerData.hasUsableData),
       providerFetchedAt: providerData.providerFetchedAt ?? null,
       quota: normalizeQuotaMetadata(latestProviderState.quota),
-      requestAttempted: Boolean(providerData.requestAttempted),
+      requestAttempted: Boolean(providerData.requestAttempted || enriched.requestCount),
+      providerRequestCount: Number(Boolean(providerData.requestAttempted)) + enriched.requestCount,
+      requestCreditCost: baseCost + enriched.creditCost,
       requestQuota: normalizeQuotaMetadata(providerData.requestQuota),
       source: providerData.source,
       status: providerData.status,
@@ -565,6 +776,7 @@ const createMarketOddsService = ({
   const getNhlMarketOdds = async ({
     allowProviderRequest = true,
     date,
+    enabledBookmakerKeys,
     refresh = false,
   }) => {
     const window = buildCommenceTimeWindow(date)
@@ -620,6 +832,21 @@ const createMarketOddsService = ({
       })
     }
 
+    const enriched = await enrichWithCoolbet({
+      allowProviderRequest,
+      bookmakerKeys: enabledBookmakerKeys ?? [],
+      config,
+      events: providerData.events ?? [],
+      requestSource: 'MANUAL',
+      targetGames: (schedule.games ?? []).filter((game) => !isGameStarted(game, now())),
+    })
+    providerData = { ...providerData, events: enriched.events }
+    latestProviderState.availableBookmakers = collectAvailableBookmakers(enriched.events)
+    if (hasUsableMarketOdds(enriched.events) && providerData.status === 'no_events') {
+      providerData.status = 'ready'
+      latestProviderState.status = 'ready'
+    }
+
     const providerAvailable =
       providerData.hasUsableData ||
       ['cached', 'no_events', 'ready'].includes(providerData.status)
@@ -668,6 +895,8 @@ const createMarketOddsService = ({
 }
 
 const marketOddsService = createMarketOddsService({
+  canSpendEventCredit: (request) =>
+    oddsQuotaLedgerService.getAutomaticPolicy(request),
   recordProviderRequest: (request) =>
     oddsQuotaLedgerService.recordProviderRequest(request),
 })

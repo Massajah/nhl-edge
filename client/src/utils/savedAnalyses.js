@@ -536,6 +536,9 @@ export const createBetPayloadFromGameAnalysis = ({
     bookmakerKey: isProviderOdds
       ? toText(selectedOddsMetadata.bookmakerKey, '') || null
       : null,
+    providerMarketKey: isProviderOdds
+      ? toText(selectedOddsMetadata.providerMarketKey, '') || null
+      : null,
     bookmakerTitle: isProviderOdds
       ? toText(selectedOddsMetadata.bookmakerTitle, '') || null
       : null,
@@ -908,6 +911,7 @@ export const normalizeBet = (bet = {}) => {
     providerName: toText(bet.providerName, '') || null,
     providerEventId: toText(bet.providerEventId, '') || null,
     bookmakerKey: toText(bet.bookmakerKey, '') || null,
+    providerMarketKey: toText(bet.providerMarketKey, '') || null,
     bookmakerTitle: toText(bet.bookmakerTitle, '') || null,
     providerFetchedAt: bet.providerFetchedAt ?? null,
     bookmakerLastUpdate: bet.bookmakerLastUpdate ?? null,

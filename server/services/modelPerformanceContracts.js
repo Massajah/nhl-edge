@@ -7,6 +7,7 @@ const {
 } = require('./forwardPredictionContracts')
 const { CLOSING_SAFETY_REASON } = require('./oddsClosingMarketContracts')
 const { getNhlTeamIdentity } = require('./nhlTeamIdentity')
+const { isCompatibleBookmakerRow } = require('./marketOddsProvider')
 
 const PERFORMANCE_STATUSES = Object.freeze({
   AVAILABLE: 'available',
@@ -23,6 +24,7 @@ const PERFORMANCE_REASON_CODES = Object.freeze({
   INVALID_BET_SIDE: 'INVALID_BET_SIDE',
   INVALID_OFFICIAL_PREDICTION: 'INVALID_OFFICIAL_PREDICTION',
   MANUAL_ODDS: 'MANUAL_ODDS',
+  MARKET_IDENTITY_MISMATCH: 'MARKET_IDENTITY_MISMATCH',
   MISSING_FINAL_MARKET: 'MISSING_FINAL_MARKET',
   MISSING_T2_MARKET: 'MISSING_T2_MARKET',
   MODEL_VERSION_MISSING: 'MODEL_VERSION_MISSING',
@@ -272,6 +274,7 @@ const calculateNoVigConsensus = (bookmakers = []) => {
   const rows = []
 
   ;(Array.isArray(bookmakers) ? bookmakers : []).forEach((bookmaker) => {
+    if (!isCompatibleBookmakerRow(bookmaker)) return
     const homeOdds = Number(bookmaker?.homeOdds)
     const awayOdds = Number(bookmaker?.awayOdds)
 
@@ -578,6 +581,14 @@ const calculateBetClv = (bet = {}, closingMarket = null) => {
   const finalRow = (closingMarket.finalBookmakers ?? []).find(
     (row) => row.key === bookmakerKey,
   )
+  if (finalRow && (
+    !isCompatibleBookmakerRow(finalRow) ||
+    (bookmakerKey === 'coolbet'
+      ? bet.providerMarketKey !== 'h2h_ot' || finalRow?.providerMarketKey !== 'h2h_ot'
+      : bet.providerMarketKey && bet.providerMarketKey !== 'h2h')
+  )) {
+    return unavailableClv(PERFORMANCE_REASON_CODES.MARKET_IDENTITY_MISMATCH)
+  }
   const observedAt = toTimestamp(finalRow?.observedAt)
   const providerStart = toTimestamp(finalRow?.providerCommenceTime)
   const safeFinal =
@@ -602,6 +613,7 @@ const calculateBetClv = (bet = {}, closingMarket = null) => {
   const bestObservedAt = toTimestamp(best?.observedAt)
   const safeBest =
     matchingBestRow &&
+    isCompatibleBookmakerRow(matchingBestRow) &&
     matchingBestRow.safetyReason === CLOSING_SAFETY_REASON &&
     toTimestamp(matchingBestRow.providerCommenceTime) === start &&
     bestObservedAt > createdAt &&

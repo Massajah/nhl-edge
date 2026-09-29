@@ -267,6 +267,7 @@ test('demo market-odds route enforces cache-only mode server-side', async (t) =>
   assert.deepEqual(received, {
     allowProviderRequest: false,
     date: '2026-09-14',
+    enabledBookmakerKeys: [],
     refresh: true,
   })
 })

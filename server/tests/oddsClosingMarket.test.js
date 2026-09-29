@@ -57,7 +57,7 @@ const createMemoryModel = () => {
 
 const makeRows = ({ coolbet = [1.55, 2.68], pinnacle = [1.6, 2.5], unibet = [1.57, 2.66] } = {}) =>
   [
-    coolbet && { key: 'coolbet', homeOdds: coolbet[0], awayOdds: coolbet[1], lastUpdate: null },
+    coolbet && { key: 'coolbet', providerMarketKey: 'h2h_ot', homeOdds: coolbet[0], awayOdds: coolbet[1], lastUpdate: null },
     pinnacle && { key: 'pinnacle', homeOdds: pinnacle[0], awayOdds: pinnacle[1], lastUpdate: '2026-10-08T18:39:00.000Z' },
     unibet && { key: 'unibet_fi', homeOdds: unibet[0], awayOdds: unibet[1], lastUpdate: '2026-10-08T18:39:30.000Z' },
   ].filter(Boolean)
@@ -222,9 +222,32 @@ test('bookmaker FINALs are independent and best home and away may use different 
   assert.equal(final.bestFinal.away.bookmakerKey, 'pinnacle')
   assert.equal(final.bestFinal.away.odds, 2.72)
   const coolbetFinal = final.finalBookmakers.find(({ key }) => key === 'coolbet')
+  assert.equal(coolbetFinal.providerMarketKey, 'h2h_ot')
+  assert.equal(final.bestFinal.home.providerMarketKey, 'h2h_ot')
   assert.equal(coolbetFinal.lastUpdate, null)
   assert.equal(coolbetFinal.lastUpdateMissing, true)
   assert.equal(coolbetFinal.safetyReason, CLOSING_SAFETY_REASON)
+})
+
+test('legacy Coolbet rows without h2h_ot provenance cannot become FINAL prices', async () => {
+  const repository = createOddsClosingMarketRepository({
+    closingModel: createMemoryModel(),
+  })
+  await repository.recordObservation(makeCandidate(
+    '2026-10-08T18:50:00.000Z',
+    [
+      { key: 'coolbet', homeOdds: 2.42, awayOdds: 2.5 },
+      { key: 'pinnacle', homeOdds: 1.89, awayOdds: 1.96 },
+    ],
+  ))
+  const result = await repository.finalizeClosingMarket({
+    gameId: '2026020001',
+    observedAt: START,
+    reason: 'CLOSING_WINDOW_ENDED',
+    scheduledStart: START,
+    selectedBookmakerKeys: SELECTED,
+  })
+  assert.deepEqual(result.closingMarket.finalBookmakers.map(({ key }) => key), ['pinnacle'])
 })
 
 test('settings changes preserve historical observations and filter only the derived FINAL', async () => {

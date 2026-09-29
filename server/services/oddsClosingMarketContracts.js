@@ -1,5 +1,6 @@
 const crypto = require('node:crypto')
 const { REQUESTED_BOOKMAKERS } = require('../config/marketOdds')
+const { isCompatibleBookmakerRow } = require('./marketOddsProvider')
 const {
   ODDS_SNAPSHOT_MARKET,
   ODDS_SNAPSHOT_PROVIDER,
@@ -53,6 +54,7 @@ const normalizeClosingBookmakers = (
 
     if (
       !selected.has(key) ||
+      !isCompatibleBookmakerRow(row) ||
       byKey.has(key) ||
       !Number.isFinite(homeOdds) ||
       homeOdds <= 1 ||
@@ -71,12 +73,20 @@ const normalizeClosingBookmakers = (
     if (parsedLastUpdate && !Number.isFinite(parsedLastUpdate.getTime())) {
       return
     }
+    const providerFetchedAt = row?.providerFetchedAt
+      ? new Date(row.providerFetchedAt)
+      : null
+    if (providerFetchedAt && !Number.isFinite(providerFetchedAt.getTime())) {
+      return
+    }
 
     byKey.set(key, {
       awayOdds,
       homeOdds,
       key,
       lastUpdate: parsedLastUpdate,
+      ...(row?.providerMarketKey ? { providerMarketKey: row.providerMarketKey } : {}),
+      ...(providerFetchedAt ? { providerFetchedAt } : {}),
     })
   })
 
@@ -95,7 +105,11 @@ const buildClosingMarketStateHash = ({
   const semanticState = selected.map((key) => {
     const row = pricesByKey.get(key)
 
-    return row ? [key, row.homeOdds, row.awayOdds] : [key, null, null]
+    return row
+      ? key === 'coolbet'
+        ? [key, row.providerMarketKey ?? null, row.homeOdds, row.awayOdds]
+        : [key, row.homeOdds, row.awayOdds]
+      : [key, null, null]
   })
 
   return crypto
@@ -119,7 +133,8 @@ const buildBestFinal = (bookmakers = []) => {
   const select = (side) => {
     const oddsField = side === 'home' ? 'homeOdds' : 'awayOdds'
     const candidates = (Array.isArray(bookmakers) ? bookmakers : [])
-      .filter((row) => Number.isFinite(row?.[oddsField]) && row[oddsField] > 1)
+      .filter((row) => isCompatibleBookmakerRow(row) &&
+        Number.isFinite(row?.[oddsField]) && row[oddsField] > 1)
       .sort(
         (left, right) =>
           right[oddsField] - left[oddsField] || left.key.localeCompare(right.key),
@@ -132,6 +147,7 @@ const buildBestFinal = (bookmakers = []) => {
           lastUpdate: best.lastUpdate ?? null,
           observedAt: best.observedAt,
           odds: best[oddsField],
+          providerMarketKey: best.providerMarketKey ?? null,
         }
       : null
   }

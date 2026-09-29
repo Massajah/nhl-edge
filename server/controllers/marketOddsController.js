@@ -18,9 +18,15 @@ const getNhlMarketOdds = async (request, response, next) => {
   }
 
   try {
+    const { preferences: requestedPreferences } =
+      await bookmakerPreferencesService.getBookmakerPreferences(
+        request.user.id,
+        [],
+      )
     const publicResult = await marketOddsService.getNhlMarketOdds({
       allowProviderRequest: isProductionAccount(request.authUser),
       date,
+      enabledBookmakerKeys: requestedPreferences.enabledBookmakerKeys,
       refresh: request.query.refresh === 'true',
     })
     const { preferences } =

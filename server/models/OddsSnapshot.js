@@ -61,6 +61,15 @@ const bookmakerOddsSchema = new mongoose.Schema(
       default: null,
       immutable: true,
     },
+    providerMarketKey: {
+      type: String,
+      enum: ['h2h', 'h2h_ot'],
+      immutable: true,
+    },
+    providerFetchedAt: {
+      type: Date,
+      immutable: true,
+    },
   },
   {
     _id: false,

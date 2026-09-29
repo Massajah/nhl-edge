@@ -492,6 +492,11 @@ const betSchema = new mongoose.Schema(
       trim: true,
       default: null,
     },
+    providerMarketKey: {
+      type: String,
+      enum: ['h2h', 'h2h_ot'],
+      default: null,
+    },
     bookmakerTitle: {
       type: String,
       trim: true,

@@ -14,6 +14,7 @@ const makeBookmakers = () =>
     awayOdds: Number((2.05 + index * 0.01).toFixed(2)),
     homeOdds: Number((1.78 + index * 0.01).toFixed(2)),
     key,
+    ...(key === 'coolbet' ? { providerMarketKey: 'h2h_ot' } : {}),
     lastUpdate: new Date(
       Date.parse(SCHEDULED_START) - (12 - index) * 60 * 1000,
     ),

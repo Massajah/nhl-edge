@@ -98,6 +98,7 @@ const createModelPerformanceRepository = ({
         awayTeam: 1,
         betType: 1,
         bookmakerKey: 1,
+        providerMarketKey: 1,
         bookmakerTitle: 1,
         createdAt: 1,
         expectedValue: 1,

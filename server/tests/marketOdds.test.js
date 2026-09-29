@@ -339,6 +339,8 @@ test('normalization preserves bookmakers and selects independent best prices', (
     bookmakerTitle: 'Book A',
     lastUpdate: '2026-08-03T11:58:00Z',
     odds: 2.3,
+    providerMarketKey: 'h2h',
+    providerFetchedAt: null,
   })
   assert.equal(event.bestAvailable.home.bookmakerKey, 'book-b')
   assert.equal(event.bestAvailable.home.odds, 1.8)
@@ -360,6 +362,191 @@ test('NHL h2h accepts exactly one valid home and away outcome in either order', 
     assert.equal(event.bestAvailable.away.odds, 2.1)
     assert.equal(event.bestAvailable.home.odds, 1.8)
   }
+})
+
+test('only verified Coolbet h2h_ot can enter the binary NHL market', () => {
+  const home = { name: 'Boston Bruins', price: 1.89 }
+  const away = { name: 'Toronto Maple Leafs', price: 1.96 }
+  const makeCoolbet = (marketKey, outcomes) => {
+    const event = createProviderBody()[0]
+    event.bookmakers = [{
+      key: 'coolbet',
+      markets: [{ key: marketKey, outcomes }],
+    }]
+    return normalizeProviderEvent(event, NOW_ISO)
+  }
+
+  assert.equal(makeCoolbet('h2h', [home, away, { name: 'Draw', price: 4 }]).bookmakers.length, 0)
+  const valid = makeCoolbet('h2h_ot', [away, home])
+  assert.equal(valid.bookmakers[0].providerMarketKey, 'h2h_ot')
+  assert.equal(valid.bestAvailable.home.odds, 1.89)
+  for (const outcomes of [
+    [home, away, { name: 'Draw', price: 4 }],
+    [home, { name: 'Draw', price: 4 }],
+    [home, home],
+    [home],
+    [home, { ...away, price: 1 }],
+    [home, { ...away, price: Infinity }],
+  ]) {
+    assert.equal(makeCoolbet('h2h_ot', outcomes).bookmakers.length, 0)
+  }
+  assert.equal(makeCoolbet('h2h', [home, away]).bookmakers.length, 0)
+})
+
+test('Coolbet event odds uses one scoped request, merges with other books, and reuses its cache', async () => {
+  const requestUrls = []
+  const raw = createProviderBody()[0]
+  raw.bookmakers = [
+    { key: 'coolbet', markets: [{ key: 'h2h', outcomes: [
+      { name: 'Boston Bruins', price: 2.42 },
+      { name: 'Toronto Maple Leafs', price: 2.5 },
+      { name: 'Draw', price: 4.2 },
+    ] }] },
+    { key: 'pinnacle', markets: [{ key: 'h2h', outcomes: [
+      { name: 'Boston Bruins', price: 1.95 },
+      { name: 'Toronto Maple Leafs', price: 1.91 },
+    ] }] },
+  ]
+  const eventBody = {
+    ...raw,
+    bookmakers: [{ key: 'coolbet', markets: [{ key: 'h2h_ot', outcomes: [
+      { name: 'Boston Bruins', price: 2.1 },
+      { name: 'Toronto Maple Leafs', price: 2.4 },
+    ] }] }],
+  }
+  const provider = createMarketOddsProvider({
+    fetchImpl: async (url) => {
+      const parsed = new URL(url)
+      requestUrls.push(parsed)
+      return createResponse({
+        body: parsed.pathname.includes('/events/') ? eventBody : [raw],
+        headers: { 'x-requests-last': '1', 'x-requests-remaining': '900', 'x-requests-used': '100' },
+      })
+    },
+    getConfig: () => createConfig(),
+    now: () => new Date(NOW_ISO),
+  })
+  const service = createMarketOddsService({
+    getConfig: () => createConfig(),
+    getGamesForDate: async () => createSchedule(),
+    now: () => Date.parse(NOW_ISO),
+    provider,
+  })
+  const first = await service.getNhlMarketOdds({
+    date: '2026-08-03',
+    enabledBookmakerKeys: ['pinnacle', 'coolbet'],
+  })
+  const second = await service.getNhlMarketOdds({
+    date: '2026-08-03',
+    enabledBookmakerKeys: ['pinnacle', 'coolbet'],
+  })
+  assert.equal(requestUrls.length, 2)
+  assert.equal(requestUrls[1].pathname, '/v4/sports/icehockey_nhl/events/event-1/odds')
+  assert.equal(requestUrls[1].searchParams.get('bookmakers'), 'coolbet')
+  assert.equal(requestUrls[1].searchParams.get('markets'), 'h2h_ot')
+  assert.equal(requestUrls[1].searchParams.get('oddsFormat'), 'decimal')
+  assert.deepEqual(first.availableBookmakers.map(({ key }) => key), ['coolbet', 'pinnacle'])
+  assert.equal(first.games[0].marketOdds.homeBest.bookmakerKey, 'coolbet')
+  assert.equal(first.games[0].marketOdds.awayBest.bookmakerKey, 'coolbet')
+  assert.equal(first.games[0].marketOdds.homeBest.providerMarketKey, 'h2h_ot')
+  assert.equal(second.games[0].marketOdds.bookmakers.length, 2)
+
+  const disabled = filterMarketOddsForBookmakers(first, ['pinnacle'])
+  assert.equal(disabled.games[0].marketOdds.homeBest.bookmakerKey, 'pinnacle')
+  assert.equal(disabled.games[0].marketOdds.awayBest.bookmakerKey, 'pinnacle')
+
+  const capture = await service.getNhlOddsCaptureData({
+    bookmakerKeys: ['pinnacle', 'coolbet'],
+    commenceTimeFrom: '2026-08-03T23:00:00Z',
+    commenceTimeTo: '2026-08-04T01:00:00Z',
+    maximumProviderAgeMs: 20 * 60 * 1000,
+    targetGames: createSchedule().games,
+  })
+  assert.equal(requestUrls.length, 3)
+  assert.equal(capture.providerRequestCount, 1)
+  assert.equal(capture.events[0].bookmakers.some(({ key }) => key === 'coolbet'), true)
+})
+
+test('missing, mismatched, or failed Coolbet event odds leave other books available', async () => {
+  const raw = createProviderBody()[0]
+  raw.bookmakers = [{ key: 'pinnacle', markets: [{ key: 'h2h', outcomes: [
+    { name: 'Boston Bruins', price: 1.9 },
+    { name: 'Toronto Maple Leafs', price: 2 },
+  ] }] }]
+  for (const eventResult of [
+    { ...raw, bookmakers: [] },
+    { ...raw, bookmakers: [{
+      key: 'coolbet',
+      last_update: '2026-08-03T10:00:00Z',
+      markets: [{ key: 'h2h_ot', outcomes: [
+        { name: 'Boston Bruins', price: 1.89 },
+        { name: 'Toronto Maple Leafs', price: 1.96 },
+      ] }],
+    }] },
+    { ...raw, home_team: 'New York Rangers', bookmakers: [{
+      key: 'coolbet', markets: [{ key: 'h2h_ot', outcomes: [
+        { name: 'New York Rangers', price: 1.8 },
+        { name: 'Toronto Maple Leafs', price: 2.1 },
+      ] }],
+    }] },
+    null,
+  ]) {
+    const provider = createMarketOddsProvider({
+      fetchImpl: async (url) => {
+        if (String(url).includes('/events/')) {
+          if (!eventResult) throw new Error('secret request URL')
+          return createResponse({ body: eventResult })
+        }
+        return createResponse({ body: [raw] })
+      },
+      getConfig: () => createConfig(),
+      now: () => new Date(NOW_ISO),
+    })
+    const service = createMarketOddsService({
+      getConfig: () => createConfig(),
+      getGamesForDate: async () => createSchedule(),
+      now: () => Date.parse(NOW_ISO),
+      provider,
+    })
+    const result = await service.getNhlMarketOdds({
+      date: '2026-08-03',
+      enabledBookmakerKeys: ['coolbet', 'pinnacle'],
+    })
+    assert.equal(result.games[0].oddsStatus, 'ready')
+    assert.deepEqual(result.games[0].marketOdds.bookmakers.map(({ key }) => key), ['pinnacle'])
+  }
+})
+
+test('automatic quota denial skips Coolbet event credit and retains the sport feed', async () => {
+  let eventCalls = 0
+  const base = normalizeProviderEvent(createProviderBody()[0], NOW_ISO)
+  const service = createMarketOddsService({
+    canSpendEventCredit: async () => ({ allowed: false }),
+    getConfig: () => createConfig(),
+    now: () => Date.parse(NOW_ISO),
+    provider: {
+      fetchNhlMoneylineOdds: async () => ({
+        events: [base],
+        providerFetchedAt: NOW_ISO,
+        quota: { lastCost: 1, remaining: 900, used: 100 },
+      }),
+      fetchCoolbetMoneylineOdds: async () => {
+        eventCalls += 1
+        return { bookmaker: null, providerFetchedAt: NOW_ISO, quota: null }
+      },
+    },
+  })
+  const result = await service.getNhlOddsCaptureData({
+    bookmakerKeys: ['coolbet', 'pinnacle'],
+    commenceTimeFrom: '2026-08-03T23:00:00Z',
+    commenceTimeTo: '2026-08-04T01:00:00Z',
+    maximumProviderAgeMs: 20 * 60 * 1000,
+    targetGames: createSchedule().games,
+  })
+  assert.equal(eventCalls, 0)
+  assert.equal(result.providerRequestCount, 1)
+  assert.equal(result.requestCreditCost, 1)
+  assert.equal(result.events[0].bookmakers.length, 2)
 })
 
 test('NHL h2h rejects the entire bookmaker for extra, duplicate, missing, or invalid outcomes', () => {
@@ -448,6 +635,8 @@ test('invalid three-way bookmaker cannot enter best odds, availability, or allBo
     bookmakerTitle: 'pinnacle',
     lastUpdate: null,
     odds: 1.91,
+    providerMarketKey: 'h2h',
+    providerFetchedAt: null,
   })
   assert.equal(marketOdds.homeBest.odds, 1.95)
   assert.equal(marketOdds.homeBest.bookmakerKey, 'pinnacle')

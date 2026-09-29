@@ -70,6 +70,7 @@ const createBookmakers = (
       awayOdds: probabilityToOdds(1 - adjustedProbability),
       homeOdds: probabilityToOdds(adjustedProbability),
       key: bookmaker.key,
+      ...(bookmaker.key === 'coolbet' ? { providerMarketKey: 'h2h_ot' } : {}),
     }
 
     return closing

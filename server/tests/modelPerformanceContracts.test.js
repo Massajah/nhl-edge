@@ -124,7 +124,7 @@ test('no-vig consensus normalizes each complete bookmaker then takes the median'
   assert.equal(single.bookmakerCount, 1)
 
   const multiple = calculateNoVigConsensus([
-    { awayOdds: 2.5, homeOdds: 1.5, key: 'coolbet' },
+    { awayOdds: 2.5, homeOdds: 1.5, key: 'coolbet', providerMarketKey: 'h2h_ot' },
     { awayOdds: 2, homeOdds: 2, key: 'pinnacle' },
     { awayOdds: 1.5, homeOdds: 2.5, key: 'unibet_fi' },
   ])
@@ -287,6 +287,7 @@ const makeClosingMarket = (overrides = {}) => ({
       awayOdds: 1.8,
       homeOdds: 2.05,
       key: 'coolbet',
+      providerMarketKey: 'h2h_ot',
       observedAt: '2026-10-08T18:55:00.000Z',
       providerCommenceTime: START,
       safetyReason: CLOSING_SAFETY_REASON,
@@ -309,6 +310,7 @@ const makeClosingMarket = (overrides = {}) => ({
 })
 const makeBet = (overrides = {}) => ({
   bookmakerKey: 'coolbet',
+  providerMarketKey: 'h2h_ot',
   createdAt: '2026-10-08T18:00:00.000Z',
   gameId: '2026020001',
   marketOdds: 2.1,
@@ -336,6 +338,27 @@ test('strict same-book CLV returns positive, negative and zero odds-ratio observ
   assert.equal(summary.vsBestFinal.label, 'vs Best FINAL')
   assert.equal(positive.bestFinalOdds, 2.05)
   assert.equal(positive.finalObservedAt, '2026-10-08T18:55:00.000Z')
+})
+
+test('Coolbet CLV and consensus reject missing or incompatible market provenance', () => {
+  const closing = makeClosingMarket()
+  const valid = calculateBetClv(makeBet(), closing)
+  assert.equal(valid.status, 'available')
+  for (const betMarket of [null, 'h2h']) {
+    const result = calculateBetClv(makeBet({ providerMarketKey: betMarket }), closing)
+    assert.equal(result.reason, PERFORMANCE_REASON_CODES.MARKET_IDENTITY_MISMATCH)
+  }
+  const incompatibleClosing = makeClosingMarket({
+    finalBookmakers: closing.finalBookmakers.map((row) => row.key === 'coolbet'
+      ? { ...row, providerMarketKey: 'h2h' }
+      : row),
+  })
+  assert.equal(
+    calculateBetClv(makeBet(), incompatibleClosing).reason,
+    PERFORMANCE_REASON_CODES.MARKET_IDENTITY_MISMATCH,
+  )
+  const consensus = calculateNoVigConsensus(incompatibleClosing.finalBookmakers)
+  assert.deepEqual(consensus.bookmakerKeys, ['pinnacle'])
 })
 
 test('strict CLV rejects manual/unknown/missing same-book, stale, post-start and rescheduled links', () => {

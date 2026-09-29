@@ -31,6 +31,8 @@ const normalizeProviderBest = (best) => {
     bookmakerTitle: String(best.bookmakerTitle ?? ''),
     lastUpdate: best.lastUpdate ?? null,
     odds,
+    providerFetchedAt: best.providerFetchedAt ?? null,
+    providerMarketKey: best.providerMarketKey ?? null,
   }
 }
 
@@ -43,6 +45,8 @@ const normalizeBookmakerRow = (bookmaker) => ({
   enabled: bookmaker?.enabled !== false,
   homeOdds: Number(bookmaker?.homeOdds),
   lastUpdate: bookmaker?.lastUpdate ?? null,
+  providerFetchedAt: bookmaker?.providerFetchedAt ?? null,
+  providerMarketKey: bookmaker?.providerMarketKey ?? null,
 })
 
 export const indexProviderMarketOdds = (games = []) =>
@@ -96,7 +100,8 @@ const getProviderSideMetadata = (providerGame, side) => {
     bookmakerTitle: best.bookmakerTitle,
     offeredOdds: best.odds,
     providerEventId: providerGame.marketOdds.providerEventId,
-    providerFetchedAt: providerGame.marketOdds.fetchedAt,
+    providerFetchedAt: best.providerFetchedAt ?? providerGame.marketOdds.fetchedAt,
+    providerMarketKey: best.providerMarketKey,
     providerName: providerGame.marketOdds.providerName,
     source: 'provider',
   }
