@@ -76,6 +76,42 @@ const getRatingsForUser = async (userId, options = {}) => {
     : query
 }
 
+const getFirstSeasonRatingBeforeByTeam = async (userId, seasonId, options = {}) => {
+  const { buildSeasonDiscoveryEnvelope } = require('./nhlSeasonService')
+  const boundary = buildSeasonDiscoveryEnvelope(seasonId)
+  const processedRatingGameModel =
+    options.processedRatingGameModel ?? ProcessedRatingGame
+  const games = await processedRatingGameModel.find({
+    gameDate: {
+      $gte: new Date(`${boundary.startDate}T00:00:00.000Z`),
+      $lte: new Date(`${boundary.endDate}T23:59:59.999Z`),
+    },
+    userId,
+  })
+    .select('gameDate gameId homeTeamId awayTeamId homeRatingBefore awayRatingBefore')
+    .sort({ gameDate: 1, gameId: 1 })
+    .lean()
+  const firstBefore = new Map()
+
+  for (const game of games) {
+    for (const [teamId, value] of [
+      [game.homeTeamId, game.homeRatingBefore],
+      [game.awayTeamId, game.awayRatingBefore],
+    ]) {
+      const key = normalizeIdentifier(teamId)
+      if (key && !firstBefore.has(key) && Number.isFinite(value)) {
+        firstBefore.set(key, {
+          gameDate: game.gameDate,
+          gameId: game.gameId,
+          rating: value,
+        })
+      }
+    }
+  }
+
+  return firstBefore
+}
+
 const findDuplicates = (values) => {
   const seenValues = new Set()
   const duplicateValues = new Set()
@@ -286,9 +322,31 @@ const initializeDefaultPowerRatings = async (userId, options = {}) => {
 const getPowerRatings = async (userId, options = {}) => {
   await initializeDefaultPowerRatings(userId, options)
 
-  const ratings = await getRatingsForUser(userId)
+  const ratings = await getRatingsForUser(userId, options)
+  const serialized = ratings.map(serializeRating)
+  const seasonIds = [...new Set(serialized
+    .map((rating) => rating.seasonStartingRatingSeasonId)
+    .filter(Boolean))]
+  if (seasonIds.length === 0) return serialized
 
-  return ratings.map(serializeRating)
+  const firstBeforeBySeason = new Map()
+
+  for (const seasonId of seasonIds) {
+    firstBeforeBySeason.set(seasonId,
+      await getFirstSeasonRatingBeforeByTeam(userId, seasonId, options))
+  }
+
+  // A first game's before value is authoritative if a legacy re-capture
+  // overwrote the stored snapshot. This repairs reads without a database write.
+  return serialized.map((rating) => {
+    const before = firstBeforeBySeason
+      .get(rating.seasonStartingRatingSeasonId)
+      ?.get(normalizeIdentifier(rating.teamId))
+
+    return before === undefined
+      ? rating
+      : { ...rating, seasonStartingRating: before.rating }
+  })
 }
 
 const resolveStartingRatingLifecycle = async (userId, options = {}) =>
@@ -479,11 +537,16 @@ const getStartingRatingScaleLifecycle = async (userId, options = {}) => {
     }
   }
 
+  // Tested fallback metadata can start after real gameType 2 games. Search the
+  // full season envelope so an early processed game locks the starting state.
+  const discoveryBoundary = require('./nhlSeasonService')
+    .buildSeasonDiscoveryEnvelope(currentSeason.id)
+
   const processedGame = await processedRatingGameModel
     .findOne({
       gameDate: {
-        $gte: new Date(`${currentSeason.startDate}T00:00:00.000Z`),
-        $lte: new Date(`${currentSeason.endDate}T23:59:59.999Z`),
+        $gte: new Date(`${discoveryBoundary.startDate}T00:00:00.000Z`),
+        $lte: new Date(`${discoveryBoundary.endDate}T23:59:59.999Z`),
       },
       userId,
     })
@@ -512,12 +575,17 @@ const captureSeasonStartingRatings = async (userId, options = {}) => {
   const powerRatingModel = getPowerRatingModel(options)
   const ratings = await getRatingsForUser(userId, options)
   const operations = ratings
-    .filter((rating) => Number.isFinite(Number(rating.baseRating)))
+    .filter((rating) =>
+      rating.seasonStartingRatingSeasonId !== lifecycle.seasonId &&
+      rating.baseRating !== null &&
+      rating.baseRating !== undefined &&
+      Number.isFinite(Number(rating.baseRating)))
     .map((rating) => ({
       updateOne: {
         filter: {
           teamId: normalizeIdentifier(rating.teamId),
           userId,
+          seasonStartingRatingSeasonId: { $ne: lifecycle.seasonId },
         },
         update: {
           $set: {
@@ -660,6 +728,7 @@ module.exports = {
   captureSeasonStartingRatings,
   getPowerRatings,
   getRatingsForUser,
+  getFirstSeasonRatingBeforeByTeam,
   getSeedTeams,
   getStartingRatingScaleConfiguration,
   getStartingRatingScaleLifecycle,

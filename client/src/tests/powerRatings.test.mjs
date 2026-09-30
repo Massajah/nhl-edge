@@ -141,6 +141,21 @@ test('Power Rating breakdown separates start, automatic Change, Manual Adjustmen
   )
 })
 
+test('Toronto keeps 46.50 Starting while live rating moves to 46.33', () => {
+  const toronto = normalizePowerRatings([{
+    teamId: 'TOR', baseRating: 46.33,
+    seasonStartingRating: 46.5,
+    seasonStartingRatingSeasonId: '20262027',
+    manualAdjustment: 0, homeAdjustment: 0.2,
+  }]).TOR
+  const breakdown = getPowerRatingBreakdown(toronto, { seasonId: '20262027' })
+
+  assert.equal(breakdown.currentRating, 46.33)
+  assert.equal(breakdown.startingRating, 46.5)
+  assert.ok(Math.abs(breakdown.modelMovement + 0.17) < 1e-9)
+  assert.equal(toronto.homeAdjustment, 0.2)
+})
+
 test('precise live rating plus manual overlay excludes Home Adjustment', () => {
   const breakdown = getPowerRatingBreakdown({
     baseRating: 49.17,

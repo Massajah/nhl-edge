@@ -644,6 +644,23 @@ updates remain a maintenance and recovery workflow. Full-season
 recalculation, cron jobs, background workers, polling, and automatic replay
 after setting changes are intentionally deferred.
 
+Starting Ratings are captured before the first eligible game and are written
+only once per season. The lifecycle lock checks the full season discovery
+envelope, so games before a fallback October start date still lock edits and
+resets. The Power Ratings read uses each team's first processed game's
+`homeRatingBefore` or `awayRatingBefore` as the authoritative displayed
+Starting Rating if an older repeated capture corrupted the stored snapshot;
+the read does not write data. To preview a narrowly scoped persisted repair,
+run this from `server/`:
+
+```bash
+npm run recover:season-starting-ratings -- --userId=<userId> --seasonId=20262027
+```
+
+Review the differences, then add `--confirm` to that same command only when
+the owner and season are correct.
+Teams without a processed game are not inferred or rewritten.
+
 Automatic responses include `status` (`preseason_ready`, `updated`,
 `up_to_date`, `partial`, or `unavailable`), counts, per-game errors, the latest
 processed game when known, and the Rating Engine settings snapshot used for

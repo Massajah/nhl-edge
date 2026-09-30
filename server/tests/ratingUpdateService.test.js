@@ -1010,9 +1010,44 @@ test('automatic update catches up early 2026-27 regular-season games once and pr
     ['REGULATION', 'OVERTIME', 'SHOOTOUT'])
   assert.equal(models.processedGames[0].homeRatingBefore, 58)
   assert.equal(models.processedGames[0].awayRatingBefore, 42)
+  assertAlmostEqual(models.processedGames[1].homeRatingBefore,
+    models.processedGames[0].homeRatingAfter)
+  assertAlmostEqual(models.processedGames[1].awayRatingBefore,
+    models.processedGames[0].awayRatingAfter)
   assert.equal(models.ratings[0].seasonStartingRatingSeasonId, '20262027')
   assert.equal(models.ratings[0].seasonStartingRating, 58)
+  assert.equal(models.ratings[1].seasonStartingRating, 42)
   assert.equal(ranges[0].dateFrom, '2026-09-29')
+})
+
+test('manual early-season catch-up captures Starting before rating movement despite October metadata', async () => {
+  const game = cloneGame(eligibilityFixtures.regularSeason, {
+    id: 2026020010, season: 20262027,
+    startTimeUTC: '2026-09-29T00:00:00.000Z',
+  })
+  const models = makeModels({ ratings: [
+    makeRatingDocument({ teamId: 'BOS', baseRating: 46.5 }),
+    makeRatingDocument({ teamId: 'TOR', baseRating: 47 }),
+  ] })
+  const result = await applyCompletedGamesToPowerRatings(USER_ID, {
+    from: '2026-09-29', to: '2026-09-29',
+  }, {
+    gamesProvider: async () => [game],
+    powerRatingModel: models.powerRatingModel,
+    processedRatingGameModel: models.processedRatingGameModel,
+    seasonMetadataProvider: async () => ({
+      currentSeasonId: '20262027',
+      seasons: [{ id: '20262027', isCurrent: true,
+        startDate: '2026-10-01', endDate: '2027-04-30' }],
+    }),
+    settingsProvider: async () => DEFAULT_TEST_ENGINE_SETTINGS,
+    todayProvider: () => '2026-09-30',
+    useTransactions: false,
+  })
+  assert.equal(result.gamesProcessed, 1)
+  assert.equal(models.ratings[0].seasonStartingRating, 46.5)
+  assert.equal(models.processedGames[0].homeRatingBefore, 46.5)
+  assert.notEqual(models.ratings[0].baseRating, 46.5)
 })
 
 test('incomplete FINAL score does not change ratings or create processed history', async () => {

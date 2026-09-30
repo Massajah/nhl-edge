@@ -8,6 +8,7 @@
     "cleanup:demo-sandboxes": "node scripts/runDemoCleanup.js",
     "migrate:assign-legacy-owner": "node scripts/assignLegacyOwner.js",
     "backfill:bankroll-settlements": "node scripts/backfillBankrollSettlements.js",
+    "recover:season-starting-ratings": "node scripts/recoverSeasonStartingRatings.js",
     "cron:odds-capture": "node scripts/runOddsCaptureCron.js",
     "dev": "nodemon index.js",
     "lint": "node scripts/lintServer.js",

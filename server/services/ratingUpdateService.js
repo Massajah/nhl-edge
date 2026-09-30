@@ -491,10 +491,13 @@ const captureCurrentSeasonStartingRatings = async ({
   processedRatingGameModel,
   userId,
 }) => {
+  const discoveryBoundary = currentSeason?.id
+    ? nhlSeasonService.buildSeasonDiscoveryEnvelope(currentSeason.id)
+    : null
   if (
-    !currentSeason?.id ||
+    !discoveryBoundary ||
     !eligibleGames.some(({ game }) =>
-      isGameWithinSeasonBoundary(game, currentSeason),
+      isGameWithinSeasonBoundary(game, discoveryBoundary),
     )
   ) {
     return

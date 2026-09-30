@@ -436,8 +436,8 @@ test('season starting ratings capture at the existing lock and remain immutable'
       lastRatingChange: 0,
       manualAdjustment: 0,
       save: async () => {},
-      seasonStartingRating: null,
-      seasonStartingRatingSeasonId: null,
+      seasonStartingRating: 43,
+      seasonStartingRatingSeasonId: '20252026',
       teamId: 'BOS',
       teamName: 'Boston Bruins',
       userId,
@@ -445,8 +445,8 @@ test('season starting ratings capture at the existing lock and remain immutable'
     {
       abbreviation: 'TOR',
       baseRating: 47,
-      seasonStartingRating: null,
-      seasonStartingRatingSeasonId: null,
+      seasonStartingRating: 45,
+      seasonStartingRatingSeasonId: '20252026',
       teamId: 'TOR',
       teamName: 'Toronto Maple Leafs',
       userId,
@@ -511,6 +511,14 @@ test('season starting ratings capture at the existing lock and remain immutable'
   assert.equal(ratings[0].seasonStartingRatingSeasonId, '20262027')
 
   ratings[0].baseRating = 46
+  const repeatedCapture = await powerRatingsService.captureSeasonStartingRatings(
+    userId,
+    options,
+  )
+  assert.equal(repeatedCapture.captured, false)
+  assert.equal(baselineWrites, 2)
+  assert.equal(ratings[0].seasonStartingRating, 44.5)
+
   processedGame = { _id: 'first-current-season-game' }
   const lockedCapture = await powerRatingsService.captureSeasonStartingRatings(
     userId,
@@ -532,6 +540,95 @@ test('season starting ratings capture at the existing lock and remain immutable'
 
   assert.equal(ratings[0].manualAdjustment, 0.5)
   assert.equal(ratings[0].seasonStartingRating, 44.5)
+})
+
+test('early regular-season history locks Starting Ratings despite later fallback metadata', async () => {
+  const userId = new mongoose.Types.ObjectId().toString()
+  let observedFilter
+  const processedRatingGameModel = {
+    findOne(filter) {
+      observedFilter = filter
+      return {
+        select() { return this },
+        async lean() {
+          const gameDate = new Date('2026-09-29T00:00:00.000Z')
+          return gameDate >= filter.gameDate.$gte && gameDate <= filter.gameDate.$lte
+            ? { _id: 'early-game' }
+            : null
+        },
+      }
+    },
+  }
+  const options = {
+    processedRatingGameModel,
+    seasonMetadataProvider: async () => ({
+      currentSeasonId: '20262027',
+      seasons: [{ id: '20262027', isCurrent: true,
+        startDate: '2026-10-01', endDate: '2027-04-30' }],
+    }),
+  }
+  const lifecycle = await powerRatingsService.getStartingRatingScaleLifecycle(userId, options)
+  assert.equal(lifecycle.locked, true)
+  assert.equal(lifecycle.seasonId, '20262027')
+  assert.equal(observedFilter.gameDate.$gte.toISOString().slice(0, 10), '2026-07-01')
+  const capture = await powerRatingsService.captureSeasonStartingRatings(userId, options)
+  assert.equal(capture.captured, false)
+})
+
+test('ratings API recovers a corrupted season snapshot from the first processed before value without writes', async () => {
+  const userId = new mongoose.Types.ObjectId().toString()
+  const toronto = {
+    abbreviation: 'TOR', baseRating: 46.33, homeAdvantage: 0.2,
+    manualAdjustment: 0.5, seasonStartingRating: 46.33,
+    seasonStartingRatingSeasonId: '20262027', teamId: 'TOR',
+    teamName: 'Toronto Maple Leafs', userId,
+  }
+  const montreal = {
+    abbreviation: 'MTL', baseRating: 47, homeAdvantage: 0,
+    manualAdjustment: 0, seasonStartingRating: 47,
+    seasonStartingRatingSeasonId: '20262027', teamId: 'MTL',
+    teamName: 'Montreal Canadiens', userId,
+  }
+  const games = [
+    { gameDate: new Date('2026-09-30T00:00:00Z'), gameId: 2026020002,
+      homeTeamId: 'TOR', homeRatingBefore: 46.33,
+      awayTeamId: 'BOS', awayRatingBefore: 48 },
+    { gameDate: new Date('2026-09-29T00:00:00Z'), gameId: 2026020001,
+      homeTeamId: 'TOR', homeRatingBefore: 46.5,
+      awayTeamId: 'BOS', awayRatingBefore: 48.2 },
+  ]
+  let writes = 0
+  const result = await powerRatingsService.getPowerRatings(userId, {
+    startingRatingScale: { center: 46, mode: 'standard', spread: 8 },
+    powerRatingModel: {
+      async bulkWrite() { writes += 1; return { upsertedCount: 0 } },
+      find: () => queryOf([toronto, montreal]),
+    },
+    processedRatingGameModel: {
+      find(filter) {
+        const filtered = games.filter((game) =>
+          game.gameDate >= filter.gameDate.$gte &&
+          game.gameDate <= filter.gameDate.$lte)
+        return {
+          select() { return this },
+          sort() {
+            filtered.sort((left, right) => left.gameDate - right.gameDate)
+            return this
+          },
+          async lean() { return filtered },
+        }
+      },
+    },
+  })
+
+  const displayedToronto = result.find((rating) => rating.teamId === 'TOR')
+  assert.equal(displayedToronto.baseRating, 46.33)
+  assert.equal(displayedToronto.seasonStartingRating, 46.5)
+  assert.equal(displayedToronto.homeAdjustment, 0.2)
+  assert.equal(displayedToronto.manualAdjustment, 0.5)
+  assert.equal(result.find((rating) => rating.teamId === 'MTL').seasonStartingRating, 47)
+  assert.equal(toronto.seasonStartingRating, 46.33)
+  assert.equal(writes, 1) // Seed upserts only; recovery is read-only.
 })
 
 test('locked development data without a baseline is not silently backfilled', async () => {
