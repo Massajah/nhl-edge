@@ -189,3 +189,22 @@ test('malformed completed games are marked unresolved', () => {
   assert.equal(classification.resultType, RESULT_TYPES.UNRESOLVED)
   assert.equal(classification.warning.code, 'UNRESOLVED_RESULT_TYPE')
 })
+
+test('completed rating result requires explicit scores and accepts a real zero', () => {
+  for (const missing of [null, undefined, '']) {
+    for (const side of ['homeTeam', 'awayTeam']) {
+      const game = {
+        ...fixtureGames[0],
+        [side]: { ...fixtureGames[0][side], score: missing },
+      }
+      const result = classifyCompletedGameResult(game)
+      assert.equal(result.isResolved, false)
+    }
+  }
+  const shutout = classifyCompletedGameResult({
+    ...fixtureGames[0],
+    awayTeam: { ...fixtureGames[0].awayTeam, score: 0 },
+  })
+  assert.equal(shutout.isResolved, true)
+  assert.equal(shutout.winner, WINNERS.HOME)
+})

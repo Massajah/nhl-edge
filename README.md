@@ -14,7 +14,7 @@ React 19 + Vite 8 · Node.js 24 + Express 5 · MongoDB + Mongoose 9
 - **Frozen pregame forecasts:** Official T2 predictions are captured once with versioned inputs, so later rating or settings changes cannot rewrite the forecast being evaluated.
 - **Honest evaluation paths:** Rating Lab replays historical games for research; Model Performance scores actual pregame captures against later results and paired market observations.
 - **Isolated, writable demos:** Explore Demo creates a separate temporary account for each visitor, with seeded data and no entry into production prediction or odds-capture cohorts.
-- **Auditable scheduled capture:** A Railway job coordinates Official T2, timed odds checkpoints, and demo cleanup; leases, game-identity checks, and capture records guard the observations.
+- **Auditable scheduled work:** A Railway job coordinates Official T2, timed odds checkpoints, production bet settlement, and demo cleanup; leases and durable records guard repeat runs.
 - **Browser-level verification:** Playwright exercises demo entry, account isolation, sample performance, and Analyzer behavior against an ephemeral MongoDB replica set, alongside client and server tests.
 
 ## How NHL Edge Works
@@ -48,7 +48,7 @@ flowchart LR
 
 - The Express API owns authentication, account-scoped data, external-data access, settlement, and scheduled work. It derives ownership from the authenticated session, never a client-provided user ID. Google sign-in creates an opaque HttpOnly session whose hash is stored in MongoDB; local password sign-in is optional in development.
 - `shared/` holds the browser/Node prediction and market-comparison calculations. NHL Web and Stats APIs supply game and team data; The Odds API supplies moneyline prices. Provider reads are cached and bounded, and the odds key stays on the server.
-- The one-shot Railway job runs Official T2 capture, quota-aware odds checkpoints (T24, T6, T2, and final pregame), and expired-demo cleanup. Power Rating result updates are triggered through the application.
+- The one-shot Railway job runs Official T2 capture, quota-aware closing odds capture, NHL-result bet settlement, and expired-demo cleanup. Power Rating result updates are triggered through the application.
 
 ## Demo Sandbox
 

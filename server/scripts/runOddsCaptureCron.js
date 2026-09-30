@@ -7,6 +7,7 @@ const {
   scheduledOddsCaptureService,
 } = require('../services/scheduledOddsCaptureService')
 const { scheduledForwardPredictionService } = require('../services/scheduledForwardPredictionService')
+const { scheduledBetSettlementService } = require('../services/scheduledBetSettlementService')
 const {
   demoSandboxCleanupService,
 } = require('../services/demoSandboxCleanupService')
@@ -18,6 +19,7 @@ const runOddsCaptureCron = async ({
   environment = process.env,
   service = scheduledOddsCaptureService,
   predictionService = scheduledForwardPredictionService,
+  settlementService = scheduledBetSettlementService,
   cleanupService = demoSandboxCleanupService,
 } = {}) => {
   if (!String(environment.MONGODB_URI ?? '').trim()) {
@@ -29,20 +31,22 @@ const runOddsCaptureCron = async ({
   try {
     connectionAttempted = true
     await connectDatabase()
-    // Independent one-shot jobs: capture and cleanup failures cannot suppress
-    // the other jobs in this cron tick.
+    // Defer each invocation so synchronous and asynchronous failures remain
+    // isolated from the other jobs in this cron tick.
     const results = await Promise.allSettled([
-      predictionService.runScheduledCapture(),
+      Promise.resolve().then(() => predictionService.runScheduledCapture()),
       getMarketOddsConfig(environment).apiKey
-        ? service.runScheduledCapture()
+        ? Promise.resolve().then(() => service.runScheduledCapture())
         : Promise.resolve({ outcome: 'ODDS_NOT_CONFIGURED' }),
-      cleanupService.cleanupExpiredDemoSandboxes(),
+      Promise.resolve().then(() => settlementService.runScheduledSettlement()),
+      Promise.resolve().then(() => cleanupService.cleanupExpiredDemoSandboxes()),
     ])
     const failures = results.filter(({ status }) => status === 'rejected')
-    if (failures.length) throw new AggregateError(failures.map(({ reason }) => reason), 'Scheduled capture failed.')
+    if (failures.length) throw new AggregateError(failures.map(({ reason }) => reason), 'Scheduled cron failed.')
     return {
       ...results[1].value,
-      demoCleanup: results[2].value,
+      betSettlement: results[2].value,
+      demoCleanup: results[3].value,
       forwardPredictions: results[0].value,
     }
   } finally {
@@ -56,7 +60,7 @@ const handleOddsCaptureCronFailure = async (
   error,
   { captureAndFlush = captureExceptionAndFlush } = {},
 ) => {
-  console.error('Odds capture cron failed.', {
+  console.error('Scheduled cron failed.', {
     name: error.name,
   })
   try {

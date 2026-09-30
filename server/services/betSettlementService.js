@@ -3,6 +3,7 @@ const Bet = require('../models/Bet')
 const bankrollService = require('./bankrollService')
 const { COMPLETED_GAME_STATES } = require('./nhlGameEligibility')
 const nhlApiService = require('./nhlApiService')
+const { getValidFinalScore } = require('./nhlFinalScore')
 
 const AUTOMATIC_SETTLEMENT_RESULTS = new Set(['win', 'loss'])
 const MANUAL_SETTLEMENT_RESULTS = new Set([
@@ -543,25 +544,20 @@ const determineMoneylineResult = (bet = {}, game = {}) => {
     }
   }
 
-  const homeScore = Number(game.homeTeam?.score)
-  const awayScore = Number(game.awayTeam?.score)
+  const finalScore = getValidFinalScore(game)
 
-  if (
-    !Number.isFinite(homeScore) ||
-    !Number.isFinite(awayScore) ||
-    homeScore === awayScore
-  ) {
+  if (!finalScore || finalScore.home === finalScore.away) {
     return {
       reason: 'final_score_unavailable',
       result: null,
     }
   }
 
-  const homeWon = homeScore > awayScore
+  const homeWon = finalScore.home > finalScore.away
 
   return {
-    finalAwayScore: awayScore,
-    finalHomeScore: homeScore,
+    finalAwayScore: finalScore.away,
+    finalHomeScore: finalScore.home,
     reason: null,
     result: (isHome && homeWon) || (isAway && !homeWon) ? 'win' : 'loss',
   }
@@ -614,10 +610,16 @@ const settlePendingMoneylineBets = async (userId, options = {}) => {
 
   const betModel = options.betModel ?? Bet
   const gameProvider = options.gameProvider ?? nhlApiService.getGameLanding
-  const pendingBets = await betModel.find({
+  const pendingFilter = {
     result: 'pending',
     userId: toObjectIdIfValid(userId),
-  })
+  }
+  if (Array.isArray(options.pendingBetIds)) {
+    pendingFilter._id = {
+      $in: options.pendingBetIds.map(toObjectIdIfValid),
+    }
+  }
+  const pendingBets = await betModel.find(pendingFilter)
   const bets = Array.isArray(pendingBets) ? pendingBets : []
   const gamePromises = new Map()
   const results = []

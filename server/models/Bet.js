@@ -742,6 +742,7 @@ const betSchema = new mongoose.Schema(
 
 betSchema.index({ userId: 1, analyzedAt: -1, createdAt: -1 })
 betSchema.index({ userId: 1, gameId: 1 })
+betSchema.index({ result: 1, scheduledStart: 1 })
 betSchema.index(
   { userId: 1, placementId: 1 },
   {

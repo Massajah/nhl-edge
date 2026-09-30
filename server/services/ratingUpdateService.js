@@ -424,6 +424,7 @@ const determineAutomaticUpdateDateRange = ({
 
 const getCurrentSeasonBoundary = async ({
   seasonMetadataProvider,
+  regularSeasonBoundaryProvider,
   throughDate,
 }) => {
   const seasonMetadata = await seasonMetadataProvider({ throughDate })
@@ -439,8 +440,18 @@ const getCurrentSeasonBoundary = async ({
     )
   }
 
-  const parsedStart = parseUpdateDate(currentSeason.startDate, 'season startDate')
-  const parsedEnd = parseUpdateDate(currentSeason.endDate, 'season endDate')
+  let liveBoundary = null
+  if (regularSeasonBoundaryProvider && currentSeason.id) {
+    liveBoundary = await regularSeasonBoundaryProvider(currentSeason.id)
+  }
+  const parsedStart = parseUpdateDate(
+    liveBoundary?.startDate ?? currentSeason.startDate,
+    'season startDate',
+  )
+  const parsedEnd = parseUpdateDate(
+    liveBoundary?.endDate ?? currentSeason.endDate,
+    'season endDate',
+  )
 
   if (parsedStart.timestamp > parsedEnd.timestamp) {
     throw new RatingUpdateError(
@@ -1176,6 +1187,10 @@ const applyCompletedGamesToPowerRatings = async (
     options.currentSeasonBoundary ??
     (await getCurrentSeasonBoundary({
       seasonMetadataProvider,
+      regularSeasonBoundaryProvider: options.regularSeasonBoundaryProvider ??
+        (options.seasonMetadataProvider
+          ? null
+          : nhlSeasonService.getLiveRegularSeasonBoundary),
       throughDate: dates.to,
     }))
 
@@ -1304,6 +1319,10 @@ const runAutomaticPowerRatingUpdate = async (
   try {
     currentSeason = await getCurrentSeasonBoundary({
       seasonMetadataProvider,
+      regularSeasonBoundaryProvider: options.regularSeasonBoundaryProvider ??
+        (options.seasonMetadataProvider
+          ? null
+          : nhlSeasonService.getLiveRegularSeasonBoundary),
       throughDate: normalizedInput.throughDate,
     })
     latestProcessedGame = await findLatestProcessedRatingGame({

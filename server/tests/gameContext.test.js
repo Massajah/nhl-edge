@@ -16,6 +16,7 @@ const {
   calculateGameContextForGame,
   createScheduleWindowDiagnostics,
   deriveSeasonIdFromDate,
+  normalizeGame,
 } = require('../services/gameContextRules')
 const {
   buildGameContextMutableUpdate,
@@ -37,6 +38,7 @@ const scheduleGame = ({
   awayScore = null,
   gameId,
   gameState = 'FINAL',
+  gameType = 2,
   home,
   homeScore = null,
   startTimeUTC,
@@ -47,6 +49,7 @@ const scheduleGame = ({
     score: awayScore,
   },
   gameState,
+  gameType,
   homeTeam: {
     abbrev: home,
     score: homeScore,
@@ -54,6 +57,58 @@ const scheduleGame = ({
   id: gameId,
   startTimeUTC,
   venueCity,
+})
+
+test('schedule normalization preserves NHL game type', () => {
+  assert.equal(normalizeGame(scheduleGame({ away: 'BOS', home: 'TOR',
+    gameId: 'preseason', gameType: 1,
+    startTimeUTC: '2026-09-29T00:00:00.000Z' })).gameType, 1)
+})
+
+test('regular-season fatigue excludes preseason games from rest and density', () => {
+  const current = scheduleGame({ away: 'BOS', home: 'TOR', gameId: 'rs-current',
+    gameState: 'FUT', startTimeUTC: '2026-10-04T00:00:00.000Z', venueCity: 'Toronto' })
+  const preseason = [
+    scheduleGame({ away: 'BOS', home: 'MTL', gameId: 'pre-1', gameType: 1,
+      startTimeUTC: '2026-10-01T00:00:00.000Z', venueCity: 'Montreal' }),
+    scheduleGame({ away: 'OTT', home: 'BOS', gameId: 'pre-2', gameType: 1,
+      startTimeUTC: '2026-10-03T00:00:00.000Z', venueCity: 'Boston' }),
+  ]
+  const regular = scheduleGame({ away: 'BOS', home: 'NYI', gameId: 'rs-previous',
+    startTimeUTC: '2026-09-29T00:00:00.000Z', venueCity: 'New York' })
+  const context = calculateGameContextForGame({
+    awayScheduleGames: [...preseason, regular],
+    currentGame: current,
+    homeScheduleGames: [...preseason, regular],
+    now: new Date('2026-10-03T12:00:00.000Z'),
+    quickRematchSettings: DEFAULT_QUICK_REMATCH_SETTINGS,
+  })
+  const team = getTeamContext(context, 'BOS')
+  assert.equal(team.restFatigueCondition, 'well_rested')
+  assert.equal(team.travelBetweenGames, false)
+  assert.equal(team.restDays, 4)
+  assert.ok(!team.conditions.includes('3_games_in_4_days'))
+  assert.ok(!team.conditions.some((condition) => condition.includes('4_games_in_6')))
+})
+
+test('regular-season fatigue still counts eligible B2B travel and 3-in-4 games', () => {
+  const current = scheduleGame({ away: 'BOS', home: 'TOR', gameId: 'rs-target',
+    gameState: 'FUT', startTimeUTC: '2026-10-04T00:00:00.000Z', venueCity: 'Toronto' })
+  const schedule = [
+    scheduleGame({ away: 'BOS', home: 'NYI', gameId: 'rs-first',
+      startTimeUTC: '2026-10-01T00:00:00.000Z', venueCity: 'New York' }),
+    scheduleGame({ away: 'BOS', home: 'MTL', gameId: 'rs-second',
+      startTimeUTC: '2026-10-03T00:00:00.000Z', venueCity: 'Montreal' }),
+  ]
+  const context = calculateGameContextForGame({
+    awayScheduleGames: schedule, currentGame: current,
+    homeScheduleGames: schedule, now: new Date('2026-10-03T12:00:00.000Z'),
+    quickRematchSettings: DEFAULT_QUICK_REMATCH_SETTINGS,
+  })
+  const team = getTeamContext(context, 'BOS')
+  assert.ok(team.conditions.includes('3_games_in_4_days'))
+  assert.ok(team.conditions.includes('back_to_back_travel'))
+  assert.equal(team.automaticRestFatigueAdjustment, -1.25)
 })
 
 const createSettingsStore = () => {
@@ -879,6 +934,7 @@ test('back-to-back classification uses schedule structure and conservative fallb
           abbrev: 'BOS',
         },
         gameState: 'FINAL',
+        gameType: 2,
         homeTeam: {},
         id: 'b2b-away-away-unknown-previous',
         startTimeUTC: '2026-01-03T00:00:00.000Z',

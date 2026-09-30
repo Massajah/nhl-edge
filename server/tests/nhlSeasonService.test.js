@@ -7,8 +7,10 @@ const {
   FALLBACK_SEASONS,
   NHL_API_METADATA_SOURCE,
   buildFallbackSeasons,
+  buildSeasonDiscoveryEnvelope,
   deriveSeasonBoundaryFromSchedules,
   getAvailablePowerRatingHistorySeasons,
+  getLiveRegularSeasonBoundary,
   getSeasonForDate,
   normalizeSeasonId,
   normalizeSeasonBoundary,
@@ -139,6 +141,34 @@ test('season boundaries are normalized from regular-season games only', async ()
     label: '2026\u201327',
     startDate: '2026-10-01',
   })
+})
+
+test('live discovery uses first actual regular-season game before the fallback date', async () => {
+  const boundary = await getLiveRegularSeasonBoundary('20262027', {
+    clubScheduleSeasonProvider: async () => ({ games: [
+      { gameDate: '2026-09-28', gameType: 1 },
+      { gameDate: '2026-09-29', gameType: 2 },
+      { gameDate: '2027-05-01', gameType: 3 },
+    ] }),
+    teamsProvider,
+    skipCache: true,
+  })
+  assert.equal(boundary.startDate, '2026-09-29')
+  assert.equal(boundary.metadataSource, 'nhl-club-schedules')
+})
+
+test('season discovery fallback spans early games when schedule metadata is unavailable', async () => {
+  assert.deepEqual(buildSeasonDiscoveryEnvelope('20272028'), {
+    id: '20272028', startDate: '2027-07-01', endDate: '2028-06-30',
+    metadataSource: 'season-envelope',
+  })
+  const boundary = await getLiveRegularSeasonBoundary('20262027', {
+    clubScheduleSeasonProvider: async () => { throw new Error('offline') },
+    teamsProvider,
+    skipCache: true,
+  })
+  assert.equal(boundary.startDate, '2026-07-01')
+  assert.equal(boundary.endDate, '2027-06-30')
 })
 
 test('fallback season metadata is newest first and marks current season', () => {

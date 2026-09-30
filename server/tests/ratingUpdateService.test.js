@@ -348,6 +348,7 @@ const runAutomaticUpdateWithOptions = (
       }),
     powerRatingModel: models.powerRatingModel,
     processedRatingGameModel: models.processedRatingGameModel,
+    regularSeasonBoundaryProvider: options.regularSeasonBoundaryProvider,
     settingsProvider: async (userId) =>
       options.settingsByUser?.[String(userId)] ?? DEFAULT_TEST_ENGINE_SETTINGS,
     seasonMetadataProvider:
@@ -962,6 +963,88 @@ test('automatic update processes the first eligible games from starting ratings'
   assert.equal(result.latestProcessedGame.gameId, 3003)
   assert.equal(lifecycle.locked, true)
   assert.equal(lifecycle.seasonId, DEFAULT_TEST_SEASON.id)
+})
+
+test('automatic update catches up early 2026-27 regular-season games once and preserves result multipliers', async () => {
+  const earlyGames = ['REG', 'OT', 'SO'].map((lastPeriodType, index) =>
+    cloneGame(eligibilityFixtures.regularSeason, {
+      id: 2026020001 + index,
+      season: 20262027,
+      startTimeUTC: `2026-09-${29 + Math.floor(index / 2)}T${index % 2 ? '04' : '00'}:00:00.000Z`,
+      lastPeriodType,
+    }))
+  const excluded = [1, 3].map((gameType, index) =>
+    cloneGame(earlyGames[0], {
+      id: 2026010001 + index,
+      gameType,
+    }))
+  const models = makeModels({ ratings: [
+    makeRatingDocument({ teamId: 'BOS', baseRating: 58 }),
+    makeRatingDocument({ teamId: 'TOR', baseRating: 42 }),
+  ] })
+  const ranges = []
+  const options = {
+    today: '2026-09-30',
+    onGamesRequest: (range) => ranges.push(range),
+    seasonMetadataProvider: async () => ({
+      currentSeasonId: '20262027',
+      seasons: [{ id: '20262027', isCurrent: true,
+        startDate: '2026-10-01', endDate: '2027-04-30' }],
+    }),
+    regularSeasonBoundaryProvider: async () => ({
+      id: '20262027', startDate: '2026-09-29', endDate: '2027-04-30',
+    }),
+  }
+  const first = await runAutomaticUpdateWithOptions(
+    [...excluded, ...earlyGames], models, {}, options,
+  )
+  const second = await runAutomaticUpdateWithOptions(
+    [...excluded, ...earlyGames], models, {}, options,
+  )
+
+  assert.equal(first.status, AUTOMATIC_UPDATE_STATUSES.UPDATED)
+  assert.equal(first.gamesProcessed, 3)
+  assert.equal(second.gamesProcessed, 0)
+  assert.equal(models.processedGames.length, 3)
+  assert.deepEqual(models.processedGames.map((game) => game.resultType),
+    ['REGULATION', 'OVERTIME', 'SHOOTOUT'])
+  assert.equal(models.processedGames[0].homeRatingBefore, 58)
+  assert.equal(models.processedGames[0].awayRatingBefore, 42)
+  assert.equal(models.ratings[0].seasonStartingRatingSeasonId, '20262027')
+  assert.equal(models.ratings[0].seasonStartingRating, 58)
+  assert.equal(ranges[0].dateFrom, '2026-09-29')
+})
+
+test('incomplete FINAL score does not change ratings or create processed history', async () => {
+  const game = cloneGame(eligibilityFixtures.regularSeason, {
+    id: 2026020009, season: 20262027,
+    startTimeUTC: '2026-09-29T00:00:00.000Z', homeScore: null,
+  })
+  const models = makeModels({ ratings: [
+    makeRatingDocument({ teamId: 'BOS' }),
+    makeRatingDocument({ teamId: 'TOR' }),
+  ] })
+  const options = {
+    today: '2026-09-30',
+    seasonMetadataProvider: async () => ({
+      currentSeasonId: '20262027',
+      seasons: [{ id: '20262027', isCurrent: true,
+        startDate: '2026-10-01', endDate: '2027-04-30' }],
+    }),
+    regularSeasonBoundaryProvider: async () => ({
+      id: '20262027', startDate: '2026-09-29', endDate: '2027-04-30',
+    }),
+  }
+  const first = await runAutomaticUpdateWithOptions([game], models, {}, options)
+  assert.equal(first.gamesProcessed, 0)
+  assert.equal(models.processedGames.length, 0)
+  assert.equal(models.ratings[0].baseRating, 50)
+  assert.equal(models.ratings[1].baseRating, 50)
+
+  const complete = cloneGame(game, { homeScore: 1, awayScore: 0 })
+  const second = await runAutomaticUpdateWithOptions([complete], models, {}, options)
+  assert.equal(second.gamesProcessed, 1)
+  assert.equal(models.processedGames[0].awayScore, 0)
 })
 
 test('previous-season processed history does not initialize the current season', async () => {

@@ -1,4 +1,5 @@
 const { BASE_MODEL_V1 } = require('../config/baseModel')
+const { getValidFinalScore } = require('./nhlFinalScore')
 
 const DEFAULT_RATING_ENGINE_CONFIGURATION = Object.freeze({
   modelVersion: BASE_MODEL_V1.modelVersion,
@@ -375,11 +376,6 @@ const getLocalizedValue = (value) => {
 const normalizePeriodType = (periodType) =>
   getLocalizedValue(periodType).trim().toUpperCase()
 
-const getFinalScore = (game = {}) => ({
-  away: Number(game.awayTeam?.score),
-  home: Number(game.homeTeam?.score),
-})
-
 const buildResultWarning = (game, code, message) => ({
   code,
   gameId: game?.id ?? game?.gameId ?? null,
@@ -408,9 +404,9 @@ const classifyCompletedGameResult = (game = {}) => {
     }
   }
 
-  const finalScore = getFinalScore(game)
+  const finalScore = getValidFinalScore(game)
 
-  if (!Number.isFinite(finalScore.home) || !Number.isFinite(finalScore.away)) {
+  if (!finalScore) {
     return {
       isResolved: false,
       resultType: RESULT_TYPES.UNRESOLVED,

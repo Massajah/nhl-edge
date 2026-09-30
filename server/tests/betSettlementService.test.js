@@ -5,12 +5,17 @@ const test = require('node:test')
 const mongoose = require('mongoose')
 const bankrollService = require('../services/bankrollService')
 const betSettlementService = require('../services/betSettlementService')
+const { createScheduledBetSettlementService } = require('../services/scheduledBetSettlementService')
 
 const stringifyId = (value) => value?.toString?.() ?? String(value)
 
 const matches = (record, filter = {}) =>
   Object.entries(filter).every(([field, expected]) => {
     const actual = record[field]
+
+    if (Array.isArray(expected?.$in)) {
+      return expected.$in.some((item) => stringifyId(actual) === stringifyId(item))
+    }
 
     if (actual instanceof mongoose.Types.ObjectId || expected instanceof mongoose.Types.ObjectId) {
       return stringifyId(actual) === stringifyId(expected)
@@ -244,6 +249,22 @@ test('moneyline settlement treats regulation, overtime and shootout wins identic
     assert.equal(decision.result, 'win')
     assert.equal(decision.reason, null)
   }
+})
+
+test('FINAL moneyline needs two explicit valid scores, while numeric zero is valid', () => {
+  const bet = createBet()
+  for (const missing of [null, undefined, '']) {
+    for (const side of ['homeTeam', 'awayTeam']) {
+      const game = createGame({ [side]: { abbreviation: side === 'homeTeam' ? 'BOS' : 'TOR', score: missing } })
+      const decision = betSettlementService.determineMoneylineResult(bet, game)
+      assert.equal(decision.result, null)
+      assert.equal(decision.reason, 'final_score_unavailable')
+    }
+  }
+  const shutout = betSettlementService.determineMoneylineResult(bet,
+    createGame({ awayTeam: { abbreviation: 'TOR', score: 0 } }))
+  assert.equal(shutout.result, 'win')
+  assert.equal(shutout.finalAwayScore, 0)
 })
 
 test('home and away moneylines settle from the selected team and final score', () => {
@@ -677,4 +698,85 @@ test('batch settlement caches one NHL result and leaves legacy/provider failures
   assert.equal(missing.settled, 0)
   assert.equal(missingGameBet.result, 'pending')
   assert.match(missingGameBet.settlementIssue, /unavailable/i)
+})
+
+test('owner-scoped scheduled selection leaves incomplete FINAL pending and retries when complete', async () => {
+  const userId = new mongoose.Types.ObjectId()
+  const bet = createBet({ userId })
+  const otherBet = createBet({ userId: new mongoose.Types.ObjectId() })
+  const models = createMemoryModels({ bets: [bet, otherBet] })
+  let game = createGame({ homeTeam: { abbreviation: 'BOS', score: null } })
+  const options = {
+    ...models,
+    pendingBetIds: [bet._id, otherBet._id],
+    gameProvider: async () => game,
+    applySettlementProvider: async (_ownerId, betId, result) => {
+      const selected = models.bets.find((item) => stringifyId(item._id) === stringifyId(betId))
+      selected.result = result
+      return { status: 'settled' }
+    },
+  }
+  const first = await betSettlementService.settlePendingMoneylineBets(userId, options)
+  assert.equal(first.settled, 0)
+  assert.equal(first.results[0].reason, 'final_score_unavailable')
+  assert.equal(bet.result, 'pending')
+  assert.equal(otherBet.result, 'pending')
+  assert.equal(bet.settlementCheckStatus, 'final_score_unavailable')
+
+  game = createGame({ awayTeam: { abbreviation: 'TOR', score: 0 } })
+  const second = await betSettlementService.settlePendingMoneylineBets(userId, options)
+  const third = await betSettlementService.settlePendingMoneylineBets(userId, options)
+  assert.equal(second.wins, 1)
+  assert.equal(third.settled, 0)
+  assert.equal(bet.result, 'win')
+  assert.equal(otherBet.result, 'pending')
+})
+
+test('scheduled adapter settles production wins and losses through the existing bankroll ledger once', async () => {
+  const winningOwner = new mongoose.Types.ObjectId()
+  const losingOwner = new mongoose.Types.ObjectId()
+  const start = new Date('2026-09-30T00:00:00.000Z')
+  const winningBet = createBet({ userId: winningOwner, scheduledStart: start })
+  const losingBet = createBet({ userId: losingOwner, scheduledStart: start,
+    selectedSide: { homeAway: 'away', teamId: 'TOR' },
+    selectedTeam: { teamId: 'TOR' } })
+  const models = createMemoryModels({
+    bets: [winningBet, losingBet],
+    transactions: [
+      ...createStartingTransactions(winningOwner),
+      ...createStartingTransactions(losingOwner),
+    ],
+  })
+  const scheduled = createScheduledBetSettlementService({
+    betModel: { find: () => queryOf(models.bets.filter((item) => item.result === 'pending')) },
+    userModel: { find: () => queryOf([
+      { _id: winningOwner }, { _id: losingOwner },
+    ]) },
+    settleOwner: (ownerId, options) => betSettlementService.settlePendingMoneylineBets(
+      ownerId, {
+        ...models,
+        ...options,
+        gameProvider: async () => createGame(),
+      },
+    ),
+    leaseService: {
+      acquireLease: async () => ({ acquired: true,
+        lease: { slotKey: 'test-slot', leaseToken: 'test-token' } }),
+      finishLease: async () => {},
+    },
+    now: () => new Date('2026-09-30T12:00:00.000Z'),
+    logger: { info() {}, warn() {}, error() {} },
+  })
+  const first = await scheduled.runScheduledSettlement()
+  const second = await scheduled.runScheduledSettlement()
+
+  assert.equal(first.wins, 1)
+  assert.equal(first.losses, 1)
+  assert.equal(second.pendingCandidatesConsidered, 0)
+  assert.equal(winningBet.profit, 8)
+  assert.equal(losingBet.profit, -10)
+  assert.equal(await bankrollService.calculateCurrentBankrollCents(winningOwner, models), 10800)
+  assert.equal(await bankrollService.calculateCurrentBankrollCents(losingOwner, models), 9000)
+  assert.equal(models.transactions.filter((item) => item.type === 'BET_WIN_RETURN').length, 1)
+  assert.equal(models.transactions.filter((item) => item.type === 'BET_SETTLEMENT').length, 1)
 })

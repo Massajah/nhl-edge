@@ -303,6 +303,10 @@ The one-shot Railway command discovers official NHL games for the current UTC
 day and adjacent dates. It exits without contacting The Odds API when no fetch
 work is useful. The external Railway cron schedule is `*/5 * * * *` (UTC); the
 API process itself has no timer, worker, startup hook, or public trigger route.
+That same cron independently runs Official T2, odds capture, production bet
+settlement, and expired-demo cleanup. Settlement uses NHL game results and does
+not require an Odds API key, an odds snapshot, or closing odds. No additional
+Railway cron is needed.
 
 New automatic T24, T6, and T2 **market** snapshots are disabled. Existing
 `OddsSnapshot` records remain readable and unchanged. The separate immutable
@@ -629,8 +633,13 @@ the existing `userId + gameId` uniqueness rule.
 When no current-season processed-game history exists, the configured Power
 Ratings are the starting state. Automatic processing begins at the canonical
 season start and applies the first eligible completed regular-season games in
-chronological order. If no eligible games exist yet, the response is
-`status: "preseason_ready"`; no marker is created and no rating changes. Manual
+chronological order. Live updates derive that start from NHL club schedules by
+`gameType: 2`; if schedule metadata is unavailable, a broad season calendar
+envelope keeps early regular-season games discoverable and game type remains
+the eligibility authority. This lets the normal Dashboard update catch up
+missed early games without a migration. Before the first regular-season date,
+the response is `status: "preseason_ready"`; no marker is created and no rating
+changes. Manual
 updates remain a maintenance and recovery workflow. Full-season
 recalculation, cron jobs, background workers, polling, and automatic replay
 after setting changes are intentionally deferred.
@@ -732,8 +741,8 @@ Protected endpoints:
   user-scoped bet page plus global Bet History summary totals. The legacy
   `GET /api/bets` response remains available for existing all-bets consumers.
 - `POST /api/bets/settle` checks only the authenticated user's pending bets and
-  returns win/loss/pending counts. It is an explicit v1 trigger, not a cron or
-  polling worker.
+  returns win/loss/pending counts. It remains a manual retry trigger alongside
+  automatic settlement in the existing five-minute Railway cron.
 
 Money is stored in integer minor units as `amountCents` and serialized with
 both cent and decimal fields. `Available Bankroll` is the spendable ledger
@@ -751,6 +760,14 @@ selected team belongs to the matchup, and compares the final score. Regulation,
 overtime, and shootout wins are identical for this market; Power Rating result
 multipliers are never used. Missing links, missing games, live/scheduled games,
 and provider errors remain pending with no bankroll movement.
+Both final scores must be explicitly present and valid; an incomplete FINAL
+response stays pending for a later check. Scheduled settlement discovers only
+active production account owners with started, linked NHL games. It checks
+recent games at most every 15 minutes and older games at most every 12 hours,
+stopping automatic retries after 60 days; older unresolved bets remain
+available to the authenticated manual trigger. A separate distributed lease
+guards each cron slot, while conditional bet updates and unique ledger action
+keys remain the financial idempotency controls.
 
 Each financial action has a deterministic unique action key. Settlement first
 claims the user-scoped pending result with a conditional update, then records
@@ -776,7 +793,7 @@ Use `--all` instead of `--userId=<userId>` only when intentionally backfilling
 every initialized bankroll. The script never runs automatically.
 
 This implementation intentionally does not add puck-line, totals, props,
-parlays, regulation-only settlement, background scheduling, or automatic
+parlays, regulation-only settlement, or automatic
 historical stake migration.
 
 ## Betting Settings

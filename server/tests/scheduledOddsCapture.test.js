@@ -257,6 +257,7 @@ test('cron entrypoint connects, runs once, closes MongoDB and propagates fatal e
   const result = await runOddsCaptureCron({
     cleanupService: { async cleanupExpiredDemoSandboxes() { return { removed: 0 } } },
     predictionService: { async runScheduledCapture() { return { captured: 0 } } },
+    settlementService: { async runScheduledSettlement() { calls.push('settle'); return { wins: 0 } } },
     closeDatabase: async () => calls.push('close'),
     connectDatabase: async () => calls.push('connect'),
     environment,
@@ -269,21 +270,24 @@ test('cron entrypoint connects, runs once, closes MongoDB and propagates fatal e
   })
 
   assert.equal(result.outcome, 'NO_DUE_WORK')
-  assert.deepEqual(calls, ['connect', 'run', 'close'])
+  assert.deepEqual(calls, ['connect', 'run', 'settle', 'close'])
+  assert.equal(result.betSettlement.wins, 0)
 
   await assert.rejects(
     () =>
       runOddsCaptureCron({
         cleanupService: { async cleanupExpiredDemoSandboxes() { return { removed: 0 } } },
         predictionService: { async runScheduledCapture() { return { captured: 0 } } },
+        settlementService: { async runScheduledSettlement() { calls.push('settle-after-error') } },
         closeDatabase: async () => calls.push('close-after-error'),
         connectDatabase: async () => {},
         environment,
         service: { async runScheduledCapture() { throw new Error('fatal') } },
       }),
-    /Scheduled capture failed/,
+    /Scheduled cron failed/,
   )
   assert.equal(calls.at(-1), 'close-after-error')
+  assert.ok(calls.includes('settle-after-error'))
 })
 
 test('cron entrypoint fails closed before connecting when required server variables are absent', async () => {
@@ -298,6 +302,45 @@ test('cron entrypoint fails closed before connecting when required server variab
     /MONGODB_URI/,
   )
   assert.equal(connected, false)
+})
+
+test('cron attempts all jobs and disconnects when odds capture and settlement fail', async () => {
+  const calls = []
+  await assert.rejects(() => runOddsCaptureCron({
+    environment: { MONGODB_URI: 'mongodb://example', THE_ODDS_API_KEY: 'test' },
+    connectDatabase: async () => { calls.push('connect') },
+    closeDatabase: async () => { calls.push('close') },
+    predictionService: { async runScheduledCapture() { calls.push('prediction') } },
+    service: { runScheduledCapture() {
+      calls.push('odds')
+      throw new Error('odds unavailable')
+    } },
+    settlementService: { async runScheduledSettlement() {
+      calls.push('settlement')
+      throw new Error('settlement unavailable')
+    } },
+    cleanupService: { async cleanupExpiredDemoSandboxes() { calls.push('cleanup') } },
+  }), /Scheduled cron failed/)
+  assert.deepEqual(calls, ['connect', 'prediction', 'odds', 'settlement', 'cleanup', 'close'])
+})
+
+test('cron runs settlement without an Odds API key or due odds work', async () => {
+  const calls = []
+  const result = await runOddsCaptureCron({
+    environment: { MONGODB_URI: 'mongodb://example' },
+    connectDatabase: async () => {},
+    closeDatabase: async () => {},
+    predictionService: { async runScheduledCapture() { return {} } },
+    service: { async runScheduledCapture() { throw new Error('odds should not run') } },
+    settlementService: { async runScheduledSettlement() {
+      calls.push('settlement')
+      return { wins: 1 }
+    } },
+    cleanupService: { async cleanupExpiredDemoSandboxes() { return {} } },
+  })
+  assert.equal(result.outcome, 'ODDS_NOT_CONFIGURED')
+  assert.equal(result.betSettlement.wins, 1)
+  assert.deepEqual(calls, ['settlement'])
 })
 
 test('failed closing fetch still finalizes from durable prior observations', async () => {

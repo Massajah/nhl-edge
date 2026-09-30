@@ -164,10 +164,15 @@ const normalizeGame = (game = {}) => {
   const startValue = game.startTimeUTC ?? game.scheduledStart ?? game.gameDate
   const scheduledStart = startValue ? new Date(startValue) : null
   const venueCity = getVenueCityFromGame(game)
+  const rawGameType = game.gameType
+  const gameType = rawGameType === null || rawGameType === undefined || rawGameType === ''
+    ? null
+    : Number(rawGameType)
 
   return {
     awayTeam,
     gameId: String(game.gameId ?? game.id ?? '').trim(),
+    gameType: Number.isInteger(gameType) ? gameType : null,
     gameState: String(game.gameState ?? '').trim().toUpperCase(),
     homeTeam,
     scheduledStart:
@@ -1006,8 +1011,10 @@ const calculateTeamGameContext = ({
     })
   }
 
-  const teamScheduleGames = uniqueGamesById(scheduleGames).filter((game) =>
-    gameIncludesTeam(game, teamAbbreviation),
+  const teamScheduleGames = uniqueGamesById(scheduleGames).filter(
+    (game) =>
+      gameIncludesTeam(game, teamAbbreviation) &&
+      (currentGame.gameType !== 2 || game.gameType === 2),
   )
 
   if (teamScheduleGames.length === 0) {

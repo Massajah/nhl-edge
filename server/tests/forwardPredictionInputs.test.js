@@ -101,16 +101,18 @@ for (const odds of ['unconfigured', 'quota blocked', 'failed']) {
       connectDatabase: async () => calls.push('connect'), closeDatabase: async () => calls.push('close'),
       environment: { MONGODB_URI: 'mock', ...(odds === 'unconfigured' ? {} : { THE_ODDS_API_KEY: 'mock' }) },
       predictionService: { async runScheduledCapture() { calls.push('prediction'); return { captured: 1 } } },
+      settlementService: { async runScheduledSettlement() { calls.push('settlement'); return { wins: 0 } } },
       service: { async runScheduledCapture() {
         calls.push('odds')
         if (odds === 'failed') throw new Error('provider failed')
         return { outcome: 'QUOTA_BLOCKED', providerRequestCount: 0 }
       } },
     })
-    if (odds === 'failed') await assert.rejects(() => run, /Scheduled capture failed/)
+    if (odds === 'failed') await assert.rejects(() => run, /Scheduled cron failed/)
     else assert.equal((await run).forwardPredictions.captured, 1)
     assert.ok(calls.includes('prediction'))
     assert.ok(calls.includes('cleanup'))
+    assert.ok(calls.includes('settlement'))
     assert.equal(calls.at(-1), 'close')
     if (odds === 'unconfigured') assert.equal(calls.includes('odds'), false)
   })
@@ -123,7 +125,8 @@ test('prediction failure still permits odds capture and always closes the databa
     environment: { MONGODB_URI: 'mock', THE_ODDS_API_KEY: 'mock' },
     connectDatabase: async () => {}, closeDatabase: async () => calls.push('close'),
     predictionService: { async runScheduledCapture() { throw new Error('prediction failed') } },
+    settlementService: { async runScheduledSettlement() { calls.push('settlement'); return {} } },
     service: { async runScheduledCapture() { calls.push('odds'); return {} } },
-  }), /Scheduled capture failed/)
-  assert.deepEqual(calls, ['odds', 'close'])
+  }), /Scheduled cron failed/)
+  assert.deepEqual(calls, ['odds', 'settlement', 'close'])
 })

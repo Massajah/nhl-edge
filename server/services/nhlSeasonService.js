@@ -55,6 +55,8 @@ const FALLBACK_SEASONS = Object.freeze([
 
 let availableSeasonsCache = null
 let availableSeasonsPromise = null
+const liveBoundaryCache = new Map()
+const liveBoundaryPromises = new Map()
 
 class NhlSeasonError extends Error {
   constructor(message, statusCode = 500, details = undefined) {
@@ -233,6 +235,53 @@ const deriveSeasonBoundaryFromSchedules = async ({
     startDate: gameDates[0],
     endDate: gameDates.at(-1),
   })
+}
+
+// The calendar envelope is only a discovery fallback. Actual gameType 2 games
+// from NHL schedules decide which dates can change live ratings.
+const buildSeasonDiscoveryEnvelope = (seasonId) => {
+  const id = normalizeSeasonId(seasonId)
+  const startYear = getSeasonStartYear(id)
+  if (!Number.isInteger(startYear)) {
+    throw new NhlSeasonError('Season ID must use YYYYyyyy format.', 400)
+  }
+  return {
+    id,
+    startDate: `${startYear}-07-01`,
+    endDate: `${startYear + 1}-06-30`,
+    metadataSource: 'season-envelope',
+  }
+}
+
+const getLiveRegularSeasonBoundary = async (seasonId, options = {}) => {
+  const envelope = buildSeasonDiscoveryEnvelope(seasonId)
+  const key = envelope.id
+  const cacheable = !options.skipCache &&
+    !options.clubScheduleSeasonProvider && !options.teamsProvider
+  const cached = liveBoundaryCache.get(key)
+  if (cacheable && cached?.expiresAt > Date.now()) return cached.value
+  if (cacheable && liveBoundaryPromises.has(key)) return liveBoundaryPromises.get(key)
+
+  const request = deriveSeasonBoundaryFromSchedules({
+    seasonId: key,
+    clubScheduleSeasonProvider: options.clubScheduleSeasonProvider,
+    teamsProvider: options.teamsProvider,
+  }).then((boundary) => ({
+    ...boundary,
+    metadataSource: 'nhl-club-schedules',
+  })).catch(() => envelope)
+
+  if (cacheable) liveBoundaryPromises.set(key, request)
+  try {
+    const value = await request
+    if (cacheable) liveBoundaryCache.set(key, {
+      expiresAt: Date.now() + SEASON_CACHE_TTL_MS,
+      value,
+    })
+    return value
+  } finally {
+    if (cacheable) liveBoundaryPromises.delete(key)
+  }
 }
 
 const decorateCurrentSeason = (seasons, currentSeasonId) =>
@@ -417,9 +466,11 @@ module.exports = {
   TESTED_BOUNDARY_METADATA_SOURCE,
   NhlSeasonError,
   buildFallbackSeasons,
+  buildSeasonDiscoveryEnvelope,
   buildSeasonId,
   deriveSeasonBoundaryFromSchedules,
   getAvailablePowerRatingHistorySeasons,
+  getLiveRegularSeasonBoundary,
   getSeasonForDate,
   getSeasonLabel,
   normalizeSeasonId,
